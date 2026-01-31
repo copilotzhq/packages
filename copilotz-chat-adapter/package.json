@@ -1,0 +1,43 @@
+{
+  "name": "@copilotz/chat-adapter",
+  "version": "0.1.0",
+  "description": "Copilotz chat adapter and API hook",
+  "type": "module",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "prepack": "npm run build"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "dependencies": {
+    "@copilotz/chat-ui": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "tsup": "^8.3.5",
+    "typescript": "~5.8.2"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "REPLACE_WITH_REPO_URL"
+  },
+  "homepage": "REPLACE_WITH_REPO_URL#readme",
+  "publishConfig": {
+    "access": "public"
+  }
+}

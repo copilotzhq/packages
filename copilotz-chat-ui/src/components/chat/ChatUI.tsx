@@ -1,0 +1,425 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  ChatV2Props,
+  MediaAttachment,
+  MessageActionEvent,
+  StateCallback,
+  ChatState,
+  ChatUserContext,
+} from '../../types/chatTypes';
+import { defaultChatConfig, mergeConfig } from '../../config/chatConfig';
+import { Message } from './Message';
+import { Sidebar } from './Sidebar';
+import { ChatHeader } from './ChatHeader';
+import { ChatInput } from './ChatInput';
+import { UserProfile } from './UserProfile';
+import { useChatUserContext } from './UserContext';
+import { Card, CardContent } from '../ui/card';
+import { ScrollArea } from '../ui/scroll-area';
+import { TooltipProvider } from '../ui/tooltip';
+import { SidebarProvider, SidebarInset } from '../ui/sidebar';
+import { Sparkles } from 'lucide-react';
+
+// ChatUI is a purely presentational component
+export const ChatUI: React.FC<ChatV2Props> = ({
+  messages = [],
+  threads = [],
+  currentThreadId = null,
+  config: userConfig,
+  sidebar: _sidebar,
+  isGenerating = false,
+  callbacks = {},
+  user,
+  assistant,
+  suggestions = [],
+  className = '',
+  onAddMemory,
+  onUpdateMemory,
+  onDeleteMemory,
+}) => {
+  // Merge configuration with defaults
+  const config = mergeConfig(defaultChatConfig, userConfig);
+
+  // Mobile detection
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Built-in user profile panel state
+  const [isUserProfileOpen, setIsUserProfileOpen] = useState(false);
+
+  // Try to get user context for custom fields (may not be available if used outside provider)
+  let userContext: ChatUserContext | undefined;
+  try {
+    const contextValue = useChatUserContext();
+    userContext = contextValue?.context;
+  } catch {
+    // ChatUI used outside of ChatUserContextProvider, that's okay
+    userContext = undefined;
+  }
+
+  // Check if desktop on initial render
+  const getInitialSidebarState = () => {
+    if (typeof globalThis.innerWidth === 'number') {
+      return globalThis.innerWidth >= 1024; // Open on desktop (lg+)
+    }
+    return false;
+  };
+
+  // Internal state for UI only
+  const [state, setState] = useState<ChatState>({
+    input: '',
+    attachments: [],
+    isRecording: false,
+    selectedThreadId: currentThreadId,
+    isAtBottom: true,
+    showSidebar: getInitialSidebarState(), // Open by default on desktop
+    showThreads: false, // No longer used for main sidebar
+    editingMessageId: null,
+    isSidebarCollapsed: false, // No longer used for main sidebar
+  });
+
+  // Update internal selected thread if prop changes
+  useEffect(() => {
+    if (currentThreadId !== state.selectedThreadId) {
+      setState(prev => ({ ...prev, selectedThreadId: currentThreadId }));
+    }
+  }, [currentThreadId]);
+
+  // Refs
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+
+  // Mobile custom overlay mount/unmount for smooth transitions
+  const [isCustomMounted, setIsCustomMounted] = useState(false);
+  const [isCustomVisible, setIsCustomVisible] = useState(false);
+
+  // Create state callback helpers
+  const createStateCallback = useCallback(
+    (setter?: (value: React.SetStateAction<ChatState>) => void): StateCallback<ChatState> => ({
+      setState: (newState) => setter?.(newState),
+      getState: () => state,
+    }),
+    [state]
+  );
+
+  // Mobile detection effect
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(globalThis.innerWidth < 1024); // lg breakpoint
+    };
+
+    checkMobile();
+    globalThis.addEventListener('resize', checkMobile);
+    return () => globalThis.removeEventListener('resize', checkMobile);
+  }, []);
+
+  // Animate mobile custom component overlay
+  useEffect(() => {
+    if (!isMobile || !config.customComponent?.component) return;
+    if (state.showSidebar) {
+      setIsCustomMounted(true);
+      requestAnimationFrame(() => setIsCustomVisible(true));
+    } else {
+      setIsCustomVisible(false);
+      const t = setTimeout(() => setIsCustomMounted(false), 200);
+      return () => clearTimeout(t);
+    }
+  }, [state.showSidebar, isMobile, config.customComponent]);
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    if (!state.isAtBottom) return;
+    const viewport = scrollAreaRef.current;
+    if (!viewport) return;
+    const target = viewport.scrollHeight;
+    try {
+      viewport.scrollTo({ top: target, behavior: 'smooth' });
+    } catch {
+      viewport.scrollTop = target;
+    }
+  }, [messages, state.isAtBottom]);
+
+  // Handle scroll position
+  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
+    setState(prev => ({ ...prev, isAtBottom }));
+  }, []);
+
+  // Message handling
+  const handleSendMessage = useCallback((
+    content: string,
+    attachments: MediaAttachment[] = []
+  ) => {
+    if (!content.trim() && attachments.length === 0) return;
+    
+    // Call external callback
+    callbacks.onSendMessage?.(content, attachments, createStateCallback());
+
+    // Clear input
+    setState(prev => ({
+      ...prev,
+      input: '',
+      attachments: []
+    }));
+  }, [callbacks, createStateCallback]);
+
+  // Message actions
+  const handleMessageAction = useCallback((event: MessageActionEvent) => {
+    const { action, messageId, content } = event;
+
+    switch (action) {
+      case 'copy':
+        callbacks.onCopyMessage?.(messageId, content || '', createStateCallback());
+        break;
+      case 'edit':
+        if (content) {
+          callbacks.onEditMessage?.(messageId, content, createStateCallback());
+        }
+        break;
+      case 'regenerate':
+        callbacks.onRegenerateMessage?.(messageId, createStateCallback());
+        break;
+      case 'delete':
+        callbacks.onDeleteMessage?.(messageId, createStateCallback());
+        break;
+    }
+  }, [callbacks, createStateCallback]);
+
+  // Thread management
+  const handleCreateThread = useCallback((title?: string) => {
+    callbacks.onCreateThread?.(title, createStateCallback(setState));
+  }, [callbacks, createStateCallback]);
+
+  const handleSelectThread = useCallback((threadId: string) => {
+    callbacks.onSelectThread?.(threadId, createStateCallback());
+  }, [callbacks, createStateCallback]);
+
+  const handleRenameThread = useCallback((threadId: string, newTitle: string) => {
+    callbacks.onRenameThread?.(threadId, newTitle, createStateCallback());
+  }, [callbacks, createStateCallback]);
+
+  const handleDeleteThread = useCallback((threadId: string) => {
+    callbacks.onDeleteThread?.(threadId, createStateCallback());
+  }, [callbacks, createStateCallback]);
+
+  const handleArchiveThread = useCallback((threadId: string) => {
+    callbacks.onArchiveThread?.(threadId, createStateCallback());
+  }, [callbacks, createStateCallback]);
+
+  // Close sidebar handler
+  const closeSidebar = useCallback(() => {
+    setState(prev => ({ ...prev, showSidebar: false }));
+  }, []);
+
+  // Render custom component with props if it's a function
+  const renderCustomComponent = useCallback(() => {
+    const component = config?.customComponent?.component;
+    if (!component) return null;
+    if (typeof component === 'function') {
+      return component({ onClose: closeSidebar, isMobile });
+    }
+    return component;
+  }, [config?.customComponent?.component, closeSidebar, isMobile]);
+
+  // Render suggestions
+  const renderSuggestions = () => {
+    if (messages.length > 0 || !suggestions.length) return null;
+
+    return (
+      <div className="text-center py-8">
+        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 mb-4">
+          <Sparkles className="w-8 h-8 text-primary" />
+        </div>
+        <h3 className="text-lg font-semibold mb-2">{config.branding.title}</h3>
+        <p className="text-muted-foreground mb-6">{config.branding.subtitle}</p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-2xl mx-auto">
+          {suggestions.map((suggestion, index) => (
+            <Card
+              key={index}
+              className="cursor-pointer hover:bg-muted/50 transition-colors"
+              onClick={() => handleSendMessage(suggestion)}
+            >
+              <CardContent className="p-4 text-left">
+                <p className="text-sm">{suggestion}</p>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <TooltipProvider>
+      <SidebarProvider defaultOpen>
+        <div className={`flex h-[100svh] md:h-screen bg-background w-full overflow-hidden ${className}`}>
+          
+          <Sidebar
+            threads={threads}
+            currentThreadId={state.selectedThreadId}
+            config={config}
+            onCreateThread={handleCreateThread}
+            onSelectThread={handleSelectThread}
+            onRenameThread={handleRenameThread}
+            onDeleteThread={handleDeleteThread}
+            onArchiveThread={handleArchiveThread}
+            // User menu props
+            user={user ? {
+              id: user.id,
+              name: user.name,
+              email: user.email,
+              avatar: user.avatar,
+            } : null}
+            userMenuCallbacks={{
+              onViewProfile: () => {
+                setIsUserProfileOpen(true);
+                callbacks.onViewProfile?.();
+              },
+              onOpenSettings: callbacks.onOpenSettings,
+              onThemeChange: callbacks.onThemeChange,
+              onLogout: callbacks.onLogout,
+            }}
+            currentTheme={config.ui.theme === 'auto' ? 'system' : config.ui.theme}
+            showThemeOptions={!!callbacks.onThemeChange}
+          />
+
+          <SidebarInset>
+            <div className="flex flex-col h-full min-h-0">
+              {/* Header */}
+              <ChatHeader
+                config={config}
+                currentThreadTitle={threads.find(t => t.id === state.selectedThreadId)?.title}
+                // onSidebarToggle is now handled by SidebarTrigger inside ChatHeader
+                isMobile={isMobile}
+                onCustomComponentToggle={() => setState(prev => ({ ...prev, showSidebar: !prev.showSidebar }))}
+                onNewThread={handleCreateThread}
+                showCustomComponentButton={!!config?.customComponent?.component}
+              />
+
+              <div className="flex flex-1 flex-row min-h-0 overflow-hidden">
+                {/* Main Chat Area */}
+                <div className="flex-1 flex flex-col min-h-0">
+                  {/* Messages */}
+                  <ScrollArea
+                    ref={scrollAreaRef}
+                    className="flex-1 min-h-0"
+                    viewportClassName="p-4 overscroll-contain"
+                    onScrollCapture={handleScroll}
+                  >
+                    <div className="max-w-4xl mx-auto space-y-4 pb-4">
+                      {renderSuggestions()}
+
+                      {messages.map((message) => (
+                        <Message
+                          key={message.id}
+                          message={message}
+                          userAvatar={user?.avatar}
+                          userName={user?.name}
+                          assistantAvatar={assistant?.avatar}
+                          assistantName={assistant?.name}
+                          showTimestamp={config.ui.showTimestamps}
+                          showAvatar={config.ui.showAvatars}
+                          enableCopy={config.features.enableMessageCopy}
+                          enableEdit={config.features.enableMessageEditing}
+                          enableRegenerate={config.features.enableRegeneration}
+                          enableToolCallsDisplay={config.features.enableToolCallsDisplay}
+                          compactMode={config.ui.compactMode}
+                          onAction={handleMessageAction}
+                          toolUsedLabel={config.labels.toolUsed}
+                          thinkingLabel={config.labels.thinking}
+                        />
+                      ))}
+
+                      <div ref={messagesEndRef} />
+                    </div>
+                  </ScrollArea>
+
+                  {/* Input */}
+                  <div className="bg-background pb-[env(safe-area-inset-bottom)]">
+                    <ChatInput
+                      value={state.input}
+                      onChange={(value) => setState(prev => ({ ...prev, input: value }))}
+                      onSubmit={handleSendMessage}
+                      attachments={state.attachments}
+                      onAttachmentsChange={(attachments) =>
+                        setState(prev => ({ ...prev, attachments }))
+                      }
+                      placeholder={config.labels.inputPlaceholder}
+                      disabled={false}
+                      isGenerating={isGenerating}
+                      onStopGeneration={callbacks.onStopGeneration}
+                      enableFileUpload={config.features.enableFileUpload}
+                      enableAudioRecording={config.features.enableAudioRecording}
+                      maxAttachments={config.features.maxAttachments}
+                      maxFileSize={config.features.maxFileSize}
+                      config={config}
+                    />
+                  </div>
+                </div>
+
+                {/* Right sidebar custom component for desktop */}
+                {config?.customComponent?.component && !isMobile && (
+                  <div
+                    className={`h-full transition-all duration-300 ease-in-out overflow-hidden ${
+                      state.showSidebar ? 'w-80' : 'w-0'
+                    }`}
+                  >
+                    {state.showSidebar && (
+                      <div className="flex flex-col h-full border-l bg-background animate-in slide-in-from-right-4 duration-300 w-80">
+                        {renderCustomComponent()}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </SidebarInset>
+
+          {/* Mobile custom sidebar overlay with smooth transitions (slides from right) */}
+          {isCustomMounted && config.customComponent?.component && isMobile && (
+            <div className="fixed inset-0 z-50">
+              {/* Backdrop */}
+              <div
+                className={`absolute inset-0 bg-background/80 backdrop-blur-sm transition-opacity duration-200 ease-out ${
+                  isCustomVisible ? 'opacity-100' : 'opacity-0'
+                }`}
+                style={{ willChange: 'opacity' }}
+                onClick={closeSidebar}
+              />
+              {/* Panel - slides from right */}
+              <div
+                className={`absolute top-0 right-0 h-full w-full bg-background transform-gpu transition-transform duration-200 ease-out ${
+                  isCustomVisible ? 'translate-x-0' : 'translate-x-full'
+                }`}
+                style={{ willChange: 'transform' }}
+              >
+                <div className="h-full flex flex-col">
+                  {renderCustomComponent()}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Built-in User Profile Panel */}
+          <UserProfile
+            isOpen={isUserProfileOpen}
+            onClose={() => setIsUserProfileOpen(false)}
+            user={user ? {
+              id: user.id,
+              name: user.name,
+              email: user.email,
+              avatar: user.avatar,
+            } : null}
+            customFields={userContext?.customFields}
+            memories={userContext?.memories?.items}
+            onLogout={callbacks.onLogout}
+            onAddMemory={onAddMemory}
+            onUpdateMemory={onUpdateMemory}
+            onDeleteMemory={onDeleteMemory}
+          />
+        </div>
+      </SidebarProvider>
+    </TooltipProvider>
+  );
+};
