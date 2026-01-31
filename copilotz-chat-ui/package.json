@@ -65,9 +65,9 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "REPLACE_WITH_REPO_URL"
+    "url": "git+ssh://git@github.com/copilotzhq/packages.git"
   },
-  "homepage": "REPLACE_WITH_REPO_URL#readme",
+  "homepage": "https://github.com/copilotzhq/packages#readme",
   "publishConfig": {
     "access": "public"
   }
