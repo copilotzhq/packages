@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -42,10 +42,12 @@ interface MessageProps {
   className?: string;
   toolUsedLabel?: string;
   thinkingLabel?: string;
+  /** When true, hides the avatar and name (for grouped consecutive messages from same sender) */
+  isGrouped?: boolean;
 }
 
-// Thinking indicator component
-const ThinkingIndicator: React.FC<{ label?: string }> = ({ label = 'Thinking...' }) => {
+// Thinking indicator component - memoized since it's rendered during streaming
+const ThinkingIndicator: React.FC<{ label?: string }> = memo(function ThinkingIndicator({ label = 'Thinking...' }: { label?: string }) {
   return (
     <div className="flex items-center gap-2 py-2">
       <div className="flex gap-1">
@@ -65,39 +67,47 @@ const ThinkingIndicator: React.FC<{ label?: string }> = ({ label = 'Thinking...'
       <span className="text-sm text-muted-foreground animate-pulse">{label}</span>
     </div>
   );
+});
+
+// Memoized markdown components configuration to prevent recreation on every render
+const markdownComponents = {
+  code: ({ node, className, children, ...props }: any) => {
+    const inline = (props as { inline?: boolean }).inline;
+    const match = /language-(\w+)/.exec(className || '');
+    return !inline && match ? (
+      <pre className="relative">
+        <code className={className} {...props}>
+          {children}
+        </code>
+      </pre>
+    ) : (
+      <code className="bg-muted px-1 py-0.5 rounded text-sm" {...props}>
+        {children}
+      </code>
+    );
+  },
 };
 
-// Streaming text component for real-time markdown rendering
-const StreamingText: React.FC<{ content: string; isStreaming?: boolean; thinkingLabel?: string }> = ({
+// Memoized plugins arrays to prevent recreation
+const remarkPluginsDefault = [remarkGfm];
+const rehypePluginsDefault = [rehypeHighlight];
+const rehypePluginsEmpty: never[] = [];
+
+// Streaming text component for real-time markdown rendering - memoized to prevent unnecessary re-renders
+const StreamingText: React.FC<{ content: string; isStreaming?: boolean; thinkingLabel?: string }> = memo(function StreamingText({
   content,
   isStreaming = false,
   thinkingLabel = 'Thinking...'
-}) => {
+}: { content: string; isStreaming?: boolean; thinkingLabel?: string }) {
   const hasContent = content.trim().length > 0;
 
   return (
     <div className="prose prose-sm max-w-none dark:prose-invert">
       {hasContent ? (
         <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={isStreaming ? [] : [rehypeHighlight]}
-          components={{
-            code: ({ node, className, children, ...props }) => {
-              const inline = (props as { inline?: boolean }).inline;
-              const match = /language-(\w+)/.exec(className || '');
-              return !inline && match ? (
-                <pre className="relative">
-                  <code className={className} {...props}>
-                    {children}
-                  </code>
-                </pre>
-              ) : (
-                <code className="bg-muted px-1 py-0.5 rounded text-sm" {...props}>
-                  {children}
-                </code>
-              );
-            },
-          }}
+          remarkPlugins={remarkPluginsDefault}
+          rehypePlugins={isStreaming ? rehypePluginsEmpty : rehypePluginsDefault}
+          components={markdownComponents}
         >
           {content}
         </ReactMarkdown>
@@ -110,10 +120,10 @@ const StreamingText: React.FC<{ content: string; isStreaming?: boolean; thinking
       )}
     </div>
   );
-};
+});
 
-// Media attachment renderer
-const MediaRenderer: React.FC<{ attachment: MediaAttachment }> = ({ attachment }) => {
+// Media attachment renderer - memoized to prevent unnecessary re-renders
+const MediaRenderer: React.FC<{ attachment: MediaAttachment }> = memo(function MediaRenderer({ attachment }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -200,10 +210,10 @@ const MediaRenderer: React.FC<{ attachment: MediaAttachment }> = ({ attachment }
     default:
       return null;
   }
-};
+});
 
-// Tool calls display component
-const ToolCallsDisplay: React.FC<{ toolCalls: ToolCall[]; label?: string }> = ({ toolCalls, label }) => {
+// Tool calls display component - memoized to prevent unnecessary re-renders
+const ToolCallsDisplay: React.FC<{ toolCalls: ToolCall[]; label?: string }> = memo(function ToolCallsDisplay({ toolCalls, label }) {
   const [expandedCall, setExpandedCall] = useState<string | null>(null);
 
   const getStatusIcon = (status: ToolCall['status']) => {
@@ -286,9 +296,65 @@ const ToolCallsDisplay: React.FC<{ toolCalls: ToolCall[]; label?: string }> = ({
       })}
     </div>
   );
+});
+
+// Custom comparison function for React.memo to avoid unnecessary re-renders
+const arePropsEqual = (prevProps: MessageProps, nextProps: MessageProps): boolean => {
+  // Compare message content and streaming state
+  if (prevProps.message.id !== nextProps.message.id) return false;
+  if (prevProps.message.content !== nextProps.message.content) return false;
+  if (prevProps.message.isStreaming !== nextProps.message.isStreaming) return false;
+  if (prevProps.message.isComplete !== nextProps.message.isComplete) return false;
+  if (prevProps.message.isEdited !== nextProps.message.isEdited) return false;
+  if (prevProps.message.timestamp !== nextProps.message.timestamp) return false;
+  
+  // Compare tool calls (by reference first, then by length for quick check)
+  if (prevProps.message.toolCalls !== nextProps.message.toolCalls) {
+    const prevCalls = prevProps.message.toolCalls;
+    const nextCalls = nextProps.message.toolCalls;
+    if (!prevCalls || !nextCalls || prevCalls.length !== nextCalls.length) return false;
+    // Deep check tool call status changes
+    for (let i = 0; i < prevCalls.length; i++) {
+      if (prevCalls[i].id !== nextCalls[i].id ||
+          prevCalls[i].status !== nextCalls[i].status ||
+          prevCalls[i].result !== nextCalls[i].result) {
+        return false;
+      }
+    }
+  }
+  
+  // Compare attachments by reference (usually stable)
+  if (prevProps.message.attachments !== nextProps.message.attachments) {
+    const prevAtt = prevProps.message.attachments;
+    const nextAtt = nextProps.message.attachments;
+    if (!prevAtt || !nextAtt || prevAtt.length !== nextAtt.length) return false;
+  }
+  
+  // Compare other props
+  if (prevProps.isUser !== nextProps.isUser) return false;
+  if (prevProps.userAvatar !== nextProps.userAvatar) return false;
+  if (prevProps.userName !== nextProps.userName) return false;
+  if (prevProps.assistantName !== nextProps.assistantName) return false;
+  if (prevProps.showTimestamp !== nextProps.showTimestamp) return false;
+  if (prevProps.showAvatar !== nextProps.showAvatar) return false;
+  if (prevProps.enableCopy !== nextProps.enableCopy) return false;
+  if (prevProps.enableEdit !== nextProps.enableEdit) return false;
+  if (prevProps.enableRegenerate !== nextProps.enableRegenerate) return false;
+  if (prevProps.enableToolCallsDisplay !== nextProps.enableToolCallsDisplay) return false;
+  if (prevProps.compactMode !== nextProps.compactMode) return false;
+  if (prevProps.className !== nextProps.className) return false;
+  if (prevProps.toolUsedLabel !== nextProps.toolUsedLabel) return false;
+  if (prevProps.thinkingLabel !== nextProps.thinkingLabel) return false;
+  if (prevProps.isGrouped !== nextProps.isGrouped) return false;
+  
+  // onAction callback - skip comparison since it should be stable with useCallback
+  // assistantAvatar is a ReactNode - compare by reference
+  if (prevProps.assistantAvatar !== nextProps.assistantAvatar) return false;
+  
+  return true;
 };
 
-export const Message: React.FC<MessageProps> = ({
+export const Message: React.FC<MessageProps> = memo(({
   message,
   isUser,
   userAvatar,
@@ -306,6 +372,7 @@ export const Message: React.FC<MessageProps> = ({
   className = '',
   toolUsedLabel,
   thinkingLabel = 'Thinking...',
+  isGrouped = false,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(message.content);
@@ -363,51 +430,54 @@ export const Message: React.FC<MessageProps> = ({
         onMouseLeave={() => setShowActions(false)}
       >
 
-        <div className={`flex gap-3 ${messageIsUser ? 'flex-row-reverse' : 'flex-row'} w-full mb-1`}>
-          {/* Avatar */}
-          {showAvatar && (
-            <div className={`flex-shrink-0 ${compactMode ? 'mt-1' : 'mt-0'}`}>
-              <Avatar className={compactMode ? 'h-6 w-6' : 'h-8 w-8'}>
-                {messageIsUser ? (
-                  <>
-                    <AvatarImage src={userAvatar} alt={userName} />
-                    <AvatarFallback className="bg-primary text-primary-foreground">
-                      {userName.charAt(0).toUpperCase()}
-                    </AvatarFallback>
-                  </>
-                ) : (
-                  <>
-                    {assistantAvatar || (
-                      <AvatarFallback className="bg-secondary text-secondary-foreground">
-                        AI
+        {/* Header row with avatar and name - hidden when grouped */}
+        {!isGrouped && (
+          <div className={`flex gap-3 ${messageIsUser ? 'flex-row-reverse' : 'flex-row'} w-full mb-1`}>
+            {/* Avatar */}
+            {showAvatar && (
+              <div className={`flex-shrink-0 ${compactMode ? 'mt-1' : 'mt-0'}`}>
+                <Avatar className={compactMode ? 'h-6 w-6' : 'h-8 w-8'}>
+                  {messageIsUser ? (
+                    <>
+                      <AvatarImage src={userAvatar} alt={userName} />
+                      <AvatarFallback className="bg-primary text-primary-foreground">
+                        {userName.charAt(0).toUpperCase()}
                       </AvatarFallback>
-                    )}
-                  </>
-                )}
-              </Avatar>
-            </div>
-          )}
+                    </>
+                  ) : (
+                    <>
+                      {assistantAvatar || (
+                        <AvatarFallback className="bg-secondary text-secondary-foreground">
+                          AI
+                        </AvatarFallback>
+                      )}
+                    </>
+                  )}
+                </Avatar>
+              </div>
+            )}
 
-          {/* Message Content */}
-          {/* Header */}
-          <div className={`flex items-center gap-2 mb-1 ${messageIsUser ? 'flex-row-reverse' : 'flex-row'}`}>
-            <span className={`font-medium ${compactMode ? 'text-sm' : 'text-base'}`}>
-              {messageIsUser ? userName : assistantName}
-            </span>
-            {showTimestamp && (
-              <span className="text-xs text-muted-foreground">
-                {formatTime(message.timestamp)}
+            {/* Header */}
+            <div className={`flex items-center gap-2 mb-1 ${messageIsUser ? 'flex-row-reverse' : 'flex-row'}`}>
+              <span className={`font-medium ${compactMode ? 'text-sm' : 'text-base'}`}>
+                {messageIsUser ? userName : assistantName}
               </span>
-            )}
-            {message.isEdited && (
-              <Badge variant="outline" className="text-xs">
-                editado
-              </Badge>
-            )}
+              {showTimestamp && (
+                <span className="text-xs text-muted-foreground">
+                  {formatTime(message.timestamp)}
+                </span>
+              )}
+              {message.isEdited && (
+                <Badge variant="outline" className="text-xs">
+                  editado
+                </Badge>
+              )}
+            </div>
           </div>
-        </div>
+        )}
 
-        <div className={`flex-1 min-w-0 ${messageIsUser ? 'text-right' : 'text-left'}`}>
+        {/* Add left margin for grouped messages to align with content under avatar */}
+        <div className={`flex-1 min-w-0 ${messageIsUser ? 'text-right' : 'text-left'} ${isGrouped && showAvatar && !messageIsUser ? (compactMode ? 'ml-9' : 'ml-11') : ''} ${isGrouped && showAvatar && messageIsUser ? (compactMode ? 'mr-9' : 'mr-11') : ''}`}>
 
           {/* Message Body */}
           <div className={`relative inline-flex flex-col ${messageIsUser
@@ -527,4 +597,4 @@ export const Message: React.FC<MessageProps> = ({
       </div>
     </TooltipProvider>
   );
-};
+}, arePropsEqual);

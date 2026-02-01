@@ -14,11 +14,10 @@ import { ChatHeader } from './ChatHeader';
 import { ChatInput } from './ChatInput';
 import { UserProfile } from './UserProfile';
 import { useChatUserContext } from './UserContext';
-import { Card, CardContent } from '../ui/card';
 import { ScrollArea } from '../ui/scroll-area';
 import { TooltipProvider } from '../ui/tooltip';
 import { SidebarProvider, SidebarInset } from '../ui/sidebar';
-import { Sparkles } from 'lucide-react';
+import { Sparkles, ArrowRight, MessageSquare, Lightbulb, Zap, HelpCircle } from 'lucide-react';
 
 // ChatUI is a purely presentational component
 export const ChatUI: React.FC<ChatV2Props> = ({
@@ -32,10 +31,16 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   user,
   assistant,
   suggestions = [],
+  messageSuggestions = {},
+  agentOptions = [],
+  selectedAgentId = null,
+  onSelectAgent,
   className = '',
   onAddMemory,
   onUpdateMemory,
   onDeleteMemory,
+  initialInput,
+  onInitialInputConsumed,
 }) => {
   // Merge configuration with defaults
   const config = mergeConfig(defaultChatConfig, userConfig);
@@ -64,10 +69,12 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     return false;
   };
 
-  // Internal state for UI only
-  const [state, setState] = useState<ChatState>({
-    input: '',
-    attachments: [],
+  // Separate input state to avoid full re-renders on every keystroke
+  const [inputValue, setInputValue] = useState('');
+  const [attachments, setAttachments] = useState<MediaAttachment[]>([]);
+
+  // Internal state for UI only (excluding input to optimize re-renders)
+  const [state, setState] = useState<Omit<ChatState, 'input' | 'attachments'>>({
     isRecording: false,
     selectedThreadId: currentThreadId,
     isAtBottom: true,
@@ -84,21 +91,47 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     }
   }, [currentThreadId]);
 
+  // Track if initialInput has been applied
+  const initialInputApplied = useRef(false);
+  const initialInputConsumedRef = useRef(false);
+
+  // Apply initialInput when provided
+  useEffect(() => {
+    if (initialInput && !initialInputApplied.current) {
+      setInputValue(initialInput);
+      initialInputApplied.current = true;
+    }
+  }, [initialInput]);
+
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+
+  // Refs for state to avoid recreating callbacks on every state change
+  const stateRef = useRef(state);
+  const inputValueRef = useRef(inputValue);
+  const attachmentsRef = useRef(attachments);
+
+  // Keep refs in sync with state
+  useEffect(() => { stateRef.current = state; }, [state]);
+  useEffect(() => { inputValueRef.current = inputValue; }, [inputValue]);
+  useEffect(() => { attachmentsRef.current = attachments; }, [attachments]);
 
   // Mobile custom overlay mount/unmount for smooth transitions
   const [isCustomMounted, setIsCustomMounted] = useState(false);
   const [isCustomVisible, setIsCustomVisible] = useState(false);
 
-  // Create state callback helpers
+  // Create state callback helpers - uses refs to avoid recreating on every state change
   const createStateCallback = useCallback(
     (setter?: (value: React.SetStateAction<ChatState>) => void): StateCallback<ChatState> => ({
       setState: (newState) => setter?.(newState),
-      getState: () => state,
+      getState: () => ({
+        ...stateRef.current,
+        input: inputValueRef.current,
+        attachments: attachmentsRef.current,
+      }),
     }),
-    [state]
+    [] // No dependencies - uses refs for latest state
   );
 
   // Mobile detection effect
@@ -148,20 +181,23 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   // Message handling
   const handleSendMessage = useCallback((
     content: string,
-    attachments: MediaAttachment[] = []
+    messageAttachments: MediaAttachment[] = []
   ) => {
-    if (!content.trim() && attachments.length === 0) return;
+    if (!content.trim() && messageAttachments.length === 0) return;
     
     // Call external callback
-    callbacks.onSendMessage?.(content, attachments, createStateCallback());
+    callbacks.onSendMessage?.(content, messageAttachments, createStateCallback());
 
-    // Clear input
-    setState(prev => ({
-      ...prev,
-      input: '',
-      attachments: []
-    }));
-  }, [callbacks, createStateCallback]);
+    // Mark initial input as consumed when message is sent
+    if (initialInputApplied.current && !initialInputConsumedRef.current) {
+      initialInputConsumedRef.current = true;
+      onInitialInputConsumed?.();
+    }
+
+    // Clear input (using separate state for performance)
+    setInputValue('');
+    setAttachments([]);
+  }, [callbacks, createStateCallback, onInitialInputConsumed]);
 
   // Message actions
   const handleMessageAction = useCallback((event: MessageActionEvent) => {
@@ -187,7 +223,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
 
   // Thread management
   const handleCreateThread = useCallback((title?: string) => {
-    callbacks.onCreateThread?.(title, createStateCallback(setState));
+    callbacks.onCreateThread?.(title, createStateCallback());
   }, [callbacks, createStateCallback]);
 
   const handleSelectThread = useCallback((threadId: string) => {
@@ -221,34 +257,79 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     return component;
   }, [config?.customComponent?.component, closeSidebar, isMobile]);
 
+  // Icon components for suggestion cards (cycle through these)
+  const SuggestionIconComponents = [MessageSquare, Lightbulb, Zap, HelpCircle];
+
   // Render suggestions
   const renderSuggestions = () => {
     if (messages.length > 0 || !suggestions.length) return null;
 
     return (
-      <div className="text-center py-8">
-        <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-primary/10 mb-4">
-          <Sparkles className="w-8 h-8 text-primary" />
+      <div className="flex flex-col items-center justify-center min-h-[60vh] py-8 px-4">
+        {/* Hero section */}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 mb-4 shadow-sm">
+            <Sparkles className="w-7 h-7 text-primary" />
+          </div>
+          <h2 className="text-xl font-semibold mb-2">{config.branding.title}</h2>
+          <p className="text-muted-foreground text-sm max-w-md">{config.branding.subtitle}</p>
         </div>
-        <h3 className="text-lg font-semibold mb-2">{config.branding.title}</h3>
-        <p className="text-muted-foreground mb-6">{config.branding.subtitle}</p>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-2xl mx-auto">
+        {/* Suggestion cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-2xl">
           {suggestions.map((suggestion, index) => (
-            <Card
+            <button
               key={index}
-              className="cursor-pointer hover:bg-muted/50 transition-colors"
+              type="button"
               onClick={() => handleSendMessage(suggestion)}
+              className="group relative flex items-start gap-3 p-4 text-left rounded-xl border bg-card hover:bg-accent/50 hover:border-accent transition-all duration-200 hover:shadow-sm"
             >
-              <CardContent className="p-4 text-left">
-                <p className="text-sm">{suggestion}</p>
-              </CardContent>
-            </Card>
+              {(() => {
+                const IconComponent = SuggestionIconComponents[index % SuggestionIconComponents.length];
+                return (
+                  <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10 text-primary shrink-0 group-hover:bg-primary/15 transition-colors">
+                    <IconComponent className="h-4 w-4" />
+                  </div>
+                );
+              })()}
+              <div className="flex-1 min-w-0 pr-6">
+                <p className="text-sm font-medium leading-snug line-clamp-2">{suggestion}</p>
+              </div>
+              <ArrowRight className="absolute right-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+            </button>
           ))}
         </div>
       </div>
     );
   };
+
+  const renderInlineSuggestions = (messageId: string) => {
+    const items = messageSuggestions?.[messageId];
+    if (!items || items.length === 0) return null;
+
+    return (
+      <div className="flex flex-wrap gap-2 mt-2 ml-11">
+        {items.map((suggestion, index) => (
+          <button
+            key={`${messageId}-suggestion-${index}`}
+            type="button"
+            onClick={() => handleSendMessage(suggestion)}
+            className="group inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-full border border-border bg-background hover:bg-accent hover:border-accent-foreground/20 transition-all duration-150 text-foreground/80 hover:text-foreground"
+          >
+            <Sparkles className="h-3 w-3 text-primary opacity-70 group-hover:opacity-100" />
+            <span className="max-w-[200px] truncate">{suggestion}</span>
+          </button>
+        ))}
+      </div>
+    );
+  };
+
+  const shouldShowAgentSelector = Boolean(
+    config.agentSelector?.enabled &&
+    onSelectAgent &&
+    agentOptions.length > 0 &&
+    (!config.agentSelector?.hideIfSingle || agentOptions.length > 1)
+  );
 
   return (
     <TooltipProvider>
@@ -295,6 +376,10 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                 onCustomComponentToggle={() => setState(prev => ({ ...prev, showSidebar: !prev.showSidebar }))}
                 onNewThread={handleCreateThread}
                 showCustomComponentButton={!!config?.customComponent?.component}
+                showAgentSelector={shouldShowAgentSelector}
+                agentOptions={agentOptions}
+                selectedAgentId={selectedAgentId}
+                onSelectAgent={onSelectAgent}
               />
 
               <div className="flex flex-1 flex-row min-h-0 overflow-hidden">
@@ -310,26 +395,35 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                     <div className="max-w-4xl mx-auto space-y-4 pb-4">
                       {renderSuggestions()}
 
-                      {messages.map((message) => (
-                        <Message
-                          key={message.id}
-                          message={message}
-                          userAvatar={user?.avatar}
-                          userName={user?.name}
-                          assistantAvatar={assistant?.avatar}
-                          assistantName={assistant?.name}
-                          showTimestamp={config.ui.showTimestamps}
-                          showAvatar={config.ui.showAvatars}
-                          enableCopy={config.features.enableMessageCopy}
-                          enableEdit={config.features.enableMessageEditing}
-                          enableRegenerate={config.features.enableRegeneration}
-                          enableToolCallsDisplay={config.features.enableToolCallsDisplay}
-                          compactMode={config.ui.compactMode}
-                          onAction={handleMessageAction}
-                          toolUsedLabel={config.labels.toolUsed}
-                          thinkingLabel={config.labels.thinking}
-                        />
-                      ))}
+                      {messages.map((message, index) => {
+                        // Check if this message is from the same sender as the previous one
+                        const prevMessage = index > 0 ? messages[index - 1] : null;
+                        const isGrouped = prevMessage !== null && prevMessage.role === message.role;
+                        
+                        return (
+                          <div key={message.id} className={isGrouped ? 'space-y-1 -mt-2' : 'space-y-2'}>
+                            <Message
+                              message={message}
+                              userAvatar={user?.avatar}
+                              userName={user?.name}
+                              assistantAvatar={assistant?.avatar}
+                              assistantName={assistant?.name}
+                              showTimestamp={config.ui.showTimestamps}
+                              showAvatar={config.ui.showAvatars}
+                              enableCopy={config.features.enableMessageCopy}
+                              enableEdit={config.features.enableMessageEditing}
+                              enableRegenerate={config.features.enableRegeneration}
+                              enableToolCallsDisplay={config.features.enableToolCallsDisplay}
+                              compactMode={config.ui.compactMode}
+                              onAction={handleMessageAction}
+                              toolUsedLabel={config.labels.toolUsed}
+                              thinkingLabel={config.labels.thinking}
+                              isGrouped={isGrouped}
+                            />
+                            {message.role === 'assistant' && renderInlineSuggestions(message.id)}
+                          </div>
+                        );
+                      })}
 
                       <div ref={messagesEndRef} />
                     </div>
@@ -338,13 +432,18 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                   {/* Input */}
                   <div className="bg-background pb-[env(safe-area-inset-bottom)]">
                     <ChatInput
-                      value={state.input}
-                      onChange={(value) => setState(prev => ({ ...prev, input: value }))}
+                      value={inputValue}
+                      onChange={(value) => {
+                        setInputValue(value);
+                        // Mark initial input as consumed when user modifies it
+                        if (initialInputApplied.current && !initialInputConsumedRef.current) {
+                          initialInputConsumedRef.current = true;
+                          onInitialInputConsumed?.();
+                        }
+                      }}
                       onSubmit={handleSendMessage}
-                      attachments={state.attachments}
-                      onAttachmentsChange={(attachments) =>
-                        setState(prev => ({ ...prev, attachments }))
-                      }
+                      attachments={attachments}
+                      onAttachmentsChange={setAttachments}
                       placeholder={config.labels.inputPlaceholder}
                       disabled={false}
                       isGenerating={isGenerating}
@@ -401,23 +500,25 @@ export const ChatUI: React.FC<ChatV2Props> = ({
             </div>
           )}
 
-          {/* Built-in User Profile Panel */}
-          <UserProfile
-            isOpen={isUserProfileOpen}
-            onClose={() => setIsUserProfileOpen(false)}
-            user={user ? {
-              id: user.id,
-              name: user.name,
-              email: user.email,
-              avatar: user.avatar,
-            } : null}
-            customFields={userContext?.customFields}
-            memories={userContext?.memories?.items}
-            onLogout={callbacks.onLogout}
-            onAddMemory={onAddMemory}
-            onUpdateMemory={onUpdateMemory}
-            onDeleteMemory={onDeleteMemory}
-          />
+          {/* Built-in User Profile Panel - only render when open to avoid Radix focus conflicts */}
+          {isUserProfileOpen && (
+            <UserProfile
+              isOpen={isUserProfileOpen}
+              onClose={() => setIsUserProfileOpen(false)}
+              user={user ? {
+                id: user.id,
+                name: user.name,
+                email: user.email,
+                avatar: user.avatar,
+              } : null}
+              customFields={userContext?.customFields}
+              memories={userContext?.memories?.items}
+              onLogout={callbacks.onLogout}
+              onAddMemory={onAddMemory}
+              onUpdateMemory={onUpdateMemory}
+              onDeleteMemory={onDeleteMemory}
+            />
+          )}
         </div>
       </SidebarProvider>
     </TooltipProvider>

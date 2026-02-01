@@ -1,8 +1,9 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect, useState } from 'react';
 import { ChatUI, ChatUserContextProvider } from '@copilotz/chat-ui';
-import type { ChatConfig, ChatCallbacks, ChatUserContext, MemoryItem } from '@copilotz/chat-ui';
+import type { AgentOption, ChatConfig, ChatCallbacks, ChatUserContext, MemoryItem } from '@copilotz/chat-ui';
 import { User } from 'lucide-react';
 import { useCopilotz } from './useCopilotzChat';
+import type { UrlSyncConfig } from './useUrlState';
 
 export interface CopilotzChatProps {
   userId: string;
@@ -39,7 +40,41 @@ export interface CopilotzChatProps {
   onUpdateMemory?: (memoryId: string, content: string) => void;
   /** Called when user deletes a memory */
   onDeleteMemory?: (memoryId: string) => void;
+  /** Empty-state suggestions */
+  suggestions?: string[];
+  /** Agent selector data (built-in ChatUI) */
+  agentOptions?: AgentOption[];
+  selectedAgentId?: string | null;
+  onSelectAgent?: (agentId: string) => void;
   className?: string;
+  /**
+   * URL state synchronization configuration.
+   * When enabled, syncs thread ID, agent, and prompt to/from URL parameters.
+   * 
+   * Features:
+   * - `?thread=abc123` - Opens specific thread
+   * - `?agent=support-bot` - Pre-selects agent
+   * - `?prompt=Hello` - Pre-fills or auto-sends message
+   * 
+   * @example
+   * ```tsx
+   * <CopilotzChat
+   *   userId="user123"
+   *   urlSync={{ enabled: true }}
+   * />
+   * 
+   * // With custom param names
+   * <CopilotzChat
+   *   userId="user123"
+   *   urlSync={{
+   *     enabled: true,
+   *     params: { thread: 't', agent: 'a', prompt: 'q' },
+   *     promptBehavior: 'auto-send'
+   *   }}
+   * />
+   * ```
+   */
+  urlSync?: UrlSyncConfig;
 }
 
 export const CopilotzChat: React.FC<CopilotzChatProps> = ({
@@ -58,8 +93,15 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
   onAddMemory,
   onUpdateMemory,
   onDeleteMemory,
+  suggestions,
+  agentOptions = [],
+  selectedAgentId = null,
+  onSelectAgent,
   className,
+  urlSync,
 }) => {
+  const selectedAgent = agentOptions.find((agent) => agent.id === selectedAgentId) || null;
+
   const {
     messages,
     threads,
@@ -73,13 +115,55 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     archiveThread,
     deleteThread,
     stopGeneration,
+    initialPrompt,
+    clearInitialPrompt,
+    urlAgentId,
+    setUrlAgentId,
   } = useCopilotz({ 
     userId, 
     initialContext, 
     bootstrap, 
     defaultThreadName: userConfig?.labels?.defaultThreadName,
-    onToolOutput 
+    onToolOutput,
+    preferredAgentName: selectedAgent?.name ?? null,
+    urlSync,
   });
+
+  // Track if we've handled the initial prompt
+  const [promptHandled, setPromptHandled] = useState(false);
+
+  // Handle URL agent ID - call onSelectAgent if URL has agent and it differs from current
+  useEffect(() => {
+    if (urlAgentId && onSelectAgent && urlAgentId !== selectedAgentId) {
+      // Check if the agent exists in options
+      const agentExists = agentOptions.some((a) => a.id === urlAgentId);
+      if (agentExists) {
+        onSelectAgent(urlAgentId);
+      }
+    }
+  }, [urlAgentId, selectedAgentId, onSelectAgent, agentOptions]);
+
+  // Sync selected agent to URL when it changes (after initial load)
+  useEffect(() => {
+    if (selectedAgentId && urlSync?.enabled) {
+      setUrlAgentId(selectedAgentId);
+    }
+  }, [selectedAgentId, urlSync?.enabled, setUrlAgentId]);
+
+  // Handle auto-send behavior for initial prompt
+  useEffect(() => {
+    if (initialPrompt && !promptHandled && urlSync?.promptBehavior === 'auto-send') {
+      // Wait for initial load to complete
+      const timer = setTimeout(() => {
+        void sendMessage(initialPrompt);
+        clearInitialPrompt();
+        setPromptHandled(true);
+      }, 500);
+      return () => clearTimeout(timer);
+    }
+  }, [initialPrompt, promptHandled, urlSync?.promptBehavior, sendMessage, clearInitialPrompt]);
+
+  // For prefill behavior, we'll pass initialInput to ChatUI
 
   const chatCallbacks: ChatCallbacks = useMemo(() => ({
     onSendMessage: (content, attachments) => {
@@ -155,6 +239,10 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
         config={mergedConfig}
         callbacks={chatCallbacks}
         isGenerating={isStreaming}
+        suggestions={suggestions}
+        agentOptions={agentOptions}
+        selectedAgentId={selectedAgentId}
+        onSelectAgent={onSelectAgent}
         user={{
           id: userId,
           name: effectiveUserName,
@@ -170,6 +258,16 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
         onUpdateMemory={onUpdateMemory}
         onDeleteMemory={onDeleteMemory}
         className={className}
+        // Pass initial prompt for prefill behavior (not auto-send)
+        initialInput={
+          initialPrompt && !promptHandled && urlSync?.promptBehavior !== 'auto-send'
+            ? initialPrompt
+            : undefined
+        }
+        onInitialInputConsumed={() => {
+          clearInitialPrompt();
+          setPromptHandled(true);
+        }}
       />
     </ChatUserContextProvider>
   );

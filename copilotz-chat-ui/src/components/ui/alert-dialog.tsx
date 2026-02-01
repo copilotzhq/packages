@@ -6,10 +6,41 @@ import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
 import { cn } from "../../lib/utils"
 import { buttonVariants } from "./button"
 
+/**
+ * Clean up body styles that Radix may leave behind.
+ * This fixes an issue where pointer-events: none gets stuck on body.
+ */
+function cleanupBodyStyles() {
+  if (typeof document !== 'undefined' && document.body.style.pointerEvents === 'none') {
+    document.body.style.pointerEvents = '';
+  }
+}
+
 function AlertDialog({
+  open,
+  onOpenChange,
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Root>) {
-  return <AlertDialogPrimitive.Root data-slot="alert-dialog" {...props} />
+  // Track previous open state to detect close transition
+  const prevOpenRef = React.useRef(open);
+
+  React.useEffect(() => {
+    // When transitioning from open to closed, ensure cleanup after animation
+    if (prevOpenRef.current === true && open === false) {
+      const timeout = setTimeout(cleanupBodyStyles, 250); // After close animation (200ms + buffer)
+      return () => clearTimeout(timeout);
+    }
+    prevOpenRef.current = open;
+  }, [open]);
+
+  // Cleanup on unmount
+  React.useEffect(() => {
+    return () => {
+      cleanupBodyStyles();
+    };
+  }, []);
+
+  return <AlertDialogPrimitive.Root data-slot="alert-dialog" open={open} onOpenChange={onOpenChange} {...props} />
 }
 
 function AlertDialogTrigger({
@@ -36,7 +67,10 @@ function AlertDialogOverlay({
     <AlertDialogPrimitive.Overlay
       data-slot="alert-dialog-overlay"
       className={cn(
-        "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 fixed inset-0 z-50 bg-black/50",
+        "fixed inset-0 z-50 bg-black/50",
+        "data-[state=open]:animate-in data-[state=closed]:animate-out",
+        "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+        "data-[state=closed]:pointer-events-none",
         className
       )}
       {...props}

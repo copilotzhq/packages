@@ -9,6 +9,12 @@ export const defaultChatConfig: Required<ChatConfig> = {
     title: 'Chat Assistant',
     subtitle: 'How can I help you today?',
   },
+
+  agentSelector: {
+    enabled: false,
+    label: 'Select agent',
+    hideIfSingle: true,
+  },
   
   labels: {
     inputPlaceholder: 'Type your message...',
@@ -106,6 +112,10 @@ export function mergeConfig(_baseConfig: ChatConfig, userConfig?: Partial<ChatCo
     ui: {
       ...defaultChatConfig.ui,
       ...userConfig.ui,
+    },
+    agentSelector: {
+      ...defaultChatConfig.agentSelector,
+      ...userConfig.agentSelector,
     },
     customComponent: userConfig.customComponent || defaultChatConfig.customComponent,
     headerActions: userConfig.headerActions || defaultChatConfig.headerActions,

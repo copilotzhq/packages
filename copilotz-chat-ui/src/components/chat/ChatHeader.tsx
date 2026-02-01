@@ -1,7 +1,7 @@
 import React from 'react';
-import { Card, CardHeader, CardTitle } from '../ui/card';
+import { Card, CardHeader } from '../ui/card';
 import { Button } from '../ui/button';
-import { Avatar, AvatarFallback } from '../ui/avatar';
+import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import {
   DropdownMenu,
@@ -20,15 +20,23 @@ import {
   Menu,
   Moon,
   Sun,
+  ChevronDown,
+  Check,
 } from 'lucide-react';
 import { ReactNode } from 'react';
 import { SidebarTrigger } from '../ui/sidebar';
+import type { AgentOption } from '../../types/chatTypes';
 
 export interface ChatHeaderConfig {
   branding?: {
     logo?: ReactNode;
     title?: string;
     subtitle?: string;
+  };
+  agentSelector?: {
+    enabled?: boolean;
+    label?: string;
+    hideIfSingle?: boolean;
   };
   labels?: {
     newThread?: string;
@@ -62,6 +70,10 @@ export interface ChatHeaderProps {
   onClearAll?: () => void;
   showCustomComponentButton?: boolean;
   isMobile?: boolean;
+  showAgentSelector?: boolean;
+  agentOptions?: AgentOption[];
+  selectedAgentId?: string | null;
+  onSelectAgent?: (agentId: string) => void;
   className?: string;
 }
 
@@ -76,6 +88,10 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   onClearAll,
   showCustomComponentButton,
   isMobile,
+  showAgentSelector = false,
+  agentOptions = [],
+  selectedAgentId = null,
+  onSelectAgent,
   className = '',
 }) => {
   const [isDarkMode, setIsDarkMode] = React.useState(() => {
@@ -137,6 +153,9 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
     input.click();
   };
 
+  const selectedAgent = agentOptions.find((agent) => agent.id === selectedAgentId) || null;
+  const agentPlaceholder = config.agentSelector?.label || 'Select agent';
+
   return (
     <Card
       data-chat-header
@@ -144,9 +163,9 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
       style={isMobile ? { paddingTop: 'env(safe-area-inset-top)' } : undefined}
     >
       <CardHeader className="p-2">
-        <div className="flex items-center justify-between">
-          {/* Left side - Sidebar toggle */}
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between gap-2">
+          {/* Left side - Sidebar toggle + Agent Selector */}
+          <div className="flex items-center gap-1">
             <Tooltip>
               <TooltipTrigger asChild>
                 <SidebarTrigger className="-ml-1" />
@@ -155,27 +174,80 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                 {config.labels?.sidebarToggle || 'Toggle Sidebar'}
               </TooltipContent>
             </Tooltip>
+
+            {/* Agent Selector - ChatGPT style */}
+            {showAgentSelector && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    className="h-9 px-3 gap-1.5 font-medium text-base hover:bg-accent/50"
+                  >
+                    {selectedAgent?.avatarUrl ? (
+                      <Avatar className="h-5 w-5">
+                        <AvatarImage src={selectedAgent.avatarUrl} alt={selectedAgent.name} />
+                        <AvatarFallback className="text-[10px]">
+                          {selectedAgent.name.charAt(0).toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                    ) : null}
+                    <span className="max-w-[200px] truncate">
+                      {selectedAgent?.name || agentPlaceholder}
+                    </span>
+                    <ChevronDown className="h-4 w-4 opacity-50" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-[280px]">
+                  {agentOptions.map((agent) => {
+                    const isSelected = agent.id === selectedAgentId;
+                    return (
+                      <DropdownMenuItem
+                        key={agent.id}
+                        onClick={() => onSelectAgent?.(agent.id)}
+                        className="flex items-start gap-3 p-3 cursor-pointer"
+                      >
+                        {agent.avatarUrl ? (
+                          <Avatar className="h-6 w-6 mt-0.5 shrink-0">
+                            <AvatarImage src={agent.avatarUrl} alt={agent.name} />
+                            <AvatarFallback className="text-[10px]">
+                              {agent.name.charAt(0).toUpperCase()}
+                            </AvatarFallback>
+                          </Avatar>
+                        ) : (
+                          <div className="h-6 w-6 mt-0.5 shrink-0 flex items-center justify-center rounded-full bg-primary/10">
+                            <Bot className="h-3.5 w-3.5 text-primary" />
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium text-sm">{agent.name}</span>
+                            {isSelected && (
+                              <Check className="h-4 w-4 text-primary shrink-0" />
+                            )}
+                          </div>
+                          {agent.description && (
+                            <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                              {agent.description}
+                            </p>
+                          )}
+                        </div>
+                      </DropdownMenuItem>
+                    );
+                  })}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+
+            {/* Mobile title when no agent selector */}
+            {!showAgentSelector && isMobile && (
+              <span className="text-sm font-medium truncate max-w-[150px] ml-2">
+                {currentThreadTitle || config.branding?.title || 'Chat'}
+              </span>
+            )}
           </div>
 
-          {/* Center - Logo and Title */}
-          <div className="flex items-center gap-3 flex-1 justify-center">
-            {config.branding?.logo || (
-              <Avatar className="h-8 w-8">
-                <AvatarFallback>
-                  <Bot className="h-4 w-4" />
-                </AvatarFallback>
-              </Avatar>
-            )}
-            <div className="text-center hidden md:block">
-              <CardTitle className="text-sm font-medium">
-                {config.branding?.title || 'Chat Assistant'}
-              </CardTitle>
-            </div>
-            {/* Mobile only title if needed, or keep it simple */}
-            <div className="md:hidden text-sm font-medium truncate max-w-[150px]">
-                {currentThreadTitle || config.branding?.title || 'Chat'}
-            </div>
-          </div>
+          {/* Spacer */}
+          <div className="flex-1" />
 
           {/* Right side - Custom component button + Settings menu */}
           <div className="flex items-center gap-1">

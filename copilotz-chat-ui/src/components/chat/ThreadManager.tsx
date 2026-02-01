@@ -393,26 +393,28 @@ export const ThreadManager: React.FC<ThreadManagerProps> = ({
           </Card>
         </div>
 
-        {/* Delete confirmation dialog */}
-        <AlertDialog open={!!deleteThreadId} onOpenChange={() => setDeleteThreadId(null)}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>{config?.labels?.deleteConfirmTitle || 'Delete Conversation'}</AlertDialogTitle>
-              <AlertDialogDescription>
-                {config?.labels?.deleteConfirmDescription || 'Are you sure you want to delete this conversation? This action cannot be undone.'}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>{config?.labels?.cancel || 'Cancel'}</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={() => deleteThreadId && handleDeleteThread(deleteThreadId)}
-                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              >
-                {config?.labels?.deleteThread || 'Delete'}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        {/* Delete confirmation dialog - only render when needed to avoid Radix focus conflicts */}
+        {deleteThreadId && (
+          <AlertDialog open={!!deleteThreadId} onOpenChange={() => setDeleteThreadId(null)}>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{config?.labels?.deleteConfirmTitle || 'Delete Conversation'}</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {config?.labels?.deleteConfirmDescription || 'Are you sure you want to delete this conversation? This action cannot be undone.'}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>{config?.labels?.cancel || 'Cancel'}</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={() => deleteThreadId && handleDeleteThread(deleteThreadId)}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  {config?.labels?.deleteThread || 'Delete'}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        )}
       </div>
     </TooltipProvider>
   );
