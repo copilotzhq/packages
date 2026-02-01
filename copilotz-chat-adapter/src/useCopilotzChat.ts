@@ -3,6 +3,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { runCopilotzStream, fetchThreads, fetchThreadMessages, updateThread as updateThreadApi, deleteThread as deleteThreadApi } from './copilotzService';
 import { resolveAssetsInMessages } from './assetsService';
 import type { ChatMessage as ChatViewMessage, ChatThread, MediaAttachment, ChatUserContext } from '@copilotz/chat-ui';
+import { useUrlState, type UrlSyncConfig } from './useUrlState';
 
 const nowTs = () => Date.now();
 const generateId = () =>
@@ -94,9 +95,36 @@ export interface UseCopilotzOptions {
   };
   defaultThreadName?: string;
   onToolOutput?: (output: Record<string, unknown>) => void;
+  preferredAgentName?: string | null;
+  /**
+   * URL state synchronization configuration.
+   * When enabled, thread ID and agent are synced to/from URL parameters.
+   * 
+   * @example
+   * ```tsx
+   * const chat = useCopilotz({
+   *   userId: 'user123',
+   *   urlSync: {
+   *     enabled: true,
+   *     mode: 'replace',
+   *     params: { thread: 't', agent: 'a', prompt: 'q' }
+   *   }
+   * });
+   * ```
+   */
+  urlSync?: UrlSyncConfig;
 }
 
-export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadName, onToolOutput }: UseCopilotzOptions) {
+export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadName, onToolOutput, preferredAgentName, urlSync }: UseCopilotzOptions) {
+  // URL state management
+  const {
+    state: urlState,
+    setThreadId: setUrlThreadId,
+    setAgentId: setUrlAgentId,
+    clearPrompt: clearUrlPrompt,
+    isEnabled: isUrlSyncEnabled,
+  } = useUrlState(urlSync);
+
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [threadMetadataMap, setThreadMetadataMap] = useState<Record<string, Record<string, unknown> | undefined>>({});
   const [threadExternalIdMap, setThreadExternalIdMap] = useState<Record<string, string | null>>({});
@@ -108,8 +136,10 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
   const [isStreaming, setIsStreaming] = useState(false);
 
   const [userContextSeed, setUserContextSeed] = useState<Partial<ChatUserContext>>(initialContext || {});
+  const preferredAgentRef = useRef<string | null>(preferredAgentName ?? null);
 
   // Refs to hold latest state for callbacks to avoid dependency cycles
+  // Using direct assignment pattern instead of useEffect for better performance
   const threadsRef = useRef(threads);
   const threadMetadataMapRef = useRef(threadMetadataMap);
   const threadExternalIdMapRef = useRef(threadExternalIdMap);
@@ -117,13 +147,14 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
   const currentThreadExternalIdRef = useRef(currentThreadExternalId);
   const userContextSeedRef = useRef(userContextSeed);
 
-  // Update refs when state changes
-  useEffect(() => { threadsRef.current = threads; }, [threads]);
-  useEffect(() => { threadMetadataMapRef.current = threadMetadataMap; }, [threadMetadataMap]);
-  useEffect(() => { threadExternalIdMapRef.current = threadExternalIdMap; }, [threadExternalIdMap]);
-  useEffect(() => { currentThreadIdRef.current = currentThreadId; }, [currentThreadId]);
-  useEffect(() => { currentThreadExternalIdRef.current = currentThreadExternalId; }, [currentThreadExternalId]);
-  useEffect(() => { userContextSeedRef.current = userContextSeed; }, [userContextSeed]);
+  // Sync refs on every render (more efficient than multiple useEffects)
+  threadsRef.current = threads;
+  threadMetadataMapRef.current = threadMetadataMap;
+  threadExternalIdMapRef.current = threadExternalIdMap;
+  currentThreadIdRef.current = currentThreadId;
+  currentThreadExternalIdRef.current = currentThreadExternalId;
+  userContextSeedRef.current = userContextSeed;
+  preferredAgentRef.current = preferredAgentName ?? null;
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesRequestRef = useRef<number>(0);
@@ -461,7 +492,12 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     setIsStreaming(false);
-    setMessages((prev) => prev.map((msg) => (msg.isStreaming ? { ...msg, isStreaming: false, isComplete: true } : msg)));
+    setMessages((prev) => {
+      // Check if any message needs updating before creating new array
+      const hasStreaming = prev.some((msg) => msg.isStreaming);
+      if (!hasStreaming) return prev;
+      return prev.map((msg) => (msg.isStreaming ? { ...msg, isStreaming: false, isComplete: true } : msg));
+    });
   }, []);
 
   const handleStreamAssetEvent = useCallback((payload: any, assistantMessageId: string) => {
@@ -507,6 +543,7 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
       userId: string;
       userName?: string;
       userMetadata?: Record<string, unknown>;
+      agentName?: string | null;
       onBeforeStart?: (assistantMessageId: string) => void;
     },
   ) => {
@@ -517,18 +554,40 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
     let hasStreamProgress = false;
     let pendingStartNewAssistantBubble = false;
 
-    const ensureStreamingBubble = () => {
+    // Combined function to ensure bubble exists AND update content in a single setMessages call
+    const updateStreamingMessage = (partial: string, isComplete: boolean) => {
+      if (partial && partial.length > 0) {
+        hasStreamProgress = true;
+      }
+      
       setMessages((prev) => {
+        // First, check if we need to create a new streaming bubble
         const idx = prev.findIndex((m) => m.id === currentAssistantId);
-        if (idx >= 0 && prev[idx].role === 'assistant' && prev[idx].isStreaming) {
-          return prev;
+        if (idx >= 0 && prev[idx].role === 'assistant') {
+          // Found our current bubble - just update it
+          const msg = prev[idx];
+          if (msg.content === partial && msg.isStreaming === !isComplete && msg.isComplete === isComplete) {
+            return prev; // No change needed
+          }
+          const updated = [...prev];
+          updated[idx] = { ...msg, content: partial, isStreaming: !isComplete, isComplete };
+          return updated;
         }
+        
+        // Check if last message is a streaming assistant we can reuse
         const last = prev[prev.length - 1];
         if (last && last.role === 'assistant' && last.isStreaming) {
           currentAssistantId = last.id;
           pendingStartNewAssistantBubble = false;
-          return prev;
+          if (last.content === partial && last.isStreaming === !isComplete && last.isComplete === isComplete) {
+            return prev; // No change needed
+          }
+          const updated = [...prev];
+          updated[prev.length - 1] = { ...last, content: partial, isStreaming: !isComplete, isComplete };
+          return updated;
         }
+        
+        // Need to create a new bubble
         if (pendingStartNewAssistantBubble || !prev.length || (prev[prev.length - 1].role !== 'assistant' || !prev[prev.length - 1].isStreaming)) {
           const newId = generateId();
           currentAssistantId = newId;
@@ -537,32 +596,30 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
             ...prev,
             {
               id: newId,
-              role: 'assistant',
-              content: '',
+              role: 'assistant' as const,
+              content: partial,
               timestamp: nowTs(),
-              isStreaming: true,
-              isComplete: false,
+              isStreaming: !isComplete,
+              isComplete,
             },
           ];
         }
+        
         return prev;
       });
     };
 
-    const updateStreamingMessage = (partial: string, isComplete: boolean) => {
-      if (partial && partial.length > 0) {
-        hasStreamProgress = true;
-      }
-      ensureStreamingBubble();
-      setMessages((prev) => prev.map((msg) => (msg.id === currentAssistantId
-        ? { ...msg, content: partial, isStreaming: !isComplete, isComplete }
-        : msg)));
-    };
-
     const finalizeCurrentAssistantBubble = () => {
-      setMessages((prev) => prev.map((msg) => (msg.id === currentAssistantId
-        ? { ...msg, isStreaming: false, isComplete: true }
-        : msg)));
+      setMessages((prev) => {
+        const idx = prev.findIndex((m) => m.id === currentAssistantId);
+        if (idx < 0) return prev;
+        const msg = prev[idx];
+        // Skip update if already finalized
+        if (!msg.isStreaming && msg.isComplete) return prev;
+        const updated = [...prev];
+        updated[idx] = { ...msg, isStreaming: false, isComplete: true };
+        return updated;
+      });
     };
 
     // Using Refs for accessing current state inside callback
@@ -714,6 +771,13 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
       const messageMetadata = metadataKey ? currentThreadMetadataMap[metadataKey]?.userContext as Record<string, unknown> | undefined : undefined;
       const threadMetadata = metadataKey ? currentThreadMetadataMap[metadataKey] : undefined;
 
+      const mergedMetadata = {
+        ...(messageMetadata ?? {}),
+        ...(params.metadata ?? {}),
+      } as Record<string, unknown>;
+
+      const finalMetadata = Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined;
+
       await runCopilotzStream({
         threadId: params.threadId ?? undefined,
         threadExternalId: params.threadExternalId ?? undefined,
@@ -727,9 +791,10 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
           },
         },
         attachments: params.attachments,
-        metadata: params.metadata ?? messageMetadata,
+        metadata: finalMetadata,
         threadMetadata: params.threadMetadata ?? threadMetadata,
         toolCalls: params.toolCalls,
+        selectedAgent: params.agentName ?? preferredAgentRef.current ?? null,
         onToken: (token, isComplete) => updateStreamingMessage(token, isComplete),
         onMessageEvent: async (event: any) => {
           const type = (event?.type as string) || '';
@@ -991,6 +1056,7 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
         userId,
         // userName can be anything, but let's try to find it in context or just fallback
         userName: (userContextSeedRef.current?.profile as any)?.full_name ?? userId,
+        agentName: preferredAgentRef.current,
         // Include pending title for new threads
         threadMetadata: pendingTitle ? { name: pendingTitle } : undefined,
       });
@@ -1031,6 +1097,7 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
         content: bootstrap.initialMessage || '',
         toolCalls: bootstrap.initialToolCalls,
         userId: uid,
+        agentName: preferredAgentRef.current,
         threadMetadata: {
           name: defaultThreadName || 'Main Thread',
         },
@@ -1080,7 +1147,9 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
       initializationRef.current = { userId, started: true };
 
       const init = async () => {
-        const preferredThreadId = await fetchAndSetThreadsState(userId, undefined);
+        // Use URL thread ID as preferred if available
+        const urlPreferredThread = isUrlSyncEnabled ? urlState.threadId : undefined;
+        const preferredThreadId = await fetchAndSetThreadsState(userId, urlPreferredThread);
         if (preferredThreadId) {
           await loadThreadMessages(preferredThreadId);
         } else if (bootstrap) {
@@ -1092,7 +1161,16 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
       initializationRef.current = { userId: null, started: false };
       reset();
     }
-  }, [userId, fetchAndSetThreadsState, loadThreadMessages, bootstrapConversation, reset, bootstrap]);
+  }, [userId, fetchAndSetThreadsState, loadThreadMessages, bootstrapConversation, reset, bootstrap, isUrlSyncEnabled, urlState.threadId]);
+
+  // Sync currentThreadExternalId to URL when it changes
+  useEffect(() => {
+    if (!isUrlSyncEnabled) return;
+    // Only sync after initial load is complete
+    if (!initializationRef.current.started) return;
+    
+    setUrlThreadId(currentThreadExternalId);
+  }, [currentThreadExternalId, isUrlSyncEnabled, setUrlThreadId]);
 
   // Sync metadata map effects
   useEffect(() => {
@@ -1121,5 +1199,14 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
     fetchAndSetThreadsState,
     loadThreadMessages,
     reset,
+    // URL state
+    /** Initial prompt from URL (if urlSync enabled) - use for pre-filling input */
+    initialPrompt: isUrlSyncEnabled ? urlState.prompt : null,
+    /** Clear the initial prompt from URL (call after consuming it) */
+    clearInitialPrompt: clearUrlPrompt,
+    /** URL agent ID (if urlSync enabled) - use for agent pre-selection */
+    urlAgentId: isUrlSyncEnabled ? urlState.agentId : null,
+    /** Update agent ID in URL */
+    setUrlAgentId,
   };
 }

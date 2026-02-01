@@ -73,6 +73,11 @@ export interface ChatConfig {
     subtitle?: string;
     avatar?: ReactNode;
   };
+  agentSelector?: {
+    enabled?: boolean;
+    label?: string;
+    hideIfSingle?: boolean;
+  };
   labels?: {
     inputPlaceholder?: string;
     sendButton?: string;
@@ -209,9 +214,15 @@ export interface ChatV2Props {
     avatar?: ReactNode;
     description?: string;
   };
+
+  // Agent selector (built-in)
+  agentOptions?: AgentOption[];
+  selectedAgentId?: string | null;
+  onSelectAgent?: (agentId: string) => void;
   
   // Advanced Features
   suggestions?: string[];
+  messageSuggestions?: Record<string, string[]>;
   enabledFeatures?: string[];
   className?: string;
   
@@ -219,6 +230,19 @@ export interface ChatV2Props {
   onAddMemory?: (content: string, category?: MemoryItem['category']) => void;
   onUpdateMemory?: (memoryId: string, content: string) => void;
   onDeleteMemory?: (memoryId: string) => void;
+
+  /**
+   * Initial value for the input field.
+   * Useful for pre-filling the input from URL parameters or other sources.
+   * The value is only used once on mount or when it changes.
+   */
+  initialInput?: string;
+
+  /**
+   * Callback when the initial input has been consumed (user started typing or sent).
+   * Call this to clear the source (e.g., URL parameter) to prevent re-prefilling.
+   */
+  onInitialInputConsumed?: () => void;
 }
 
 // Component State Types
@@ -232,6 +256,13 @@ export interface ChatState {
   showThreads: boolean;
   editingMessageId: string | null;
   isSidebarCollapsed: boolean;
+}
+
+export interface AgentOption {
+  id: string;
+  name: string;
+  description?: string;
+  avatarUrl?: string;
 }
 
 // Message Actions

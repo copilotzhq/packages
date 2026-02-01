@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, memo } from 'react';
 import { useChatUserContext } from './UserContext';
 import { MediaAttachment, FileUploadProgress, ChatConfig } from '../../types/chatTypes';
 import { Button } from '../ui/button';
@@ -42,12 +42,12 @@ interface ChatInputProps {
   config?: ChatConfig;
 }
 
-// File upload progress component
+// File upload progress component - memoized
 const FileUploadItem: React.FC<{
   file: { name: string; type?: string; size?: number };
   progress: number;
   onCancel: () => void;
-}> = ({ file, progress, onCancel }) => {
+}> = memo(function FileUploadItem({ file, progress, onCancel }) {
   const guessTypeFromName = (name?: string): string => {
     const ext = (name || '').split('.').pop()?.toLowerCase();
     switch (ext) {
@@ -114,13 +114,13 @@ const FileUploadItem: React.FC<{
       </CardContent>
     </Card>
   );
-};
+});
 
-// Attachment preview component
+// Attachment preview component - memoized
 const AttachmentPreview: React.FC<{
   attachment: MediaAttachment;
   onRemove: () => void;
-}> = ({ attachment, onRemove }) => {
+}> = memo(function AttachmentPreview({ attachment, onRemove }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
@@ -233,9 +233,9 @@ const AttachmentPreview: React.FC<{
       </CardContent>
     </Card>
   );
-};
+});
 
-// Audio recording component
+// Audio recording component - memoized
 const AudioRecorder: React.FC<{
   isRecording: boolean;
   onStartRecording: () => void;
@@ -243,7 +243,7 @@ const AudioRecorder: React.FC<{
   onCancel: () => void;
   recordingDuration: number;
   config?: ChatConfig;
-}> = ({ isRecording, onStartRecording, onStopRecording, onCancel, recordingDuration, config }) => {
+}> = memo(function AudioRecorder({ isRecording, onStartRecording, onStopRecording, onCancel, recordingDuration, config }) {
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -303,9 +303,9 @@ const AudioRecorder: React.FC<{
       </CardContent>
     </Card>
   );
-};
+});
 
-export const ChatInput: React.FC<ChatInputProps> = ({
+export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   value,
   onChange,
   onSubmit,
@@ -322,7 +322,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   acceptedFileTypes = ['image/*', 'video/*', 'audio/*'],
   className = '',
   config,
-}) => {
+}: ChatInputProps) {
   const [isRecording, setIsRecording] = useState(false);
   const { setContext } = useChatUserContext();
   const [recordingDuration, setRecordingDuration] = useState(0);
@@ -741,4 +741,4 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       </Card> */}
     </TooltipProvider >
   );
-};
+});

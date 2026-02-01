@@ -6,7 +6,8 @@
     "copilotz-chat-adapter"
   ],
   "scripts": {
-    "build": "npm -w copilotz-chat-ui run build && npm -w copilotz-chat-adapter run build",
-    "build:css": "npm -w copilotz-chat-ui run build:css"
+    "build": "npm -w copilotz-chat-ui run build &&  npm -w copilotz-chat-adapter run build",
+    "build:css": "npm -w copilotz-chat-ui run build:css",
+    "dev": "npm -w copilotz-chat-ui run dev & npm -w copilotz-chat-adapter run dev"
   }
 }

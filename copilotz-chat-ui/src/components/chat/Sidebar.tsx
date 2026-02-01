@@ -51,8 +51,10 @@ import {
   Archive,
   Search,
   Filter,
+  Bot,
 } from 'lucide-react';
 import { UserMenu, UserMenuUser, UserMenuCallbacks, UserMenuConfig } from './UserMenu';
+import { Avatar, AvatarFallback } from '../ui/avatar';
 
 export interface SidebarConfig {
   labels?: {
@@ -262,6 +264,29 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <ShadcnSidebar collapsible="icon" {...props}>
       <SidebarHeader>
+        {/* Branding / Logo */}
+        <div className="flex items-center gap-3 px-2 py-3">
+          <div className="flex items-center justify-center shrink-0">
+            {config.branding?.logo || (
+              <Avatar className="h-8 w-8">
+                <AvatarFallback className="bg-primary text-primary-foreground">
+                  <Bot className="h-4 w-4" />
+                </AvatarFallback>
+              </Avatar>
+            )}
+          </div>
+          <div className="flex flex-col min-w-0 group-data-[collapsible=icon]:hidden">
+            <span className="text-sm font-semibold truncate">
+              {config.branding?.title || 'Chat'}
+            </span>
+            {config.branding?.subtitle && (
+              <span className="text-xs text-muted-foreground truncate">
+                {config.branding.subtitle}
+              </span>
+            )}
+          </div>
+        </div>
+
         {/* New Chat Button */}
         {onCreateThread && (
           <CreateThreadDialog 
@@ -285,7 +310,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
         
         {/* Search */}
-        <div className="px-2 py-1 mt-6">
+        <div className="px-2 py-1 mt-4">
           {/* Expanded View: Input */}
           <div className="relative group-data-[collapsible=icon]:hidden">
             <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 select-none opacity-50" />
@@ -434,28 +459,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
       
       <SidebarRail />
 
-      {/* Delete confirmation dialog */}
-      <AlertDialog open={!!deleteThreadId} onOpenChange={() => setDeleteThreadId(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{config.labels?.deleteConfirmTitle || 'Delete Conversation'}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {config.labels?.deleteConfirmDescription ||
-                'Are you sure you want to delete this conversation? This action cannot be undone.'
-              }
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{config.labels?.cancel || 'Cancel'}</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => deleteThreadId && handleDeleteThread(deleteThreadId)}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {config.labels?.deleteThread || 'Delete'}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* Delete confirmation dialog - only render when needed to avoid Radix focus conflicts */}
+      {deleteThreadId && (
+        <AlertDialog open={!!deleteThreadId} onOpenChange={() => setDeleteThreadId(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{config.labels?.deleteConfirmTitle || 'Delete Conversation'}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {config.labels?.deleteConfirmDescription ||
+                  'Are you sure you want to delete this conversation? This action cannot be undone.'
+                }
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{config.labels?.cancel || 'Cancel'}</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => deleteThreadId && handleDeleteThread(deleteThreadId)}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              >
+                {config.labels?.deleteThread || 'Delete'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      )}
     </ShadcnSidebar>
   );
 };

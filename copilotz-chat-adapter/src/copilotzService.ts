@@ -119,6 +119,7 @@ type RunOptions = {
   metadata?: Record<string, unknown>;
   threadMetadata?: Record<string, unknown>;
   toolCalls?: Array<{ name: string; args: Record<string, unknown>; id?: string }>;
+  selectedAgent?: string | null;
 } & StreamCallbacks;
 
 export type CopilotzStreamResult = {
@@ -273,6 +274,7 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
     metadata,
     threadMetadata,
     toolCalls,
+    selectedAgent,
     onToken,
     onMessageEvent,
     onAssetEvent,
@@ -338,7 +340,7 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
         id: threadId ?? null,
         externalId: threadExternalId ?? null,
         name: threadName,
-        participants: ['assistant'],
+        participants: [selectedAgent || 'assistant'],
         metadata: Object.keys(restThreadMetadata).length > 0 ? restThreadMetadata : null,
       }
     : undefined;
@@ -651,4 +653,3 @@ export const copilotzService = {
   updateThread,
   deleteThread,
 };
-
