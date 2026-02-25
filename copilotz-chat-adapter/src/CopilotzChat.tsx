@@ -104,6 +104,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
 
   const {
     messages,
+    isMessagesLoading,
     threads,
     currentThreadId,
     isStreaming,
@@ -234,6 +235,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     <ChatUserContextProvider initial={userContextSeed}>
       <ChatUI
         messages={messages}
+        isMessagesLoading={isMessagesLoading}
         threads={threads}
         currentThreadId={currentThreadId}
         config={mergedConfig}

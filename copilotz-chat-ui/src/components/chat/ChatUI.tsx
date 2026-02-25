@@ -15,6 +15,7 @@ import { ChatInput } from './ChatInput';
 import { UserProfile } from './UserProfile';
 import { useChatUserContext } from './UserContext';
 import { ScrollArea } from '../ui/scroll-area';
+import { Skeleton } from '../ui/skeleton';
 import { TooltipProvider } from '../ui/tooltip';
 import { SidebarProvider, SidebarInset } from '../ui/sidebar';
 import { Sparkles, ArrowRight, MessageSquare, Lightbulb, Zap, HelpCircle } from 'lucide-react';
@@ -27,6 +28,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   config: userConfig,
   sidebar: _sidebar,
   isGenerating = false,
+  isMessagesLoading = false,
   callbacks = {},
   user,
   assistant,
@@ -324,6 +326,28 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     );
   };
 
+  const renderMessageLoadingSkeleton = () => (
+    <div className="space-y-6 py-2">
+      {[0, 1, 2, 3].map((index) => {
+        const isUserRow = index % 2 === 1;
+        return (
+          <div
+            key={`message-skeleton-${index}`}
+            className={`flex gap-3 ${isUserRow ? 'justify-end' : 'justify-start'}`}
+          >
+            {!isUserRow && <Skeleton className="h-8 w-8 rounded-full shrink-0" />}
+            <div className={`space-y-2 ${isUserRow ? 'w-[70%]' : 'w-[75%]'}`}>
+              <Skeleton className="h-4 w-24" />
+              <Skeleton className="h-4 w-full" />
+              <Skeleton className="h-4 w-[85%]" />
+            </div>
+            {isUserRow && <Skeleton className="h-8 w-8 rounded-full shrink-0" />}
+          </div>
+        );
+      })}
+    </div>
+  );
+
   const shouldShowAgentSelector = Boolean(
     config.agentSelector?.enabled &&
     onSelectAgent &&
@@ -393,37 +417,43 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                     onScrollCapture={handleScroll}
                   >
                     <div className="max-w-4xl mx-auto space-y-4 pb-4">
-                      {renderSuggestions()}
+                      {isMessagesLoading ? (
+                        renderMessageLoadingSkeleton()
+                      ) : (
+                        <>
+                          {renderSuggestions()}
 
-                      {messages.map((message, index) => {
-                        // Check if this message is from the same sender as the previous one
-                        const prevMessage = index > 0 ? messages[index - 1] : null;
-                        const isGrouped = prevMessage !== null && prevMessage.role === message.role;
-                        
-                        return (
-                          <div key={message.id} className={isGrouped ? 'space-y-1 -mt-2' : 'space-y-2'}>
-                            <Message
-                              message={message}
-                              userAvatar={user?.avatar}
-                              userName={user?.name}
-                              assistantAvatar={assistant?.avatar}
-                              assistantName={assistant?.name}
-                              showTimestamp={config.ui.showTimestamps}
-                              showAvatar={config.ui.showAvatars}
-                              enableCopy={config.features.enableMessageCopy}
-                              enableEdit={config.features.enableMessageEditing}
-                              enableRegenerate={config.features.enableRegeneration}
-                              enableToolCallsDisplay={config.features.enableToolCallsDisplay}
-                              compactMode={config.ui.compactMode}
-                              onAction={handleMessageAction}
-                              toolUsedLabel={config.labels.toolUsed}
-                              thinkingLabel={config.labels.thinking}
-                              isGrouped={isGrouped}
-                            />
-                            {message.role === 'assistant' && renderInlineSuggestions(message.id)}
-                          </div>
-                        );
-                      })}
+                          {messages.map((message, index) => {
+                            // Check if this message is from the same sender as the previous one
+                            const prevMessage = index > 0 ? messages[index - 1] : null;
+                            const isGrouped = prevMessage !== null && prevMessage.role === message.role;
+                            
+                            return (
+                              <div key={message.id} className={isGrouped ? 'space-y-1 -mt-2' : 'space-y-2'}>
+                                <Message
+                                  message={message}
+                                  userAvatar={user?.avatar}
+                                  userName={user?.name}
+                                  assistantAvatar={assistant?.avatar}
+                                  assistantName={assistant?.name}
+                                  showTimestamp={config.ui.showTimestamps}
+                                  showAvatar={config.ui.showAvatars}
+                                  enableCopy={config.features.enableMessageCopy}
+                                  enableEdit={config.features.enableMessageEditing}
+                                  enableRegenerate={config.features.enableRegeneration}
+                                  enableToolCallsDisplay={config.features.enableToolCallsDisplay}
+                                  compactMode={config.ui.compactMode}
+                                  onAction={handleMessageAction}
+                                  toolUsedLabel={config.labels.toolUsed}
+                                  thinkingLabel={config.labels.thinking}
+                                  isGrouped={isGrouped}
+                                />
+                                {message.role === 'assistant' && renderInlineSuggestions(message.id)}
+                              </div>
+                            );
+                          })}
+                        </>
+                      )}
 
                       <div ref={messagesEndRef} />
                     </div>
