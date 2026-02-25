@@ -44,43 +44,46 @@ type WithMetadata = {
 };
 
 export async function resolveAssetsInMessages<T extends WithMetadata>(messages: T[]): Promise<T[]> {
-  const resolved: T[] = [];
-  for (const msg of messages) {
+  // Deduplicate in-flight fetches so the same assetRef is resolved only once.
+  const inFlightByRef = new Map<string, Promise<{ dataUrl: string; mime?: string; assetId: string }>>();
+
+  const resolveAssetRef = (assetRef: string) => {
+    if (!inFlightByRef.has(assetRef)) {
+      inFlightByRef.set(assetRef, getAssetDataUrl(assetRef));
+    }
+    return inFlightByRef.get(assetRef)!;
+  };
+
+  return Promise.all(messages.map(async (msg) => {
     const meta = (msg.metadata ?? undefined) as Record<string, unknown> | undefined;
     const attachments = Array.isArray(meta?.attachments)
       ? (meta!.attachments as Array<Record<string, unknown>>)
       : undefined;
 
     if (!attachments || attachments.length === 0) {
-      resolved.push(msg);
-      continue;
+      return msg;
     }
 
-    const newAttachments: Array<Record<string, unknown>> = [];
-    for (const att of attachments) {
+    const newAttachments = await Promise.all(attachments.map(async (att) => {
       const assetRef = typeof att?.assetRef === 'string' ? (att.assetRef as string) : undefined;
-      if (assetRef) {
-        try {
-          const { dataUrl, mime } = await getAssetDataUrl(assetRef);
-          const kind = typeof att.kind === 'string' ? (att.kind as string) : 'image';
-          newAttachments.push({
-            kind,
-            dataUrl,
-            mimeType: typeof att.mimeType === 'string' ? att.mimeType : (mime ?? undefined),
-          });
-        } catch {
-          // If fetching fails, keep original so UI can ignore gracefully
-          newAttachments.push(att);
-        }
-      } else {
-        newAttachments.push(att);
+      if (!assetRef) return att;
+
+      try {
+        const { dataUrl, mime } = await resolveAssetRef(assetRef);
+        const kind = typeof att.kind === 'string' ? (att.kind as string) : 'image';
+        return {
+          kind,
+          dataUrl,
+          mimeType: typeof att.mimeType === 'string' ? att.mimeType : (mime ?? undefined),
+        } as Record<string, unknown>;
+      } catch {
+        // If fetching fails, keep original so UI can ignore gracefully
+        return att;
       }
-    }
+    }));
 
     const newMeta = { ...(meta ?? {}), attachments: newAttachments } as Record<string, unknown>;
-    resolved.push({ ...msg, metadata: newMeta });
-  }
-  return resolved;
+    return { ...msg, metadata: newMeta };
+  }));
 }
-
 
