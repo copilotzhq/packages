@@ -196,6 +196,7 @@ export interface ChatV2Props {
   
   // State Management
   isGenerating?: boolean;
+  isMessagesLoading?: boolean;
   
   // Callbacks
   callbacks?: ChatCallbacks;
