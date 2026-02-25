@@ -133,6 +133,7 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
   const [currentThreadExternalId, setCurrentThreadExternalId] = useState<string | null>(null);
 
   const [messages, setMessages] = useState<ChatViewMessage[]>([]);
+  const [isMessagesLoading, setIsMessagesLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
 
   const [userContextSeed, setUserContextSeed] = useState<Partial<ChatUserContext>>(initialContext || {});
@@ -314,8 +315,9 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
   }, [updateThreadsState]);
 
   const loadThreadMessages = useCallback(async (threadId: string) => {
-    const requestId = Date.now();
+    const requestId = messagesRequestRef.current + 1;
     messagesRequestRef.current = requestId;
+    setIsMessagesLoading(true);
     try {
       const rawMessages = await fetchThreadMessages(threadId);
       const resolvedMessages = await resolveAssetsInMessages(rawMessages as unknown as any[]);
@@ -350,11 +352,16 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
     } catch (error) {
       if (isAbortError(error)) return;
       console.error(`Error loading messages for thread ${threadId}`, error);
+    } finally {
+      if (messagesRequestRef.current === requestId) {
+        setIsMessagesLoading(false);
+      }
     }
   }, [processToolOutput]);
 
   const handleSelectThread = useCallback(async (threadId: string) => {
     setCurrentThreadId(threadId);
+    setMessages([]);
     // Use ref for external map to avoid re-creation
     const extMap = threadExternalIdMapRef.current;
     setCurrentThreadExternalId(extMap[threadId] ?? null);
@@ -362,6 +369,8 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
   }, [loadThreadMessages]);
 
   const handleCreateThread = useCallback((title?: string) => {
+    messagesRequestRef.current += 1;
+    setIsMessagesLoading(false);
     const id = generateId();
     const now = nowTs();
     const newThread: ChatThread = {
@@ -1126,6 +1135,7 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
   }, [fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage, bootstrap, defaultThreadName]);
 
   const reset = useCallback(() => {
+    messagesRequestRef.current += 1;
     setThreads([]);
     setThreadMetadataMap({});
     setThreadExternalIdMap({});
@@ -1133,6 +1143,7 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
     setCurrentThreadExternalId(null);
     setMessages([]);
     setUserContextSeed({});
+    setIsMessagesLoading(false);
     setIsStreaming(false);
     abortControllerRef.current?.abort();
   }, []);
@@ -1185,6 +1196,7 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
 
   return {
     messages,
+    isMessagesLoading,
     threads,
     currentThreadId,
     isStreaming,
