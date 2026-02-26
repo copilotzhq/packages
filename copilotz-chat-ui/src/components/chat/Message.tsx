@@ -94,15 +94,16 @@ const rehypePluginsDefault = [rehypeHighlight];
 const rehypePluginsEmpty: never[] = [];
 
 // Streaming text component for real-time markdown rendering - memoized to prevent unnecessary re-renders
-const StreamingText: React.FC<{ content: string; isStreaming?: boolean; thinkingLabel?: string }> = memo(function StreamingText({
+const StreamingText: React.FC<{ content: string; isStreaming?: boolean; thinkingLabel?: string; className?: string }> = memo(function StreamingText({
   content,
   isStreaming = false,
-  thinkingLabel = 'Thinking...'
-}: { content: string; isStreaming?: boolean; thinkingLabel?: string }) {
+  thinkingLabel = 'Thinking...',
+  className = ''
+}: { content: string; isStreaming?: boolean; thinkingLabel?: string; className?: string }) {
   const hasContent = content.trim().length > 0;
 
   return (
-    <div className="prose prose-sm max-w-none dark:prose-invert">
+    <div className={`prose prose-sm max-w-none dark:prose-invert ${className}`}>
       {hasContent ? (
         <ReactMarkdown
           remarkPlugins={remarkPluginsDefault}
@@ -298,37 +299,10 @@ const ToolCallsDisplay: React.FC<{ toolCalls: ToolCall[]; label?: string }> = me
   );
 });
 
-// Custom comparison function for React.memo to avoid unnecessary re-renders
+// Keep memo comparison lightweight. Message objects are treated immutably by the
+// chat state, so reference equality is enough to detect actual message changes.
 const arePropsEqual = (prevProps: MessageProps, nextProps: MessageProps): boolean => {
-  // Compare message content and streaming state
-  if (prevProps.message.id !== nextProps.message.id) return false;
-  if (prevProps.message.content !== nextProps.message.content) return false;
-  if (prevProps.message.isStreaming !== nextProps.message.isStreaming) return false;
-  if (prevProps.message.isComplete !== nextProps.message.isComplete) return false;
-  if (prevProps.message.isEdited !== nextProps.message.isEdited) return false;
-  if (prevProps.message.timestamp !== nextProps.message.timestamp) return false;
-  
-  // Compare tool calls (by reference first, then by length for quick check)
-  if (prevProps.message.toolCalls !== nextProps.message.toolCalls) {
-    const prevCalls = prevProps.message.toolCalls;
-    const nextCalls = nextProps.message.toolCalls;
-    if (!prevCalls || !nextCalls || prevCalls.length !== nextCalls.length) return false;
-    // Deep check tool call status changes
-    for (let i = 0; i < prevCalls.length; i++) {
-      if (prevCalls[i].id !== nextCalls[i].id ||
-          prevCalls[i].status !== nextCalls[i].status ||
-          prevCalls[i].result !== nextCalls[i].result) {
-        return false;
-      }
-    }
-  }
-  
-  // Compare attachments by reference (usually stable)
-  if (prevProps.message.attachments !== nextProps.message.attachments) {
-    const prevAtt = prevProps.message.attachments;
-    const nextAtt = nextProps.message.attachments;
-    if (!prevAtt || !nextAtt || prevAtt.length !== nextAtt.length) return false;
-  }
+  if (prevProps.message !== nextProps.message) return false;
   
   // Compare other props
   if (prevProps.isUser !== nextProps.isUser) return false;
@@ -346,9 +320,6 @@ const arePropsEqual = (prevProps: MessageProps, nextProps: MessageProps): boolea
   if (prevProps.toolUsedLabel !== nextProps.toolUsedLabel) return false;
   if (prevProps.thinkingLabel !== nextProps.thinkingLabel) return false;
   if (prevProps.isGrouped !== nextProps.isGrouped) return false;
-  
-  // onAction callback - skip comparison since it should be stable with useCallback
-  // assistantAvatar is a ReactNode - compare by reference
   if (prevProps.assistantAvatar !== nextProps.assistantAvatar) return false;
   
   return true;
@@ -516,6 +487,7 @@ export const Message: React.FC<MessageProps> = memo(({
                   content={message.content}
                   isStreaming={message.isStreaming}
                   thinkingLabel={thinkingLabel}
+                  className={messageIsUser ? '[&_*]:text-right' : ''}
                 />
 
                 {/* Attachments */}

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   ChatV2Props,
   MediaAttachment,
@@ -45,7 +45,10 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   onInitialInputConsumed,
 }) => {
   // Merge configuration with defaults
-  const config = mergeConfig(defaultChatConfig, userConfig);
+  const config = useMemo(
+    () => mergeConfig(defaultChatConfig, userConfig),
+    [userConfig]
+  );
 
   // Mobile detection
   const [isMobile, setIsMobile] = useState(false);
@@ -348,6 +351,68 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     </div>
   );
 
+  const renderedMessageList = useMemo(() => {
+    if (isMessagesLoading) return renderMessageLoadingSkeleton();
+
+    return (
+      <>
+        {renderSuggestions()}
+
+        {messages.map((message, index) => {
+          // Check if this message is from the same sender as the previous one
+          const prevMessage = index > 0 ? messages[index - 1] : null;
+          const isGrouped = prevMessage !== null && prevMessage.role === message.role;
+
+          return (
+            <div key={message.id} className={isGrouped ? 'space-y-1 -mt-2' : 'space-y-2'}>
+              <Message
+                message={message}
+                userAvatar={user?.avatar}
+                userName={user?.name}
+                assistantAvatar={assistant?.avatar}
+                assistantName={assistant?.name}
+                showTimestamp={config.ui.showTimestamps}
+                showAvatar={config.ui.showAvatars}
+                enableCopy={config.features.enableMessageCopy}
+                enableEdit={config.features.enableMessageEditing}
+                enableRegenerate={config.features.enableRegeneration}
+                enableToolCallsDisplay={config.features.enableToolCallsDisplay}
+                compactMode={config.ui.compactMode}
+                onAction={handleMessageAction}
+                toolUsedLabel={config.labels.toolUsed}
+                thinkingLabel={config.labels.thinking}
+                isGrouped={isGrouped}
+              />
+              {message.role === 'assistant' && renderInlineSuggestions(message.id)}
+            </div>
+          );
+        })}
+      </>
+    );
+  }, [
+    isMessagesLoading,
+    messages,
+    handleSendMessage,
+    user?.avatar,
+    user?.name,
+    assistant?.avatar,
+    assistant?.name,
+    config.branding.title,
+    config.branding.subtitle,
+    config.ui.showTimestamps,
+    config.ui.showAvatars,
+    config.ui.compactMode,
+    config.features.enableMessageCopy,
+    config.features.enableMessageEditing,
+    config.features.enableRegeneration,
+    config.features.enableToolCallsDisplay,
+    config.labels.toolUsed,
+    config.labels.thinking,
+    handleMessageAction,
+    messageSuggestions,
+    suggestions,
+  ]);
+
   const shouldShowAgentSelector = Boolean(
     config.agentSelector?.enabled &&
     onSelectAgent &&
@@ -417,43 +482,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                     onScrollCapture={handleScroll}
                   >
                     <div className="max-w-4xl mx-auto space-y-4 pb-4">
-                      {isMessagesLoading ? (
-                        renderMessageLoadingSkeleton()
-                      ) : (
-                        <>
-                          {renderSuggestions()}
-
-                          {messages.map((message, index) => {
-                            // Check if this message is from the same sender as the previous one
-                            const prevMessage = index > 0 ? messages[index - 1] : null;
-                            const isGrouped = prevMessage !== null && prevMessage.role === message.role;
-                            
-                            return (
-                              <div key={message.id} className={isGrouped ? 'space-y-1 -mt-2' : 'space-y-2'}>
-                                <Message
-                                  message={message}
-                                  userAvatar={user?.avatar}
-                                  userName={user?.name}
-                                  assistantAvatar={assistant?.avatar}
-                                  assistantName={assistant?.name}
-                                  showTimestamp={config.ui.showTimestamps}
-                                  showAvatar={config.ui.showAvatars}
-                                  enableCopy={config.features.enableMessageCopy}
-                                  enableEdit={config.features.enableMessageEditing}
-                                  enableRegenerate={config.features.enableRegeneration}
-                                  enableToolCallsDisplay={config.features.enableToolCallsDisplay}
-                                  compactMode={config.ui.compactMode}
-                                  onAction={handleMessageAction}
-                                  toolUsedLabel={config.labels.toolUsed}
-                                  thinkingLabel={config.labels.thinking}
-                                  isGrouped={isGrouped}
-                                />
-                                {message.role === 'assistant' && renderInlineSuggestions(message.id)}
-                              </div>
-                            );
-                          })}
-                        </>
-                      )}
+                      {renderedMessageList}
 
                       <div ref={messagesEndRef} />
                     </div>
