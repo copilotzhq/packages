@@ -94,15 +94,16 @@ const rehypePluginsDefault = [rehypeHighlight];
 const rehypePluginsEmpty: never[] = [];
 
 // Streaming text component for real-time markdown rendering - memoized to prevent unnecessary re-renders
-const StreamingText: React.FC<{ content: string; isStreaming?: boolean; thinkingLabel?: string }> = memo(function StreamingText({
+const StreamingText: React.FC<{ content: string; isStreaming?: boolean; thinkingLabel?: string; className?: string }> = memo(function StreamingText({
   content,
   isStreaming = false,
-  thinkingLabel = 'Thinking...'
-}: { content: string; isStreaming?: boolean; thinkingLabel?: string }) {
+  thinkingLabel = 'Thinking...',
+  className = ''
+}: { content: string; isStreaming?: boolean; thinkingLabel?: string; className?: string }) {
   const hasContent = content.trim().length > 0;
 
   return (
-    <div className="prose prose-sm max-w-none dark:prose-invert">
+    <div className={`prose prose-sm max-w-none dark:prose-invert ${className}`}>
       {hasContent ? (
         <ReactMarkdown
           remarkPlugins={remarkPluginsDefault}
@@ -486,6 +487,7 @@ export const Message: React.FC<MessageProps> = memo(({
                   content={message.content}
                   isStreaming={message.isStreaming}
                   thinkingLabel={thinkingLabel}
+                  className={messageIsUser ? '[&_*]:text-right' : ''}
                 />
 
                 {/* Attachments */}

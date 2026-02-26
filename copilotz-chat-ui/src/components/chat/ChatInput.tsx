@@ -668,7 +668,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                   onChange={(e) => onChange(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder={placeholder}
-                  disabled={disabled || isGenerating}
+                  disabled={disabled}
                   className="max-h-[120px] resize-none border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
                   rows={1}
                 />
