@@ -323,13 +323,9 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
       const resolvedMessages = await resolveAssetsInMessages(rawMessages as unknown as any[]);
       if (messagesRequestRef.current !== requestId) return;
 
-      resolvedMessages.forEach((msg: any) => {
-        if (msg.senderType === 'tool') {
-          const metadata = msg.metadata as Record<string, unknown> | undefined;
-          const output = (metadata?.output ?? metadata) as Record<string, unknown> | undefined;
-          if (output) processToolOutput(output);
-        }
-      });
+      // Perf guard: avoid replaying historical tool outputs while loading a thread.
+      // Replaying can trigger expensive context/profile cascades for each old tool
+      // message and degrade typing performance on large chats.
 
       const viewMessages = resolvedMessages
         .filter((msg) => {
@@ -357,7 +353,7 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
         setIsMessagesLoading(false);
       }
     }
-  }, [processToolOutput]);
+  }, []);
 
   const handleSelectThread = useCallback(async (threadId: string) => {
     setCurrentThreadId(threadId);

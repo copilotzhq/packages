@@ -560,6 +560,7 @@ export async function fetchThreadMessages(threadId: string) {
   const params = new URLSearchParams();
   params.set('filters', JSON.stringify({ threadId }));
   params.set('sort', 'createdAt:asc');
+  params.set('limit', '200');
 
   const res = await fetch(apiUrl(`/v1/rest/messages?${params.toString()}`), {
     headers: withAuthHeaders({ Accept: 'application/json' }),
@@ -575,7 +576,7 @@ export async function fetchThreadMessages(threadId: string) {
     return [];
   }
 
-  return data as RestMessage[];
+  return (data.length > 200 ? data.slice(-200) : data) as RestMessage[];
 }
 
 export async function updateThread(threadId: string, updates: Partial<RestThread>) {
