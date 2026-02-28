@@ -450,7 +450,7 @@ export const Message: React.FC<MessageProps> = memo(({
         <div className={`flex-1 min-w-0 ${messageIsUser ? 'text-right' : 'text-left'} ${isGrouped && showAvatar && !messageIsUser ? (compactMode ? 'ml-9' : 'ml-11') : ''} ${isGrouped && showAvatar && messageIsUser ? (compactMode ? 'mr-9' : 'mr-11') : ''}`}>
 
           {/* Message Body */}
-          <div className={`relative inline-flex flex-col overflow-hidden ${messageIsUser
+          <div className={`relative inline-flex flex-col overflow-hidden text-left ${messageIsUser
             ? 'rounded-lg p-3 bg-primary text-primary-foreground ml-auto max-w-[85%]'
             : 'max-w-full'
             }`}>
@@ -486,7 +486,6 @@ export const Message: React.FC<MessageProps> = memo(({
                   content={message.content}
                   isStreaming={message.isStreaming}
                   thinkingLabel={thinkingLabel}
-                  className={messageIsUser ? '[&_*]:text-right' : ''}
                 />
 
                 {/* Attachments */}

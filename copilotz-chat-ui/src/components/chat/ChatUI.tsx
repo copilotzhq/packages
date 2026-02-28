@@ -171,9 +171,32 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     }
   }, [state.showSidebar, isMobile, config.customComponent]);
 
-  // Auto-scroll to bottom (works with both virtualized and non-virtualized content)
+  // Track previous message count to detect initial load vs incremental updates
+  const prevMessageCountRef = useRef(0);
+
+  // Auto-scroll to bottom on message changes
   useEffect(() => {
-    if (!state.isAtBottom || messages.length === 0) return;
+    if (messages.length === 0) {
+      prevMessageCountRef.current = 0;
+      return;
+    }
+
+    const wasEmpty = prevMessageCountRef.current === 0;
+    prevMessageCountRef.current = messages.length;
+
+    if (wasEmpty) {
+      // Initial load (thread switch) — jump instantly to the bottom
+      // Double RAF ensures the virtualizer has committed its layout
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          virtualizer.scrollToIndex(messages.length - 1, { align: 'end' });
+        });
+      });
+      return;
+    }
+
+    // Incremental update (new message, streaming) — smooth-scroll if at bottom
+    if (!state.isAtBottom) return;
     requestAnimationFrame(() => {
       const viewport = scrollAreaRef.current;
       if (!viewport) return;
@@ -183,7 +206,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
         viewport.scrollTop = viewport.scrollHeight;
       }
     });
-  }, [messages, state.isAtBottom]);
+  }, [messages, state.isAtBottom, virtualizer]);
 
   // Handle scroll position — only update state when the value actually changes
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
