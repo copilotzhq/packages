@@ -1,0 +1,23 @@
+0 verbose cli /Users/vfssantos/.nvm/versions/node/v22.17.0/bin/node /Users/vfssantos/.nvm/versions/node/v22.17.0/bin/npm
+1 info using npm@10.9.2
+2 info using node@v22.17.0
+3 silly config load:file:/Users/vfssantos/.nvm/versions/node/v22.17.0/lib/node_modules/npm/npmrc
+4 info config found workspace root at /Users/vfssantos/Documents/Projetos/COPILOTZ_LLC/copilotz/clients/packages
+5 silly config load:file:/Users/vfssantos/Documents/Projetos/COPILOTZ_LLC/copilotz/clients/packages/.npmrc
+6 silly config load:file:/Users/vfssantos/.npmrc
+7 silly config load:file:/Users/vfssantos/Documents/Projetos/COPILOTZ_LLC/copilotz/clients/packages/.npm-global/etc/npmrc
+8 verbose title npm link
+9 verbose argv "--no-audit" "--no-fund" "--loglevel" "verbose" "link"
+10 verbose logfile logs-max:10 dir:/Users/vfssantos/Documents/Projetos/COPILOTZ_LLC/copilotz/clients/packages/.npm-cache/_logs/2026-02-06T01_26_32_919Z-
+11 verbose logfile /Users/vfssantos/Documents/Projetos/COPILOTZ_LLC/copilotz/clients/packages/.npm-cache/_logs/2026-02-06T01_26_32_919Z-debug-0.log
+12 silly logfile done cleaning log files
+13 silly packumentCache heap:4345298944 maxSize:1086324736 maxEntrySize:543162368
+14 silly idealTree buildDeps
+15 silly placeDep ROOT @copilotz/chat-adapter@0.1.4 OK for:  want: file:../../copilotz-chat-adapter
+16 silly reify moves {}
+17 verbose cwd /Users/vfssantos/Documents/Projetos/COPILOTZ_LLC/copilotz/clients/packages/copilotz-chat-adapter
+18 verbose os Darwin 21.4.0
+19 verbose node v22.17.0
+20 verbose npm  v10.9.2
+21 verbose exit 0
+22 info ok

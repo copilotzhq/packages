@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   ChatV2Props,
   MediaAttachment,
@@ -109,7 +110,6 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   }, [initialInput]);
 
   // Refs
-  const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
   // Refs for state to avoid recreating callbacks on every state change
@@ -125,6 +125,14 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   // Mobile custom overlay mount/unmount for smooth transitions
   const [isCustomMounted, setIsCustomMounted] = useState(false);
   const [isCustomVisible, setIsCustomVisible] = useState(false);
+
+  // Virtualizer — only renders messages visible in the viewport + overscan buffer
+  const virtualizer = useVirtualizer({
+    count: messages.length,
+    getScrollElement: () => scrollAreaRef.current,
+    estimateSize: () => 100,
+    overscan: 5,
+  });
 
   // Create state callback helpers - uses refs to avoid recreating on every state change
   const createStateCallback = useCallback(
@@ -163,24 +171,28 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     }
   }, [state.showSidebar, isMobile, config.customComponent]);
 
-  // Auto-scroll to bottom
+  // Auto-scroll to bottom (works with both virtualized and non-virtualized content)
   useEffect(() => {
-    if (!state.isAtBottom) return;
-    const viewport = scrollAreaRef.current;
-    if (!viewport) return;
-    const target = viewport.scrollHeight;
-    try {
-      viewport.scrollTo({ top: target, behavior: 'smooth' });
-    } catch {
-      viewport.scrollTop = target;
-    }
+    if (!state.isAtBottom || messages.length === 0) return;
+    requestAnimationFrame(() => {
+      const viewport = scrollAreaRef.current;
+      if (!viewport) return;
+      try {
+        viewport.scrollTo({ top: viewport.scrollHeight, behavior: 'smooth' });
+      } catch {
+        viewport.scrollTop = viewport.scrollHeight;
+      }
+    });
   }, [messages, state.isAtBottom]);
 
-  // Handle scroll position
+  // Handle scroll position — only update state when the value actually changes
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
     const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
-    setState(prev => ({ ...prev, isAtBottom }));
+    setState(prev => {
+      if (prev.isAtBottom === isAtBottom) return prev;
+      return { ...prev, isAtBottom };
+    });
   }, []);
 
   // Message handling
@@ -351,54 +363,28 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     </div>
   );
 
-  const renderedMessageList = useMemo(() => {
-    if (isMessagesLoading) return renderMessageLoadingSkeleton();
-
-    return (
-      <>
-        {renderSuggestions()}
-
-        {messages.map((message, index) => {
-          // Check if this message is from the same sender as the previous one
-          const prevMessage = index > 0 ? messages[index - 1] : null;
-          const isGrouped = prevMessage !== null && prevMessage.role === message.role;
-
-          return (
-            <div key={message.id} className={isGrouped ? 'space-y-1 -mt-2' : 'space-y-2'}>
-              <Message
-                message={message}
-                userAvatar={user?.avatar}
-                userName={user?.name}
-                assistantAvatar={assistant?.avatar}
-                assistantName={assistant?.name}
-                showTimestamp={config.ui.showTimestamps}
-                showAvatar={config.ui.showAvatars}
-                enableCopy={config.features.enableMessageCopy}
-                enableEdit={config.features.enableMessageEditing}
-                enableRegenerate={config.features.enableRegeneration}
-                enableToolCallsDisplay={config.features.enableToolCallsDisplay}
-                compactMode={config.ui.compactMode}
-                onAction={handleMessageAction}
-                toolUsedLabel={config.labels.toolUsed}
-                thinkingLabel={config.labels.thinking}
-                isGrouped={isGrouped}
-              />
-              {message.role === 'assistant' && renderInlineSuggestions(message.id)}
-            </div>
-          );
-        })}
-      </>
-    );
-  }, [
-    isMessagesLoading,
-    messages,
-    handleSendMessage,
+  // Stable props object for Message components — prevents unnecessary re-renders
+  // when the virtualizer re-evaluates which items to show
+  const messageProps = useMemo(() => ({
+    userAvatar: user?.avatar,
+    userName: user?.name,
+    assistantAvatar: assistant?.avatar,
+    assistantName: assistant?.name,
+    showTimestamp: config.ui.showTimestamps,
+    showAvatar: config.ui.showAvatars,
+    enableCopy: config.features.enableMessageCopy,
+    enableEdit: config.features.enableMessageEditing,
+    enableRegenerate: config.features.enableRegeneration,
+    enableToolCallsDisplay: config.features.enableToolCallsDisplay,
+    compactMode: config.ui.compactMode,
+    onAction: handleMessageAction,
+    toolUsedLabel: config.labels.toolUsed,
+    thinkingLabel: config.labels.thinking,
+  }), [
     user?.avatar,
     user?.name,
     assistant?.avatar,
     assistant?.name,
-    config.branding.title,
-    config.branding.subtitle,
     config.ui.showTimestamps,
     config.ui.showAvatars,
     config.ui.compactMode,
@@ -409,8 +395,6 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     config.labels.toolUsed,
     config.labels.thinking,
     handleMessageAction,
-    messageSuggestions,
-    suggestions,
   ]);
 
   const shouldShowAgentSelector = Boolean(
@@ -474,17 +458,58 @@ export const ChatUI: React.FC<ChatV2Props> = ({
               <div className="flex flex-1 flex-row min-h-0 overflow-hidden">
                 {/* Main Chat Area */}
                 <div className="flex-1 flex flex-col min-h-0">
-                  {/* Messages */}
+                  {/* Messages — contain: strict prevents reflow from propagating to/from the input */}
                   <ScrollArea
                     ref={scrollAreaRef}
                     className="flex-1 min-h-0"
                     viewportClassName="p-4 overscroll-contain"
                     onScrollCapture={handleScroll}
+                    style={{ contain: 'strict' }}
                   >
-                    <div className="max-w-4xl mx-auto space-y-4 pb-4">
-                      {renderedMessageList}
+                    <div className="max-w-4xl mx-auto pb-4">
+                      {isMessagesLoading ? (
+                        renderMessageLoadingSkeleton()
+                      ) : messages.length === 0 ? (
+                        renderSuggestions()
+                      ) : (
+                        <div
+                          style={{
+                            height: `${virtualizer.getTotalSize()}px`,
+                            width: '100%',
+                            position: 'relative',
+                          }}
+                        >
+                          {virtualizer.getVirtualItems().map((virtualRow) => {
+                            const message = messages[virtualRow.index];
+                            const prevMessage = virtualRow.index > 0 ? messages[virtualRow.index - 1] : null;
+                            const isGrouped = prevMessage !== null && prevMessage.role === message.role;
 
-                      <div ref={messagesEndRef} />
+                            return (
+                              <div
+                                key={message.id}
+                                data-index={virtualRow.index}
+                                ref={virtualizer.measureElement}
+                                style={{
+                                  position: 'absolute',
+                                  top: 0,
+                                  left: 0,
+                                  width: '100%',
+                                  transform: `translateY(${virtualRow.start}px)`,
+                                }}
+                              >
+                                <div className={virtualRow.index === 0 ? '' : isGrouped ? 'pt-2' : 'pt-4'}>
+                                  <Message
+                                    message={message}
+                                    {...messageProps}
+                                    isGrouped={isGrouped}
+                                  />
+                                  {message.role === 'assistant' && renderInlineSuggestions(message.id)}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   </ScrollArea>
 

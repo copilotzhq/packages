@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, memo } from 'react';
+import React, { useState, useRef, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -8,7 +8,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import { Badge } from '../ui/badge';
 import { Card, CardContent } from '../ui/card';
 import { Textarea } from '../ui/textarea';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import {
   Copy,
   Edit,
@@ -103,7 +103,7 @@ const StreamingText: React.FC<{ content: string; isStreaming?: boolean; thinking
   const hasContent = content.trim().length > 0;
 
   return (
-    <div className={`prose prose-sm max-w-none dark:prose-invert ${className}`}>
+    <div className={`prose prose-sm max-w-none dark:prose-invert break-words ${className}`}>
       {hasContent ? (
         <ReactMarkdown
           remarkPlugins={remarkPluginsDefault}
@@ -394,7 +394,6 @@ export const Message: React.FC<MessageProps> = memo(({
   };
 
   return (
-    <TooltipProvider>
       <div
         className={`flex w-full flex-col ${className} max-w-[800px] mx-auto`}
         onMouseEnter={() => setShowActions(true)}
@@ -451,9 +450,9 @@ export const Message: React.FC<MessageProps> = memo(({
         <div className={`flex-1 min-w-0 ${messageIsUser ? 'text-right' : 'text-left'} ${isGrouped && showAvatar && !messageIsUser ? (compactMode ? 'ml-9' : 'ml-11') : ''} ${isGrouped && showAvatar && messageIsUser ? (compactMode ? 'mr-9' : 'mr-11') : ''}`}>
 
           {/* Message Body */}
-          <div className={`relative inline-flex flex-col ${messageIsUser
+          <div className={`relative inline-flex flex-col overflow-hidden ${messageIsUser
             ? 'rounded-lg p-3 bg-primary text-primary-foreground ml-auto max-w-[85%]'
-            : 'max-w-[85%]'
+            : 'max-w-full'
             }`}>
             {isEditing ? (
               <div className="space-y-2">
@@ -567,6 +566,5 @@ export const Message: React.FC<MessageProps> = memo(({
           </div>
         </div>
       </div>
-    </TooltipProvider>
   );
 }, arePropsEqual);
