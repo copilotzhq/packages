@@ -177,7 +177,7 @@ const base64FromUint8 = (bytes: Uint8Array): string => {
 };
 
 const parseDataUrl = (dataUrl: string): { mime: string; base64: string } | null => {
-  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  const match = dataUrl.match(/^data:(.+?);base64,(.+)$/s);
   if (!match) return null;
   return { mime: match[1], base64: match[2] };
 };
@@ -286,11 +286,10 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
     signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
   }
 
-  // Separate audio attachments from other attachments
+  // Audio attachments are sent as content parts and also mirrored in metadata
+  // so the persisted message can render the same media after reload.
   const audioAttachments = attachments?.filter(att => att.kind === 'audio') ?? [];
-  const nonAudioAttachments = attachments?.filter(att => att.kind !== 'audio') ?? [];
-  
-  const attachmentPayload = toAttachmentPayload(nonAudioAttachments);
+  const attachmentPayload = toAttachmentPayload(attachments);
 
   const normalizedToolCalls =
     toolCalls?.map<MessageToolCall>((call) => ({

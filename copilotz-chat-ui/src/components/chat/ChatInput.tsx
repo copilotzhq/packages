@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect, memo } from 'react';
 import { useChatUserContext } from './UserContext';
 import { MediaAttachment, FileUploadProgress, ChatConfig } from '../../types/chatTypes';
+import { createObjectUrlFromDataUrl } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { Textarea } from '../ui/textarea';
 import { Card, CardContent } from '../ui/card';
@@ -122,7 +123,27 @@ const AttachmentPreview: React.FC<{
   onRemove: () => void;
 }> = memo(function AttachmentPreview({ attachment, onRemove }) {
   const [isPlaying, setIsPlaying] = useState(false);
+  const [audioPlaybackSrc, setAudioPlaybackSrc] = useState(attachment.dataUrl);
   const audioRef = useRef<HTMLAudioElement>(null);
+
+  useEffect(() => {
+    if (attachment.kind !== 'audio' || !attachment.dataUrl.startsWith('data:')) {
+      setAudioPlaybackSrc(attachment.dataUrl);
+      return;
+    }
+
+    const objectUrl = createObjectUrlFromDataUrl(attachment.dataUrl);
+    if (!objectUrl) {
+      setAudioPlaybackSrc(attachment.dataUrl);
+      return;
+    }
+
+    setAudioPlaybackSrc(objectUrl);
+
+    return () => {
+      URL.revokeObjectURL(objectUrl);
+    };
+  }, [attachment.kind, attachment.dataUrl]);
 
   const handlePlayPause = () => {
     if (audioRef.current) {
@@ -209,11 +230,13 @@ const AttachmentPreview: React.FC<{
             </div>
             <audio
               ref={audioRef}
-              src={attachment.dataUrl}
               onPlay={() => setIsPlaying(true)}
               onPause={() => setIsPlaying(false)}
               onEnded={() => setIsPlaying(false)}
-            />
+              preload="metadata"
+            >
+              <source src={audioPlaybackSrc} type={attachment.mimeType} />
+            </audio>
             <Button
               variant="ghost"
               size="icon"

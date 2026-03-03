@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo, memo } from 'react';
+import React, { useState, useMemo, useEffect, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -9,14 +9,13 @@ import { Badge } from '../ui/badge';
 import { Card, CardContent } from '../ui/card';
 import { Textarea } from '../ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
+import { createObjectUrlFromDataUrl } from '../../lib/utils';
 import {
   Copy,
   Edit,
   RotateCcw,
   Check,
   X,
-  Play,
-  Pause,
   Wrench,
   Clock,
   ChevronRight,
@@ -245,27 +244,26 @@ const StreamingText: React.FC<{
 
 // Media attachment renderer - memoized to prevent unnecessary re-renders
 const MediaRenderer: React.FC<{ attachment: MediaAttachment }> = memo(function MediaRenderer({ attachment }) {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const [audioPlaybackSrc, setAudioPlaybackSrc] = useState(attachment.dataUrl);
 
-  const togglePlayback = () => {
-    if (attachment.kind === 'audio' && audioRef.current) {
-      if (isPlaying) {
-        audioRef.current.pause();
-      } else {
-        audioRef.current.play();
-      }
-      setIsPlaying(!isPlaying);
-    } else if (attachment.kind === 'video' && videoRef.current) {
-      if (isPlaying) {
-        videoRef.current.pause();
-      } else {
-        videoRef.current.play();
-      }
-      setIsPlaying(!isPlaying);
+  useEffect(() => {
+    if (attachment.kind !== 'audio' || !attachment.dataUrl.startsWith('data:')) {
+      setAudioPlaybackSrc(attachment.dataUrl);
+      return;
     }
-  };
+
+    const objectUrl = createObjectUrlFromDataUrl(attachment.dataUrl);
+    if (!objectUrl) {
+      setAudioPlaybackSrc(attachment.dataUrl);
+      return;
+    }
+
+    setAudioPlaybackSrc(objectUrl);
+
+    return () => {
+      URL.revokeObjectURL(objectUrl);
+    };
+  }, [attachment.kind, attachment.dataUrl]);
 
   const formatDuration = (ms?: number) => {
     if (!ms) return '';
@@ -296,14 +294,12 @@ const MediaRenderer: React.FC<{ attachment: MediaAttachment }> = memo(function M
       return (
             <div className="flex w-full max-w-md py-0 min-w-64 items-center gap-3">
                 <audio
-                  ref={audioRef}
-                  src={attachment.dataUrl}
-                  onPlay={() => setIsPlaying(true)}
-                  onPause={() => setIsPlaying(false)}
-                  onEnded={() => setIsPlaying(false)}
                   className="w-full mt-2"
+                  preload="metadata"
                   controls
-                />
+                >
+                  <source src={audioPlaybackSrc} type={attachment.mimeType} />
+                </audio>
             </div>
       );
 
@@ -311,14 +307,10 @@ const MediaRenderer: React.FC<{ attachment: MediaAttachment }> = memo(function M
       return (
         <div className="relative rounded-lg overflow-hidden border bg-muted/20 max-w-lg">
           <video
-            ref={videoRef}
             src={attachment.dataUrl}
             poster={attachment.poster}
             controls
             className="w-full h-auto"
-            onPlay={() => setIsPlaying(true)}
-            onPause={() => setIsPlaying(false)}
-            onEnded={() => setIsPlaying(false)}
           />
           {attachment.fileName && (
             <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-xs p-2">

@@ -25,3 +25,25 @@ export const formatDate = (timestamp: number, labels?: ChatConfig['labels']) => 
     });
   }
 };
+
+export const createObjectUrlFromDataUrl = (dataUrl: string): string | null => {
+  const match = dataUrl.match(/^data:(.+?);base64,(.+)$/s);
+  if (!match) {
+    return null;
+  }
+
+  try {
+    const [, mimeType, base64] = match;
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+
+    const blob = new Blob([bytes], { type: mimeType || 'application/octet-stream' });
+    return URL.createObjectURL(blob);
+  } catch {
+    return null;
+  }
+};
