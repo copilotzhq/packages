@@ -128,6 +128,8 @@ export interface ChatConfig {
     inputHelpText?: string;
     thinking?: string;
     defaultThreadName?: string;
+    showMoreMessage?: string;
+    showLessMessage?: string;
   };
   features?: {
     enableThreads?: boolean;
@@ -146,6 +148,11 @@ export interface ChatConfig {
     showAvatars?: boolean;
     compactMode?: boolean;
     showWordCount?: boolean;
+    collapseLongMessages?: boolean;
+    collapseLongMessagesForUserOnly?: boolean;
+    longMessagePreviewChars?: number;
+    longMessageChunkChars?: number;
+    renderUserMarkdown?: boolean;
   };
   customComponent?: {
     label?: string;

@@ -66,6 +66,8 @@ export const defaultChatConfig: Required<ChatConfig> = {
     inputHelpText: 'Press Enter to send, Shift+Enter to add a new line.',
     thinking: 'Thinking...',
     defaultThreadName: 'Main Thread',
+    showMoreMessage: 'Show more',
+    showLessMessage: 'Show less',
   },
   
   features: {
@@ -86,6 +88,11 @@ export const defaultChatConfig: Required<ChatConfig> = {
     showAvatars: true,
     compactMode: false,
     showWordCount: false,
+    collapseLongMessages: false,
+    collapseLongMessagesForUserOnly: false,
+    longMessagePreviewChars: 4000,
+    longMessageChunkChars: 12000,
+    renderUserMarkdown: true,
   },
   
   customComponent: {},

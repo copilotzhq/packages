@@ -78,6 +78,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   // Separate input state to avoid full re-renders on every keystroke
   const [inputValue, setInputValue] = useState('');
   const [attachments, setAttachments] = useState<MediaAttachment[]>([]);
+  const [expandedMessageIds, setExpandedMessageIds] = useState<Record<string, boolean>>({});
 
   // Internal state for UI only (excluding input to optimize re-renders)
   const [state, setState] = useState<Omit<ChatState, 'input' | 'attachments'>>({
@@ -208,6 +209,29 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     });
   }, [messages, state.isAtBottom, virtualizer]);
 
+  useEffect(() => {
+    virtualizer.measure();
+  }, [expandedMessageIds, virtualizer]);
+
+  useEffect(() => {
+    const validMessageIds = new Set(messages.map((message) => message.id));
+
+    setExpandedMessageIds((prev) => {
+      const activeIds = Object.keys(prev);
+      const staleIds = activeIds.filter((messageId) => !validMessageIds.has(messageId));
+
+      if (staleIds.length === 0) {
+        return prev;
+      }
+
+      const next = { ...prev };
+      staleIds.forEach((messageId) => {
+        delete next[messageId];
+      });
+      return next;
+    });
+  }, [messages]);
+
   // Handle scroll position — only update state when the value actually changes
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
@@ -260,6 +284,21 @@ export const ChatUI: React.FC<ChatV2Props> = ({
         break;
     }
   }, [callbacks, createStateCallback]);
+
+  const handleToggleMessageExpansion = useCallback((messageId: string) => {
+    setExpandedMessageIds((prev) => {
+      if (prev[messageId]) {
+        const next = { ...prev };
+        delete next[messageId];
+        return next;
+      }
+
+      return {
+        ...prev,
+        [messageId]: true,
+      };
+    });
+  }, []);
 
   // Thread management
   const handleCreateThread = useCallback((title?: string) => {
@@ -403,6 +442,14 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     onAction: handleMessageAction,
     toolUsedLabel: config.labels.toolUsed,
     thinkingLabel: config.labels.thinking,
+    showMoreLabel: config.labels.showMoreMessage,
+    showLessLabel: config.labels.showLessMessage,
+    collapseLongMessages: config.ui.collapseLongMessages,
+    collapseLongMessagesForUserOnly: config.ui.collapseLongMessagesForUserOnly,
+    longMessagePreviewChars: config.ui.longMessagePreviewChars,
+    longMessageChunkChars: config.ui.longMessageChunkChars,
+    renderUserMarkdown: config.ui.renderUserMarkdown,
+    onToggleExpanded: handleToggleMessageExpansion,
   }), [
     user?.avatar,
     user?.name,
@@ -417,7 +464,15 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     config.features.enableToolCallsDisplay,
     config.labels.toolUsed,
     config.labels.thinking,
+    config.labels.showMoreMessage,
+    config.labels.showLessMessage,
+    config.ui.collapseLongMessages,
+    config.ui.collapseLongMessagesForUserOnly,
+    config.ui.longMessagePreviewChars,
+    config.ui.longMessageChunkChars,
+    config.ui.renderUserMarkdown,
     handleMessageAction,
+    handleToggleMessageExpansion,
   ]);
 
   const shouldShowAgentSelector = Boolean(
@@ -525,6 +580,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                                     message={message}
                                     {...messageProps}
                                     isGrouped={isGrouped}
+                                    isExpanded={Boolean(expandedMessageIds[message.id])}
                                   />
                                   {message.role === 'assistant' && renderInlineSuggestions(message.id)}
                                 </div>

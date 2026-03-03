@@ -1,4 +1,4 @@
-import React, { useState, useRef, memo } from 'react';
+import React, { useState, useRef, useMemo, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -42,6 +42,15 @@ interface MessageProps {
   className?: string;
   toolUsedLabel?: string;
   thinkingLabel?: string;
+  showMoreLabel?: string;
+  showLessLabel?: string;
+  collapseLongMessages?: boolean;
+  collapseLongMessagesForUserOnly?: boolean;
+  longMessagePreviewChars?: number;
+  longMessageChunkChars?: number;
+  renderUserMarkdown?: boolean;
+  isExpanded?: boolean;
+  onToggleExpanded?: (messageId: string) => void;
   /** When true, hides the avatar and name (for grouped consecutive messages from same sender) */
   isGrouped?: boolean;
 }
@@ -93,25 +102,136 @@ const remarkPluginsDefault = [remarkGfm];
 const rehypePluginsDefault = [rehypeHighlight];
 const rehypePluginsEmpty: never[] = [];
 
+const getPlainTextChunks = (content: string, chunkSize: number): string[] => {
+  if (chunkSize <= 0 || content.length <= chunkSize) {
+    return [content];
+  }
+
+  const chunks: string[] = [];
+  let start = 0;
+
+  while (start < content.length) {
+    let end = Math.min(start + chunkSize, content.length);
+
+    if (end < content.length) {
+      const splitAt = content.lastIndexOf('\n', end);
+      if (splitAt > start + Math.floor(chunkSize / 2)) {
+        end = splitAt + 1;
+      }
+    }
+
+    chunks.push(content.slice(start, end));
+    start = end;
+  }
+
+  return chunks;
+};
+
+const hasCodeBlocks = (content: string): boolean => /(^|\n)(```|~~~)/.test(content);
+
+const getCollapsedPreview = (content: string, previewChars: number, previewOverride?: string): string => {
+  if (previewOverride && previewOverride.trim().length > 0) {
+    const normalizedPreview = previewOverride.trimEnd();
+    return normalizedPreview.endsWith('...') ? normalizedPreview : `${normalizedPreview}...`;
+  }
+
+  if (content.length <= previewChars) {
+    return content;
+  }
+
+  return `${content.slice(0, previewChars).trimEnd()}...`;
+};
+
+const LongContentShell: React.FC<{
+  children: React.ReactNode;
+  className: string;
+  style?: React.CSSProperties;
+}> = memo(function LongContentShell({ children, className, style }) {
+  return (
+    <div className={className} style={style}>
+      {children}
+    </div>
+  );
+});
+
+const PlainTextContent: React.FC<{
+  content: string;
+  className?: string;
+  chunkSize?: number;
+  style?: React.CSSProperties;
+}> = memo(function PlainTextContent({
+  content,
+  className = '',
+  chunkSize = 12000,
+  style,
+}) {
+  const chunks = useMemo(() => getPlainTextChunks(content, chunkSize), [content, chunkSize]);
+
+  return (
+    <LongContentShell
+      className={`text-sm leading-6 whitespace-pre-wrap break-words ${className}`.trim()}
+      style={style}
+    >
+      {chunks.map((chunk, index) => (
+        <React.Fragment key={index}>{chunk}</React.Fragment>
+      ))}
+    </LongContentShell>
+  );
+});
+
 // Streaming text component for real-time markdown rendering - memoized to prevent unnecessary re-renders
-const StreamingText: React.FC<{ content: string; isStreaming?: boolean; thinkingLabel?: string; className?: string }> = memo(function StreamingText({
+const StreamingText: React.FC<{
+  content: string;
+  isStreaming?: boolean;
+  thinkingLabel?: string;
+  className?: string;
+  renderMarkdown?: boolean;
+  plainTextChunkChars?: number;
+  contentStyle?: React.CSSProperties;
+}> = memo(function StreamingText({
   content,
   isStreaming = false,
   thinkingLabel = 'Thinking...',
-  className = ''
-}: { content: string; isStreaming?: boolean; thinkingLabel?: string; className?: string }) {
+  className = '',
+  renderMarkdown = true,
+  plainTextChunkChars = 12000,
+  contentStyle,
+}: {
+  content: string;
+  isStreaming?: boolean;
+  thinkingLabel?: string;
+  className?: string;
+  renderMarkdown?: boolean;
+  plainTextChunkChars?: number;
+  contentStyle?: React.CSSProperties;
+}) {
   const hasContent = content.trim().length > 0;
+  const enableSyntaxHighlight = renderMarkdown && !isStreaming && hasCodeBlocks(content);
 
   return (
-    <div className={`prose prose-sm max-w-none dark:prose-invert break-words ${className}`}>
+    <>
       {hasContent ? (
-        <ReactMarkdown
-          remarkPlugins={remarkPluginsDefault}
-          rehypePlugins={isStreaming ? rehypePluginsEmpty : rehypePluginsDefault}
-          components={markdownComponents}
-        >
-          {content}
-        </ReactMarkdown>
+        renderMarkdown ? (
+          <LongContentShell
+            className={`prose prose-sm max-w-none dark:prose-invert break-words ${className}`.trim()}
+            style={contentStyle}
+          >
+            <ReactMarkdown
+              remarkPlugins={remarkPluginsDefault}
+              rehypePlugins={enableSyntaxHighlight ? rehypePluginsDefault : rehypePluginsEmpty}
+              components={markdownComponents}
+            >
+              {content}
+            </ReactMarkdown>
+          </LongContentShell>
+        ) : (
+          <PlainTextContent
+            content={content}
+            className={className}
+            chunkSize={plainTextChunkChars}
+            style={contentStyle}
+          />
+        )
       ) : isStreaming ? (
         // Show thinking indicator while waiting for first token
         <ThinkingIndicator label={thinkingLabel} />
@@ -119,7 +239,7 @@ const StreamingText: React.FC<{ content: string; isStreaming?: boolean; thinking
       {isStreaming && hasContent && (
         <span className="inline-block w-2 h-4 bg-primary animate-pulse ml-1" />
       )}
-    </div>
+    </>
   );
 });
 
@@ -319,6 +439,15 @@ const arePropsEqual = (prevProps: MessageProps, nextProps: MessageProps): boolea
   if (prevProps.className !== nextProps.className) return false;
   if (prevProps.toolUsedLabel !== nextProps.toolUsedLabel) return false;
   if (prevProps.thinkingLabel !== nextProps.thinkingLabel) return false;
+  if (prevProps.showMoreLabel !== nextProps.showMoreLabel) return false;
+  if (prevProps.showLessLabel !== nextProps.showLessLabel) return false;
+  if (prevProps.collapseLongMessages !== nextProps.collapseLongMessages) return false;
+  if (prevProps.collapseLongMessagesForUserOnly !== nextProps.collapseLongMessagesForUserOnly) return false;
+  if (prevProps.longMessagePreviewChars !== nextProps.longMessagePreviewChars) return false;
+  if (prevProps.longMessageChunkChars !== nextProps.longMessageChunkChars) return false;
+  if (prevProps.renderUserMarkdown !== nextProps.renderUserMarkdown) return false;
+  if (prevProps.isExpanded !== nextProps.isExpanded) return false;
+  if (prevProps.onToggleExpanded !== nextProps.onToggleExpanded) return false;
   if (prevProps.isGrouped !== nextProps.isGrouped) return false;
   if (prevProps.assistantAvatar !== nextProps.assistantAvatar) return false;
   
@@ -343,6 +472,15 @@ export const Message: React.FC<MessageProps> = memo(({
   className = '',
   toolUsedLabel,
   thinkingLabel = 'Thinking...',
+  showMoreLabel = 'Show more',
+  showLessLabel = 'Show less',
+  collapseLongMessages = false,
+  collapseLongMessagesForUserOnly = false,
+  longMessagePreviewChars = 4000,
+  longMessageChunkChars = 12000,
+  renderUserMarkdown = true,
+  isExpanded = false,
+  onToggleExpanded,
   isGrouped = false,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
@@ -353,6 +491,27 @@ export const Message: React.FC<MessageProps> = memo(({
   const messageIsUser = isUser ?? message.role === 'user';
   const canEdit = enableEdit && messageIsUser;
   const canRegenerate = enableRegenerate && !messageIsUser;
+  const normalizedPreviewChars = Math.max(longMessagePreviewChars, 1);
+  const normalizedChunkChars = Math.max(longMessageChunkChars, 1);
+  const previewOverride = typeof message.metadata?.previewContent === 'string'
+    ? message.metadata.previewContent
+    : undefined;
+  const canCollapseMessage = collapseLongMessages
+    && !message.isStreaming
+    && message.content.length > normalizedPreviewChars
+    && (!collapseLongMessagesForUserOnly || messageIsUser);
+  const isCollapsed = canCollapseMessage && !isExpanded;
+  const contentToRender = isCollapsed
+    ? getCollapsedPreview(message.content, normalizedPreviewChars, previewOverride)
+    : message.content;
+  const shouldRenderMarkdown = !isCollapsed && (!messageIsUser || renderUserMarkdown);
+  const shouldApplyLargeContentContainment = !isCollapsed && message.content.length > normalizedChunkChars;
+  const contentStyle: React.CSSProperties | undefined = shouldApplyLargeContentContainment
+    ? {
+        contentVisibility: 'auto',
+        containIntrinsicSize: '1px 400px',
+      }
+    : undefined;
 
   const handleCopy = async () => {
     try {
@@ -384,6 +543,10 @@ export const Message: React.FC<MessageProps> = memo(({
 
   const handleRegenerate = () => {
     onAction?.({ action: 'regenerate', messageId: message.id });
+  };
+
+  const handleToggleExpanded = () => {
+    onToggleExpanded?.(message.id);
   };
 
   const formatTime = (timestamp: number) => {
@@ -483,10 +646,28 @@ export const Message: React.FC<MessageProps> = memo(({
                 )}
 
                 <StreamingText
-                  content={message.content}
+                  content={contentToRender}
                   isStreaming={message.isStreaming}
                   thinkingLabel={thinkingLabel}
+                  renderMarkdown={shouldRenderMarkdown}
+                  plainTextChunkChars={normalizedChunkChars}
+                  contentStyle={contentStyle}
                 />
+
+                {canCollapseMessage && (
+                  <div className="mt-3">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-auto px-0 text-xs font-medium text-current hover:bg-transparent hover:opacity-80"
+                      aria-expanded={!isCollapsed}
+                      onClick={handleToggleExpanded}
+                    >
+                      {isCollapsed ? showMoreLabel : showLessLabel}
+                    </Button>
+                  </div>
+                )}
 
                 {/* Attachments */}
                 {message.attachments && message.attachments.length > 0 && (
