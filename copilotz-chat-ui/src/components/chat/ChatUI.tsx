@@ -385,9 +385,12 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   const renderInlineSuggestions = (messageId: string) => {
     const items = messageSuggestions?.[messageId];
     if (!items || items.length === 0) return null;
+    const inlineSuggestionOffsetClass = config.ui.showAvatars
+      ? (config.ui.compactMode ? 'ml-9' : 'ml-11')
+      : '';
 
     return (
-      <div className="flex flex-wrap gap-2 mt-2 ml-11">
+      <div className={`flex flex-wrap gap-2 mt-2 ${inlineSuggestionOffsetClass}`}>
         {items.map((suggestion, index) => (
           <button
             key={`${messageId}-suggestion-${index}`}

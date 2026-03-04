@@ -4,6 +4,7 @@ import type { AgentOption, ChatConfig, ChatCallbacks, ChatUserContext, MemoryIte
 import { User } from 'lucide-react';
 import { useCopilotz } from './useCopilotzChat';
 import type { UrlSyncConfig } from './useUrlState';
+import type { EventInterceptor, RenderSpecialState, RunErrorInterceptor } from './specialState';
 
 export interface CopilotzChatProps {
   userId: string;
@@ -47,6 +48,9 @@ export interface CopilotzChatProps {
   selectedAgentId?: string | null;
   onSelectAgent?: (agentId: string) => void;
   className?: string;
+  eventInterceptor?: EventInterceptor;
+  runErrorInterceptor?: RunErrorInterceptor;
+  renderSpecialState?: RenderSpecialState;
   /**
    * URL state synchronization configuration.
    * When enabled, syncs thread ID, agent, and prompt to/from URL parameters.
@@ -98,6 +102,9 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
   selectedAgentId = null,
   onSelectAgent,
   className,
+  eventInterceptor,
+  runErrorInterceptor,
+  renderSpecialState,
   urlSync,
 }) => {
   const selectedAgent = agentOptions.find((agent) => agent.id === selectedAgentId) || null;
@@ -108,6 +115,8 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     threads,
     currentThreadId,
     isStreaming,
+    specialState,
+    clearSpecialState,
     userContextSeed,
     sendMessage,
     createThread,
@@ -127,6 +136,8 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     defaultThreadName: userConfig?.labels?.defaultThreadName,
     onToolOutput,
     preferredAgentName: selectedAgent?.name ?? null,
+    eventInterceptor,
+    runErrorInterceptor,
     urlSync,
   });
 
@@ -230,47 +241,50 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
   const effectiveUserName = userName || userId;
   // Don't try to extract avatar from profile automatically unless it's in context
   const effectiveUserAvatar = userAvatar;
+  const specialStateContent = specialState ? renderSpecialState?.(specialState, { clear: clearSpecialState }) : null;
 
   return (
     <ChatUserContextProvider initial={userContextSeed}>
-      <ChatUI
-        messages={messages}
-        isMessagesLoading={isMessagesLoading}
-        threads={threads}
-        currentThreadId={currentThreadId}
-        config={mergedConfig}
-        callbacks={chatCallbacks}
-        isGenerating={isStreaming}
-        suggestions={suggestions}
-        agentOptions={agentOptions}
-        selectedAgentId={selectedAgentId}
-        onSelectAgent={onSelectAgent}
-        user={{
-          id: userId,
-          name: effectiveUserName,
-          email: userEmail,
-          avatar: effectiveUserAvatar,
-        }}
-        assistant={{
-          name: userConfig?.branding?.title,
-          avatar: userConfig?.branding?.avatar,
-          description: userConfig?.branding?.subtitle,
-        }}
-        onAddMemory={onAddMemory}
-        onUpdateMemory={onUpdateMemory}
-        onDeleteMemory={onDeleteMemory}
-        className={className}
-        // Pass initial prompt for prefill behavior (not auto-send)
-        initialInput={
-          initialPrompt && !promptHandled && urlSync?.promptBehavior !== 'auto-send'
-            ? initialPrompt
-            : undefined
-        }
-        onInitialInputConsumed={() => {
-          clearInitialPrompt();
-          setPromptHandled(true);
-        }}
-      />
+      {specialStateContent ?? (
+        <ChatUI
+          messages={messages}
+          isMessagesLoading={isMessagesLoading}
+          threads={threads}
+          currentThreadId={currentThreadId}
+          config={mergedConfig}
+          callbacks={chatCallbacks}
+          isGenerating={isStreaming}
+          suggestions={suggestions}
+          agentOptions={agentOptions}
+          selectedAgentId={selectedAgentId}
+          onSelectAgent={onSelectAgent}
+          user={{
+            id: userId,
+            name: effectiveUserName,
+            email: userEmail,
+            avatar: effectiveUserAvatar,
+          }}
+          assistant={{
+            name: userConfig?.branding?.title,
+            avatar: userConfig?.branding?.avatar,
+            description: userConfig?.branding?.subtitle,
+          }}
+          onAddMemory={onAddMemory}
+          onUpdateMemory={onUpdateMemory}
+          onDeleteMemory={onDeleteMemory}
+          className={className}
+          // Pass initial prompt for prefill behavior (not auto-send)
+          initialInput={
+            initialPrompt && !promptHandled && urlSync?.promptBehavior !== 'auto-send'
+              ? initialPrompt
+              : undefined
+          }
+          onInitialInputConsumed={() => {
+            clearInitialPrompt();
+            setPromptHandled(true);
+          }}
+        />
+      )}
     </ChatUserContextProvider>
   );
 };

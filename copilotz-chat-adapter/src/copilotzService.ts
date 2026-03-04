@@ -128,6 +128,20 @@ export type CopilotzStreamResult = {
   media: Record<string, string> | null;
 };
 
+export class CopilotzRequestError extends Error {
+  status: number;
+  code?: string;
+  details?: unknown;
+
+  constructor(message: string, options: { status: number; code?: string; details?: unknown }) {
+    super(message);
+    this.name = 'CopilotzRequestError';
+    this.status = options.status;
+    this.code = options.code;
+    this.details = options.details;
+  }
+}
+
 const SSE_LINE_BREAK = '\n\n';
 
 const appendChunk = (buffer: string, chunk: string): string => {
@@ -142,6 +156,15 @@ const appendChunk = (buffer: string, chunk: string): string => {
     }
   }
   return buffer + chunk;
+};
+
+const parseErrorText = (rawText: string): unknown => {
+  if (!rawText) return null;
+  try {
+    return JSON.parse(rawText);
+  } catch {
+    return null;
+  }
 };
 
 const toAttachmentPayload = (attachments?: MediaAttachment[]) => {
@@ -413,7 +436,27 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
 
   if (!response.ok || !response.body) {
     const errorText = await response.text().catch(() => response.statusText);
-    throw new Error(errorText || 'Failed to run Copilotz agent');
+    const parsed = parseErrorText(errorText);
+    const details = parsed && typeof parsed === 'object' ? parsed : undefined;
+    const detailsRecord = details as Record<string, unknown> | undefined;
+    const message =
+      (typeof detailsRecord?.message === 'string' && detailsRecord.message) ||
+      (typeof detailsRecord?.error === 'string' && detailsRecord.error) ||
+      errorText ||
+      response.statusText ||
+      'Failed to run Copilotz agent';
+    const code =
+      typeof detailsRecord?.code === 'string'
+        ? detailsRecord.code
+        : (typeof detailsRecord?.error === 'string' && detailsRecord.error !== message
+          ? detailsRecord.error
+          : undefined);
+
+    throw new CopilotzRequestError(message, {
+      status: response.status,
+      code,
+      details,
+    });
   }
 
   const reader = response.body.getReader();
@@ -556,6 +599,39 @@ export async function fetchThreads(userId: string) {
 }
 
 export async function fetchThreadMessages(threadId: string) {
+  const graphParams = new URLSearchParams();
+  graphParams.set('threadId', threadId);
+  graphParams.set('limit', '500');
+
+  try {
+    const graphRes = await fetch(apiUrl(`/v1/messages?${graphParams.toString()}`), {
+      headers: withAuthHeaders({ Accept: 'application/json' }),
+    });
+
+    if (graphRes.ok) {
+      const graphData = await graphRes.json();
+      if (Array.isArray(graphData)) {
+        return graphData as RestMessage[];
+      }
+      if (Array.isArray(graphData?.data)) {
+        return graphData.data as RestMessage[];
+      }
+      return [];
+    }
+
+    // Only fall back for endpoint absence or gateway errors. For other failures,
+    // preserve the real error instead of silently switching stores.
+    if (![404, 405, 501, 502, 503, 504].includes(graphRes.status)) {
+      const errorText = await graphRes.text().catch(() => graphRes.statusText);
+      throw new Error(errorText || `Failed to load graph thread messages (${graphRes.status})`);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (!/Failed to fetch/i.test(message)) {
+      throw error;
+    }
+  }
+
   const params = new URLSearchParams();
   params.set('filters', JSON.stringify({ threadId }));
   params.set('sort', 'createdAt:asc');
@@ -594,6 +670,26 @@ export async function updateThread(threadId: string, updates: Partial<RestThread
 }
 
 export async function deleteMessagesByThreadId(threadId: string) {
+  const graphParams = new URLSearchParams();
+  graphParams.set('threadId', threadId);
+
+  try {
+    const graphRes = await fetch(apiUrl(`/v1/messages?${graphParams.toString()}`), {
+      method: 'DELETE',
+      headers: withAuthHeaders({ Accept: 'application/json' }),
+    });
+
+    if (!graphRes.ok && ![404, 405, 501].includes(graphRes.status)) {
+      const errorText = await graphRes.text().catch(() => graphRes.statusText);
+      throw new Error(errorText || `Failed to delete graph messages (${graphRes.status})`);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (!/Failed to fetch/i.test(message)) {
+      throw error;
+    }
+  }
+
   // First fetch all messages for the thread (no field selection to avoid issues)
   const params = new URLSearchParams();
   params.set('filters', JSON.stringify({ threadId }));

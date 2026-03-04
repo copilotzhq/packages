@@ -4,6 +4,7 @@ import { runCopilotzStream, fetchThreads, fetchThreadMessages, updateThread as u
 import { resolveAssetsInMessages } from './assetsService';
 import type { ChatMessage as ChatViewMessage, ChatThread, MediaAttachment, ChatUserContext } from '@copilotz/chat-ui';
 import { useUrlState, type UrlSyncConfig } from './useUrlState';
+import type { EventInterceptor, RunErrorInterceptor, SpecialChatState } from './specialState';
 
 const nowTs = () => Date.now();
 const generateId = () =>
@@ -14,6 +15,189 @@ const isAbortError = (error: unknown) => (
 
 type ServerThread = Awaited<ReturnType<typeof fetchThreads>>[number];
 type ServerMessage = Awaited<ReturnType<typeof fetchThreadMessages>>[number];
+
+type ToolCallStatus = 'pending' | 'running' | 'completed' | 'failed';
+type ParsedToolCall = {
+  id?: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  status: ToolCallStatus;
+  result?: unknown;
+};
+
+type ToolResultUpdate = {
+  id?: string;
+  name?: string;
+  status: ToolCallStatus;
+  result?: unknown;
+  endTime: number;
+};
+
+const normalizeToolStatus = (status: unknown): ToolCallStatus => {
+  if (status === 'pending') return 'pending';
+  if (status === 'running' || status === 'processing') return 'running';
+  if (status === 'failed') return 'failed';
+  return 'completed';
+};
+
+const parseToolArguments = (value: unknown): Record<string, unknown> => {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Ignore invalid JSON and fall through to empty args.
+    }
+  }
+  return {};
+};
+
+const extractToolCallsFromServerMessage = (msg: ServerMessage): ParsedToolCall[] => {
+  const metadata = (msg.metadata ?? undefined) as Record<string, unknown> | undefined;
+  const topLevelToolCalls = Array.isArray((msg as unknown as { toolCalls?: Array<Record<string, unknown>> }).toolCalls)
+    ? ((msg as unknown as { toolCalls?: Array<Record<string, unknown>> }).toolCalls || [])
+    : [];
+  const metadataToolCalls = Array.isArray(metadata?.toolCalls)
+    ? (metadata.toolCalls as Array<Record<string, unknown>>)
+    : [];
+
+  const usedMetadataIndexes = new Set<number>();
+  const parsed: ParsedToolCall[] = [];
+
+  const findMatchingMetadataIndex = (toolCall: Record<string, unknown>): number => {
+    const id = typeof toolCall.id === 'string' ? toolCall.id : undefined;
+    const name = typeof toolCall.name === 'string' ? toolCall.name : undefined;
+
+    const byId = id
+      ? metadataToolCalls.findIndex((candidate, idx) => !usedMetadataIndexes.has(idx) && candidate?.id === id)
+      : -1;
+    if (byId >= 0) return byId;
+
+    return name
+      ? metadataToolCalls.findIndex((candidate, idx) => !usedMetadataIndexes.has(idx) && candidate?.name === name)
+      : -1;
+  };
+
+  const parseToolCall = (
+    primary: Record<string, unknown>,
+    secondary?: Record<string, unknown>,
+  ): ParsedToolCall => {
+    const id = typeof primary.id === 'string'
+      ? primary.id
+      : (typeof secondary?.id === 'string' ? secondary.id : undefined);
+    const name = typeof primary.name === 'string'
+      ? primary.name
+      : (typeof secondary?.name === 'string' ? secondary.name : 'tool');
+    const argsRaw =
+      primary.args ?? primary.arguments ?? secondary?.args ?? secondary?.arguments;
+    const result =
+      primary.output !== undefined
+        ? primary.output
+        : primary.result !== undefined
+          ? primary.result
+          : secondary?.output !== undefined
+            ? secondary.output
+            : secondary?.result;
+    const status = normalizeToolStatus(primary.status ?? secondary?.status);
+
+    return {
+      ...(id ? { id } : {}),
+      name,
+      arguments: parseToolArguments(argsRaw),
+      ...(result !== undefined ? { result } : {}),
+      status,
+    };
+  };
+
+  topLevelToolCalls.forEach((toolCall) => {
+    const metadataIndex = findMatchingMetadataIndex(toolCall);
+    const metadataCall = metadataIndex >= 0 ? metadataToolCalls[metadataIndex] : undefined;
+    if (metadataIndex >= 0) usedMetadataIndexes.add(metadataIndex);
+    parsed.push(parseToolCall(toolCall, metadataCall));
+  });
+
+  metadataToolCalls.forEach((toolCall, index) => {
+    if (usedMetadataIndexes.has(index)) return;
+    parsed.push(parseToolCall(toolCall));
+  });
+
+  return parsed;
+};
+
+const extractToolResultUpdateFromMessage = (msg: ServerMessage): ToolResultUpdate | null => {
+  if (msg.senderType !== 'tool') return null;
+
+  const toolCalls = extractToolCallsFromServerMessage(msg);
+  if (!Array.isArray(toolCalls) || toolCalls.length === 0) return null;
+
+  const firstToolCall = toolCalls[0];
+  const metadata = (msg.metadata ?? undefined) as Record<string, unknown> | undefined;
+  const fallbackResult = metadata?.output;
+  const result = firstToolCall.result !== undefined ? firstToolCall.result : fallbackResult;
+
+  return {
+    ...(firstToolCall.id ? { id: firstToolCall.id } : {}),
+    ...(firstToolCall.name ? { name: firstToolCall.name } : {}),
+    ...(result !== undefined ? { result } : {}),
+    status: firstToolCall.status,
+    endTime: msg.createdAt ? new Date(msg.createdAt).getTime() : nowTs(),
+  };
+};
+
+const mergePersistedToolResults = (
+  messages: ChatViewMessage[],
+  updates: ToolResultUpdate[],
+): ChatViewMessage[] => {
+  if (updates.length === 0) return messages;
+
+  const nextMessages = [...messages];
+
+  for (const update of updates) {
+    for (let i = nextMessages.length - 1; i >= 0; i--) {
+      const message = nextMessages[i];
+      if (message.role !== 'assistant' || !Array.isArray(message.toolCalls) || message.toolCalls.length === 0) {
+        continue;
+      }
+
+      const toolCalls = message.toolCalls;
+
+      let toolCallIndex = update.id
+        ? toolCalls.findIndex((toolCall) => toolCall.id === update.id)
+        : -1;
+
+      if (toolCallIndex === -1 && update.name) {
+        toolCallIndex = toolCalls.findIndex((toolCall) => (
+          toolCall.name === update.name &&
+          (toolCall.status === 'pending' || toolCall.status === 'running' || typeof toolCall.result === 'undefined')
+        ));
+      }
+
+      if (toolCallIndex === -1) continue;
+
+      const updatedToolCalls = [...toolCalls];
+      const current = updatedToolCalls[toolCallIndex];
+      updatedToolCalls[toolCallIndex] = {
+        ...current,
+        status: update.status,
+        ...(update.result !== undefined ? { result: update.result } : {}),
+        endTime: update.endTime,
+      };
+
+      nextMessages[i] = {
+        ...message,
+        toolCalls: updatedToolCalls,
+      };
+      break;
+    }
+  }
+
+  return nextMessages;
+};
 
 const convertServerMessage = (msg: ServerMessage): ChatViewMessage => {
   const timestamp = msg.createdAt ? new Date(msg.createdAt).getTime() : nowTs();
@@ -57,16 +241,16 @@ const convertServerMessage = (msg: ServerMessage): ChatViewMessage => {
       ? 'user'
       : 'assistant';
 
-  const mappedToolCalls = Array.isArray((msg as unknown as { toolCalls?: Array<Record<string, unknown>> }).toolCalls)
-    ? ((msg as unknown as { toolCalls?: Array<Record<string, unknown>> }).toolCalls || []).map((tc) => ({
-      id: typeof tc?.id === 'string' ? tc.id : generateId(),
-      name: typeof tc?.name === 'string' ? tc.name : 'tool',
-      arguments: (tc?.args as Record<string, unknown>) || {},
-      status: 'completed' as const,
-    }))
-    : undefined;
+  const parsedToolCalls = extractToolCallsFromServerMessage(msg);
+  const mappedToolCalls = parsedToolCalls.map((toolCall) => ({
+    id: toolCall.id ?? generateId(),
+    name: toolCall.name,
+    arguments: toolCall.arguments,
+    status: toolCall.status,
+    ...(toolCall.result !== undefined ? { result: toolCall.result } : {}),
+  }));
 
-  const hasToolCalls = Array.isArray(mappedToolCalls) && mappedToolCalls.length > 0;
+  const hasToolCalls = mappedToolCalls.length > 0;
   const isToolSender = msg.senderType === 'tool';
   const content =
     isToolSender
@@ -96,6 +280,8 @@ export interface UseCopilotzOptions {
   defaultThreadName?: string;
   onToolOutput?: (output: Record<string, unknown>) => void;
   preferredAgentName?: string | null;
+  eventInterceptor?: EventInterceptor;
+  runErrorInterceptor?: RunErrorInterceptor;
   /**
    * URL state synchronization configuration.
    * When enabled, thread ID and agent are synced to/from URL parameters.
@@ -115,7 +301,17 @@ export interface UseCopilotzOptions {
   urlSync?: UrlSyncConfig;
 }
 
-export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadName, onToolOutput, preferredAgentName, urlSync }: UseCopilotzOptions) {
+export function useCopilotz({
+  userId,
+  initialContext,
+  bootstrap,
+  defaultThreadName,
+  onToolOutput,
+  preferredAgentName,
+  eventInterceptor,
+  runErrorInterceptor,
+  urlSync,
+}: UseCopilotzOptions) {
   // URL state management
   const {
     state: urlState,
@@ -135,6 +331,7 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
   const [messages, setMessages] = useState<ChatViewMessage[]>([]);
   const [isMessagesLoading, setIsMessagesLoading] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [specialState, setSpecialState] = useState<SpecialChatState | null>(null);
 
   const [userContextSeed, setUserContextSeed] = useState<Partial<ChatUserContext>>(initialContext || {});
   const preferredAgentRef = useRef<string | null>(preferredAgentName ?? null);
@@ -184,6 +381,34 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
 
     onToolOutput?.(output);
   }, [onToolOutput]);
+
+  const clearSpecialState = useCallback(() => {
+    setSpecialState(null);
+  }, []);
+
+  const applyEventInterceptor = useCallback((event: unknown) => {
+    if (!eventInterceptor) return undefined;
+    try {
+      const result = eventInterceptor(event);
+      if (result?.specialState) {
+        setSpecialState(result.specialState);
+      }
+      return result;
+    } catch (error) {
+      console.error('Error in Copilotz event interceptor', error);
+      return undefined;
+    }
+  }, [eventInterceptor]);
+
+  const getSpecialStateFromError = useCallback((error: unknown) => {
+    if (!runErrorInterceptor) return null;
+    try {
+      return runErrorInterceptor(error) ?? null;
+    } catch (interceptorError) {
+      console.error('Error in Copilotz run error interceptor', interceptorError);
+      return null;
+    }
+  }, [runErrorInterceptor]);
 
   const handleStreamMessageEvent = useCallback((event: any) => {
     const payload = event?.payload;
@@ -331,12 +556,15 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
         }
       });
 
+      const toolResultUpdates = resolvedMessages
+        .map((msg) => extractToolResultUpdateFromMessage(msg as unknown as ServerMessage))
+        .filter((update): update is ToolResultUpdate => update !== null);
+
       const viewMessages = resolvedMessages
         .filter((msg) => {
           const text = (typeof msg.content === 'string' ? msg.content : '').trim();
           const hasText = text.length > 0;
-          const hasToolCalls = Array.isArray((msg as unknown as { toolCalls?: Array<unknown> }).toolCalls)
-            && ((msg as unknown as { toolCalls?: Array<unknown> }).toolCalls as Array<unknown>).length > 0;
+          const hasToolCalls = extractToolCallsFromServerMessage(msg as unknown as ServerMessage).length > 0;
           const meta = (msg.metadata ?? {}) as Record<string, unknown>;
           const hasAttachments = Array.isArray(meta.attachments) && (meta.attachments as unknown[]).length > 0;
           // Keep tool messages only if they carry attachments (e.g., generated media)
@@ -348,7 +576,8 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
         })
         .map(convertServerMessage);
 
-      setMessages(viewMessages);
+      const hydratedMessages = mergePersistedToolResults(viewMessages, toolResultUpdates);
+      setMessages(hydratedMessages);
     } catch (error) {
       if (isAbortError(error)) return;
       console.error(`Error loading messages for thread ${threadId}`, error);
@@ -564,10 +793,15 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
     let pendingStartNewAssistantBubble = false;
 
     // Combined function to ensure bubble exists AND update content in a single setMessages call
-    const updateStreamingMessage = (partial: string, isComplete: boolean) => {
+    const updateStreamingMessage = (partial: string) => {
       if (partial && partial.length > 0) {
         hasStreamProgress = true;
       }
+
+      // Keep feedback visible while the run is active. A token segment can finish
+      // before tool calls or subsequent token segments start.
+      const nextStreaming = true;
+      const nextComplete = false;
       
       setMessages((prev) => {
         // First, check if we need to create a new streaming bubble
@@ -575,11 +809,11 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
         if (idx >= 0 && prev[idx].role === 'assistant') {
           // Found our current bubble - just update it
           const msg = prev[idx];
-          if (msg.content === partial && msg.isStreaming === !isComplete && msg.isComplete === isComplete) {
+          if (msg.content === partial && msg.isStreaming === nextStreaming && msg.isComplete === nextComplete) {
             return prev; // No change needed
           }
           const updated = [...prev];
-          updated[idx] = { ...msg, content: partial, isStreaming: !isComplete, isComplete };
+          updated[idx] = { ...msg, content: partial, isStreaming: nextStreaming, isComplete: nextComplete };
           return updated;
         }
         
@@ -588,11 +822,11 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
         if (last && last.role === 'assistant' && last.isStreaming) {
           currentAssistantId = last.id;
           pendingStartNewAssistantBubble = false;
-          if (last.content === partial && last.isStreaming === !isComplete && last.isComplete === isComplete) {
+          if (last.content === partial && last.isStreaming === nextStreaming && last.isComplete === nextComplete) {
             return prev; // No change needed
           }
           const updated = [...prev];
-          updated[prev.length - 1] = { ...last, content: partial, isStreaming: !isComplete, isComplete };
+          updated[prev.length - 1] = { ...last, content: partial, isStreaming: nextStreaming, isComplete: nextComplete };
           return updated;
         }
         
@@ -608,8 +842,8 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
               role: 'assistant' as const,
               content: partial,
               timestamp: nowTs(),
-              isStreaming: !isComplete,
-              isComplete,
+              isStreaming: nextStreaming,
+              isComplete: nextComplete,
             },
           ];
         }
@@ -804,8 +1038,13 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
         threadMetadata: params.threadMetadata ?? threadMetadata,
         toolCalls: params.toolCalls,
         selectedAgent: params.agentName ?? preferredAgentRef.current ?? null,
-        onToken: (token, isComplete) => updateStreamingMessage(token, isComplete),
+        onToken: (token) => updateStreamingMessage(token),
         onMessageEvent: async (event: any) => {
+          const intercepted = applyEventInterceptor(event);
+          if (intercepted?.handled) {
+            return;
+          }
+
           const type = (event?.type as string) || '';
           const payload = event?.payload ?? event;
 
@@ -872,6 +1111,8 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
                         updated[i] = {
                           ...updated[i],
                           toolCalls: updatedToolCalls,
+                          isStreaming: true,
+                          isComplete: false,
                         };
                         break;
                       }
@@ -922,8 +1163,8 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
                     const next = [...prev];
                     next[i] = appendToolCall({
                       ...next[i],
-                      isStreaming: false,
-                      isComplete: true,
+                      isStreaming: true,
+                      isComplete: false,
                     });
                     return next;
                   }
@@ -937,8 +1178,8 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
                     role: 'assistant',
                     content: '',
                     timestamp: nowTs(),
-                    isStreaming: false,
-                    isComplete: true,
+                    isStreaming: true,
+                    isComplete: false,
                   }),
                 ];
               })(),
@@ -962,6 +1203,11 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
           handleStreamMessageEvent(event);
         },
         onAssetEvent: async (payload: any) => {
+          const intercepted = applyEventInterceptor({ type: 'ASSET_CREATED', payload });
+          if (intercepted?.handled) {
+            return;
+          }
+
           // Treat as ASSET_CREATED event in unified handler
           await (async () => {
             if (!hasStreamProgress) return;
@@ -980,11 +1226,18 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
       });
     } finally {
       setIsStreaming(false);
+      setMessages((prev) => {
+        const hasStreaming = prev.some((msg) => msg.isStreaming);
+        if (!hasStreaming) return prev;
+        return prev.map((msg) => (msg.isStreaming
+          ? { ...msg, isStreaming: false, isComplete: true }
+          : msg));
+      });
       abortControllerRef.current = null;
     }
 
     return currentAssistantId;
-  }, [handleStreamMessageEvent, handleStreamAssetEvent]);
+  }, [applyEventInterceptor, handleStreamMessageEvent, handleStreamAssetEvent]);
 
   const handleSendMessage = useCallback(async (content: string, attachments: MediaAttachment[] = []) => {
     if (!content.trim() && attachments.length === 0) return;
@@ -1041,6 +1294,7 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
 
     // Add user message and assistant placeholder for typewriter loading effect
     setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
+    setSpecialState(null);
 
     // Use ref for threads check
     if (!threadsRef.current.some(t => t.id === conversationKey)) {
@@ -1078,6 +1332,12 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
     } catch (error) {
       if (isAbortError(error)) return;
       console.error('Error sending Copilotz message', error);
+      const nextSpecialState = getSpecialStateFromError(error);
+      if (nextSpecialState) {
+        setSpecialState(nextSpecialState);
+        setMessages((prev) => prev.filter((msg) => !msg.isStreaming));
+        return;
+      }
       setMessages((prev) => prev.map((msg) => (msg.isStreaming
         ? {
           ...msg,
@@ -1087,7 +1347,7 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
         }
         : msg)));
     }
-  }, [userId, fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage]);
+  }, [userId, fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage, getSpecialStateFromError]);
 
   const bootstrapConversation = useCallback(async (uid: string) => {
     if (!bootstrap?.initialToolCalls && !bootstrap?.initialMessage) return;
@@ -1099,6 +1359,7 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
     setThreadMetadataMap((prev) => ({ ...prev, [bootstrapThreadExternalId]: {} }));
     // Clear messages; let streaming create bubbles as needed
     setMessages([]);
+    setSpecialState(null);
 
     try {
       await sendCopilotzMessage({
@@ -1121,6 +1382,12 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
     } catch (error) {
       if (isAbortError(error)) return;
       console.error('Error bootstrapping conversation', error);
+      const nextSpecialState = getSpecialStateFromError(error);
+      if (nextSpecialState) {
+        setSpecialState(nextSpecialState);
+        setMessages([]);
+        return;
+      }
       setMessages([
         {
           id: generateId(),
@@ -1132,7 +1399,7 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
         },
       ]);
     }
-  }, [fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage, bootstrap, defaultThreadName]);
+  }, [fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage, bootstrap, defaultThreadName, getSpecialStateFromError]);
 
   const reset = useCallback(() => {
     messagesRequestRef.current += 1;
@@ -1145,6 +1412,7 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
     setUserContextSeed({});
     setIsMessagesLoading(false);
     setIsStreaming(false);
+    setSpecialState(null);
     abortControllerRef.current?.abort();
   }, []);
 
@@ -1200,6 +1468,8 @@ export function useCopilotz({ userId, initialContext, bootstrap, defaultThreadNa
     threads,
     currentThreadId,
     isStreaming,
+    specialState,
+    clearSpecialState,
     userContextSeed,
     sendMessage: handleSendMessage,
     createThread: handleCreateThread,

@@ -504,6 +504,11 @@ export const Message: React.FC<MessageProps> = memo(({
         containIntrinsicSize: '1px 400px',
       }
     : undefined;
+  const horizontalOffsetClass = showAvatar
+    ? messageIsUser
+      ? (compactMode ? 'mr-9' : 'mr-11')
+      : (compactMode ? 'ml-9' : 'ml-11')
+    : '';
 
   const handleCopy = async () => {
     try {
@@ -601,8 +606,8 @@ export const Message: React.FC<MessageProps> = memo(({
           </div>
         )}
 
-        {/* Add left margin for grouped messages to align with content under avatar */}
-        <div className={`flex-1 min-w-0 ${messageIsUser ? 'text-right' : 'text-left'} ${isGrouped && showAvatar && !messageIsUser ? (compactMode ? 'ml-9' : 'ml-11') : ''} ${isGrouped && showAvatar && messageIsUser ? (compactMode ? 'mr-9' : 'mr-11') : ''}`}>
+        {/* Keep body alignment consistent across grouped and ungrouped messages */}
+        <div className={`flex-1 min-w-0 ${messageIsUser ? 'text-right' : 'text-left'} ${horizontalOffsetClass}`}>
 
           {/* Message Body */}
           <div className={`relative inline-flex flex-col overflow-hidden text-left ${messageIsUser
