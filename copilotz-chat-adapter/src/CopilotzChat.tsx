@@ -5,10 +5,10 @@ import { User } from 'lucide-react';
 import { useCopilotz } from './useCopilotzChat';
 import type { UrlSyncConfig } from './useUrlState';
 import type { EventInterceptor, RenderSpecialState, RunErrorInterceptor } from './specialState';
+import type { RequestHeadersProvider } from './copilotzService';
 
 export interface CopilotzChatProps {
   userId: string;
-  authToken?: string | null;
   userName?: string;
   userAvatar?: string;
   userEmail?: string;
@@ -48,6 +48,7 @@ export interface CopilotzChatProps {
   agentOptions?: AgentOption[];
   selectedAgentId?: string | null;
   onSelectAgent?: (agentId: string) => void;
+  getRequestHeaders?: RequestHeadersProvider;
   className?: string;
   eventInterceptor?: EventInterceptor;
   runErrorInterceptor?: RunErrorInterceptor;
@@ -84,7 +85,6 @@ export interface CopilotzChatProps {
 
 export const CopilotzChat: React.FC<CopilotzChatProps> = ({
   userId,
-  authToken,
   userName,
   userAvatar,
   userEmail,
@@ -103,6 +103,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
   agentOptions = [],
   selectedAgentId = null,
   onSelectAgent,
+  getRequestHeaders,
   className,
   eventInterceptor,
   runErrorInterceptor,
@@ -133,12 +134,12 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     setUrlAgentId,
   } = useCopilotz({ 
     userId, 
-    authToken,
     initialContext, 
     bootstrap, 
     defaultThreadName: userConfig?.labels?.defaultThreadName,
     onToolOutput,
     preferredAgentName: selectedAgent?.name ?? null,
+    getRequestHeaders,
     eventInterceptor,
     runErrorInterceptor,
     urlSync,

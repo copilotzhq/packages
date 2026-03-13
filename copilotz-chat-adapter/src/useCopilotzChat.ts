@@ -1,10 +1,17 @@
 // deno-lint-ignore-file no-explicit-any
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { runCopilotzStream, fetchThreads, fetchThreadMessages, updateThread as updateThreadApi, deleteThread as deleteThreadApi } from './copilotzService';
+import {
+  runCopilotzStream,
+  fetchThreads,
+  fetchThreadMessages,
+  updateThread as updateThreadApi,
+  deleteThread as deleteThreadApi,
+} from './copilotzService';
 import { resolveAssetsInMessages } from './assetsService';
 import type { ChatMessage as ChatViewMessage, ChatThread, MediaAttachment, ChatUserContext } from '@copilotz/chat-ui';
 import { useUrlState, type UrlSyncConfig } from './useUrlState';
 import type { EventInterceptor, RunErrorInterceptor, SpecialChatState } from './specialState';
+import type { RequestHeadersProvider } from './copilotzService';
 
 const nowTs = () => Date.now();
 const generateId = () =>
@@ -251,6 +258,7 @@ const convertServerMessage = (msg: ServerMessage): ChatViewMessage => {
       : 'assistant';
 
   const parsedToolCalls = extractToolCallsFromServerMessage(msg);
+  const shouldRenderToolCalls = msg.senderType !== 'tool';
   const mappedToolCalls = parsedToolCalls.map((toolCall) => ({
     id: toolCall.id ?? generateId(),
     name: toolCall.name,
@@ -259,7 +267,7 @@ const convertServerMessage = (msg: ServerMessage): ChatViewMessage => {
     ...(toolCall.result !== undefined ? { result: toolCall.result } : {}),
   }));
 
-  const hasToolCalls = mappedToolCalls.length > 0;
+  const hasToolCalls = shouldRenderToolCalls && mappedToolCalls.length > 0;
   const isToolSender = msg.senderType === 'tool';
   const content =
     isToolSender
@@ -281,7 +289,6 @@ const convertServerMessage = (msg: ServerMessage): ChatViewMessage => {
 
 export interface UseCopilotzOptions {
   userId: string | null;
-  authToken?: string | null;
   initialContext?: ChatUserContext;
   bootstrap?: {
     initialMessage?: string;
@@ -290,6 +297,7 @@ export interface UseCopilotzOptions {
   defaultThreadName?: string;
   onToolOutput?: (output: Record<string, unknown>) => void;
   preferredAgentName?: string | null;
+  getRequestHeaders?: RequestHeadersProvider;
   eventInterceptor?: EventInterceptor;
   runErrorInterceptor?: RunErrorInterceptor;
   /**
@@ -313,12 +321,12 @@ export interface UseCopilotzOptions {
 
 export function useCopilotz({
   userId,
-  authToken,
   initialContext,
   bootstrap,
   defaultThreadName,
   onToolOutput,
   preferredAgentName,
+  getRequestHeaders,
   eventInterceptor,
   runErrorInterceptor,
   urlSync,
@@ -401,7 +409,7 @@ export function useCopilotz({
     if (!eventInterceptor) return undefined;
     try {
       const result = eventInterceptor(event);
-      if (result && typeof result === 'object' && result.specialState) {
+      if (result?.specialState) {
         setSpecialState(result.specialState);
       }
       return result;
@@ -559,21 +567,21 @@ export function useCopilotz({
 
   const fetchAndSetThreadsState = useCallback(async (uid: string, preferredExternalId?: string | null) => {
     try {
-      const rawThreads = await fetchThreads(uid, authToken);
+      const rawThreads = await fetchThreads(uid, getRequestHeaders);
       return updateThreadsState(rawThreads, preferredExternalId);
     } catch (error) {
       if (isAbortError(error)) return;
       console.error('Error loading threads', error);
       return null;
     }
-  }, [authToken, updateThreadsState]);
+  }, [updateThreadsState, getRequestHeaders]);
 
   const loadThreadMessages = useCallback(async (threadId: string) => {
     const requestId = messagesRequestRef.current + 1;
     messagesRequestRef.current = requestId;
     setIsMessagesLoading(true);
     try {
-      const rawMessages = await fetchThreadMessages(threadId, authToken);
+      const rawMessages = await fetchThreadMessages(threadId, getRequestHeaders);
       const resolvedMessages = await resolveAssetsInMessages(rawMessages as unknown as any[]);
       if (messagesRequestRef.current !== requestId) return;
 
@@ -615,7 +623,7 @@ export function useCopilotz({
         setIsMessagesLoading(false);
       }
     }
-  }, [authToken, processToolOutput]);
+  }, [processToolOutput, getRequestHeaders]);
 
   const handleSelectThread = useCallback(async (threadId: string) => {
     setCurrentThreadId(threadId);
@@ -670,7 +678,7 @@ export function useCopilotz({
     } else {
       // Persist to backend
       try {
-        await updateThreadApi(threadId, { name: trimmedTitle }, authToken);
+        await updateThreadApi(threadId, { name: trimmedTitle }, getRequestHeaders);
       } catch (error) {
         console.error('Failed to rename thread:', error);
         // Revert on error - refetch threads
@@ -679,7 +687,7 @@ export function useCopilotz({
         }
       }
     }
-  }, [authToken, userId, fetchAndSetThreadsState]);
+  }, [userId, fetchAndSetThreadsState, getRequestHeaders]);
 
   const handleArchiveThread = useCallback(async (threadId: string) => {
     // Find current archive status
@@ -699,7 +707,7 @@ export function useCopilotz({
 
     if (!isPlaceholder) {
       try {
-        await updateThreadApi(threadId, { status: newArchivedStatus ? 'archived' : 'active' }, authToken);
+        await updateThreadApi(threadId, { status: newArchivedStatus ? 'archived' : 'active' }, getRequestHeaders);
       } catch (error) {
         console.error('Failed to archive thread:', error);
         // Revert on error
@@ -708,7 +716,7 @@ export function useCopilotz({
         }
       }
     }
-  }, [authToken, userId, fetchAndSetThreadsState]);
+  }, [userId, fetchAndSetThreadsState, getRequestHeaders]);
 
   const handleDeleteThread = useCallback(async (threadId: string) => {
     // Check if this is a placeholder thread
@@ -744,7 +752,7 @@ export function useCopilotz({
 
     if (!isPlaceholder) {
       try {
-        await deleteThreadApi(threadId, authToken);
+        await deleteThreadApi(threadId, getRequestHeaders);
       } catch (error) {
         console.error('Failed to delete thread:', error);
         // Refetch to restore state on error
@@ -753,7 +761,7 @@ export function useCopilotz({
         }
       }
     }
-  }, [authToken, userId, fetchAndSetThreadsState, loadThreadMessages]);
+  }, [userId, fetchAndSetThreadsState, loadThreadMessages, getRequestHeaders]);
 
   const handleStop = useCallback(() => {
     abortControllerRef.current?.abort();
@@ -1051,7 +1059,6 @@ export function useCopilotz({
       const finalMetadata = Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined;
 
       await runCopilotzStream({
-        authToken,
         threadId: params.threadId ?? undefined,
         threadExternalId: params.threadExternalId ?? undefined,
         content: requestContent,
@@ -1068,10 +1075,11 @@ export function useCopilotz({
         threadMetadata: params.threadMetadata ?? threadMetadata,
         toolCalls: params.toolCalls,
         selectedAgent: params.agentName ?? preferredAgentRef.current ?? null,
+        getRequestHeaders,
         onToken: (token) => updateStreamingMessage(token),
         onMessageEvent: async (event: any) => {
           const intercepted = applyEventInterceptor(event);
-          if (intercepted && typeof intercepted === 'object' && intercepted.handled) {
+          if (intercepted?.handled) {
             return;
           }
 
@@ -1255,7 +1263,7 @@ export function useCopilotz({
         },
         onAssetEvent: async (payload: any) => {
           const intercepted = applyEventInterceptor({ type: 'ASSET_CREATED', payload });
-          if (intercepted && typeof intercepted === 'object' && intercepted.handled) {
+          if (intercepted?.handled) {
             return;
           }
 
@@ -1288,7 +1296,7 @@ export function useCopilotz({
     }
 
     return currentAssistantId;
-  }, [authToken, applyEventInterceptor, handleStreamMessageEvent, handleStreamAssetEvent]);
+  }, [applyEventInterceptor, handleStreamMessageEvent, handleStreamAssetEvent, getRequestHeaders]);
 
   const handleSendMessage = useCallback(async (content: string, attachments: MediaAttachment[] = []) => {
     if (!content.trim() && attachments.length === 0) return;
@@ -1427,7 +1435,7 @@ export function useCopilotz({
         ];
       });
     }
-  }, [userId, authToken, fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage, getSpecialStateFromError]);
+  }, [userId, fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage, getSpecialStateFromError]);
 
   const bootstrapConversation = useCallback(async (uid: string) => {
     if (!bootstrap?.initialToolCalls && !bootstrap?.initialMessage) return;
@@ -1479,7 +1487,7 @@ export function useCopilotz({
         },
       ]);
     }
-  }, [authToken, fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage, bootstrap, defaultThreadName, getSpecialStateFromError]);
+  }, [fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage, bootstrap, defaultThreadName, getSpecialStateFromError]);
 
   const reset = useCallback(() => {
     messagesRequestRef.current += 1;
@@ -1520,7 +1528,7 @@ export function useCopilotz({
       initializationRef.current = { userId: null, started: false };
       reset();
     }
-  }, [userId, authToken, fetchAndSetThreadsState, loadThreadMessages, bootstrapConversation, reset, bootstrap, isUrlSyncEnabled, urlState.threadId]);
+  }, [userId, fetchAndSetThreadsState, loadThreadMessages, bootstrapConversation, reset, bootstrap, isUrlSyncEnabled, urlState.threadId]);
 
   // Sync currentThreadExternalId to URL when it changes
   useEffect(() => {

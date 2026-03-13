@@ -1,6 +1,6 @@
 import type { MediaAttachment } from '@copilotz/chat-ui';
 
-const rawBaseValue = (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_API_URL;
+const rawBaseValue = import.meta.env?.VITE_API_URL;
 const rawBase = typeof rawBaseValue === 'string' && rawBaseValue.length > 0 ? rawBaseValue : '/api';
 const normalizedBase = rawBase.replace(/\/$/, '');
 const API_BASE = normalizedBase.startsWith('http') || normalizedBase.startsWith('/')
@@ -22,13 +22,18 @@ const API_KEY = (() => {
   return candidates.find((value) => typeof value === 'string' && value.length > 0);
 })();
 
-const withAuthHeaders = (
+export type RequestHeadersProvider = () => Record<string, string> | Promise<Record<string, string>>;
+
+const withAuthHeaders = async (
   headers: Record<string, string> = {},
-  authToken?: string | null,
-): Record<string, string> => {
-  const token = authToken || API_KEY;
-  if (token) {
-    return { ...headers, Authorization: `Bearer ${token}` };
+  getRequestHeaders?: RequestHeadersProvider,
+): Promise<Record<string, string>> => {
+  const providedHeaders = getRequestHeaders ? await getRequestHeaders() : undefined;
+  if (providedHeaders && Object.keys(providedHeaders).length > 0) {
+    return { ...headers, ...providedHeaders };
+  }
+  if (API_KEY) {
+    return { ...headers, Authorization: `Bearer ${API_KEY}` };
   }
   return headers;
 };
@@ -110,7 +115,6 @@ type StreamCallbacks = {
 };
 
 type RunOptions = {
-  authToken?: string | null;
   threadId?: string;
   threadExternalId?: string;
   content: string;
@@ -125,6 +129,7 @@ type RunOptions = {
   threadMetadata?: Record<string, unknown>;
   toolCalls?: Array<{ name: string; args: Record<string, unknown>; id?: string }>;
   selectedAgent?: string | null;
+  getRequestHeaders?: RequestHeadersProvider;
 } & StreamCallbacks;
 
 export type CopilotzStreamResult = {
@@ -294,7 +299,6 @@ const convertAudioDataUrlToWavBase64 = async (dataUrl: string): Promise<string |
 
 export async function runCopilotzStream(options: RunOptions): Promise<CopilotzStreamResult> {
   const {
-    authToken,
     threadId,
     threadExternalId,
     content,
@@ -304,6 +308,7 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
     threadMetadata,
     toolCalls,
     selectedAgent,
+    getRequestHeaders,
     onToken,
     onMessageEvent,
     onAssetEvent,
@@ -433,9 +438,9 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
 
   const response = await fetch(apiUrl('/v1/providers/web'), {
     method: 'POST',
-    headers: withAuthHeaders({
+    headers: await withAuthHeaders({
       'Content-Type': 'application/json',
-    }, authToken),
+    }, getRequestHeaders),
     body: JSON.stringify(payload),
     signal: controller.signal,
   });
@@ -582,13 +587,13 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
   };
 }
 
-export async function fetchThreads(userId: string, authToken?: string | null) {
+export async function fetchThreads(userId: string, getRequestHeaders?: RequestHeadersProvider) {
   const params = new URLSearchParams();
   params.set('filters', JSON.stringify({ "metadata.userExternalId": userId } ));
   params.set('sort', '-updatedAt');
 
   const res = await fetch(apiUrl(`/v1/rest/threads?${params.toString()}`), {
-    headers: withAuthHeaders({ Accept: 'application/json' }, authToken),
+    headers: await withAuthHeaders({ Accept: 'application/json' }, getRequestHeaders),
   });
 
   if (!res.ok) {
@@ -604,14 +609,14 @@ export async function fetchThreads(userId: string, authToken?: string | null) {
   return data as RestThread[];
 }
 
-export async function fetchThreadMessages(threadId: string, authToken?: string | null) {
+export async function fetchThreadMessages(threadId: string, getRequestHeaders?: RequestHeadersProvider) {
   const graphParams = new URLSearchParams();
   graphParams.set('threadId', threadId);
   graphParams.set('limit', '500');
 
   try {
     const graphRes = await fetch(apiUrl(`/v1/messages?${graphParams.toString()}`), {
-      headers: withAuthHeaders({ Accept: 'application/json' }, authToken),
+      headers: await withAuthHeaders({ Accept: 'application/json' }, getRequestHeaders),
     });
 
     if (graphRes.ok) {
@@ -643,7 +648,7 @@ export async function fetchThreadMessages(threadId: string, authToken?: string |
   params.set('sort', 'createdAt:asc');
 
   const res = await fetch(apiUrl(`/v1/rest/messages?${params.toString()}`), {
-    headers: withAuthHeaders({ Accept: 'application/json' }, authToken),
+    headers: await withAuthHeaders({ Accept: 'application/json' }, getRequestHeaders),
   });
 
   if (!res.ok) {
@@ -659,10 +664,14 @@ export async function fetchThreadMessages(threadId: string, authToken?: string |
   return data as RestMessage[];
 }
 
-export async function updateThread(threadId: string, updates: Partial<RestThread>, authToken?: string | null) {
+export async function updateThread(
+  threadId: string,
+  updates: Partial<RestThread>,
+  getRequestHeaders?: RequestHeadersProvider,
+) {
   const res = await fetch(apiUrl(`/v1/rest/threads/${threadId}`), {
     method: 'PUT',
-    headers: withAuthHeaders({ 'Content-Type': 'application/json', Accept: 'application/json' }, authToken),
+    headers: await withAuthHeaders({ 'Content-Type': 'application/json', Accept: 'application/json' }, getRequestHeaders),
     body: JSON.stringify(updates),
   });
 
@@ -675,14 +684,17 @@ export async function updateThread(threadId: string, updates: Partial<RestThread
   return data?.body ?? data;
 }
 
-export async function deleteMessagesByThreadId(threadId: string, authToken?: string | null) {
+export async function deleteMessagesByThreadId(
+  threadId: string,
+  getRequestHeaders?: RequestHeadersProvider,
+) {
   const graphParams = new URLSearchParams();
   graphParams.set('threadId', threadId);
 
   try {
     const graphRes = await fetch(apiUrl(`/v1/messages?${graphParams.toString()}`), {
       method: 'DELETE',
-      headers: withAuthHeaders({ Accept: 'application/json' }, authToken),
+      headers: await withAuthHeaders({ Accept: 'application/json' }, getRequestHeaders),
     });
 
     if (!graphRes.ok && ![404, 405, 501].includes(graphRes.status)) {
@@ -701,7 +713,7 @@ export async function deleteMessagesByThreadId(threadId: string, authToken?: str
   params.set('filters', JSON.stringify({ threadId }));
 
   const res = await fetch(apiUrl(`/v1/rest/messages?${params.toString()}`), {
-    headers: withAuthHeaders({ Accept: 'application/json' }, authToken),
+    headers: await withAuthHeaders({ Accept: 'application/json' }, getRequestHeaders),
   });
 
   if (!res.ok) {
@@ -721,7 +733,7 @@ export async function deleteMessagesByThreadId(threadId: string, authToken?: str
       try {
         await fetch(apiUrl(`/v1/rest/messages/${msg.id}`), {
           method: 'DELETE',
-          headers: withAuthHeaders({ Accept: 'application/json' }, authToken),
+          headers: await withAuthHeaders({ Accept: 'application/json' }, getRequestHeaders),
         });
       } catch {
         // Ignore individual message delete errors
@@ -730,13 +742,13 @@ export async function deleteMessagesByThreadId(threadId: string, authToken?: str
   }
 }
 
-export async function deleteThread(threadId: string, authToken?: string | null) {
+export async function deleteThread(threadId: string, getRequestHeaders?: RequestHeadersProvider) {
   // First delete all messages in the thread to avoid foreign key constraint
-  await deleteMessagesByThreadId(threadId, authToken);
+  await deleteMessagesByThreadId(threadId, getRequestHeaders);
 
   const res = await fetch(apiUrl(`/v1/rest/threads/${threadId}`), {
     method: 'DELETE',
-    headers: withAuthHeaders({ Accept: 'application/json' }, authToken),
+    headers: await withAuthHeaders({ Accept: 'application/json' }, getRequestHeaders),
   });
 
   if (!res.ok) {
