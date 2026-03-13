@@ -8,6 +8,7 @@ import type { EventInterceptor, RenderSpecialState, RunErrorInterceptor } from '
 
 export interface CopilotzChatProps {
   userId: string;
+  authToken?: string | null;
   userName?: string;
   userAvatar?: string;
   userEmail?: string;
@@ -83,6 +84,7 @@ export interface CopilotzChatProps {
 
 export const CopilotzChat: React.FC<CopilotzChatProps> = ({
   userId,
+  authToken,
   userName,
   userAvatar,
   userEmail,
@@ -131,6 +133,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     setUrlAgentId,
   } = useCopilotz({ 
     userId, 
+    authToken,
     initialContext, 
     bootstrap, 
     defaultThreadName: userConfig?.labels?.defaultThreadName,

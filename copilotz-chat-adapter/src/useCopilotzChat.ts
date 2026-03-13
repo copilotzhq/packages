@@ -12,6 +12,15 @@ const generateId = () =>
 const isAbortError = (error: unknown) => (
   error instanceof DOMException && error.name === 'AbortError'
 ) || (typeof error === 'object' && error !== null && 'name' in error && (error as { name?: string }).name === 'AbortError');
+const getEventPayload = (event: any) => event?.payload ?? event;
+const getEventSenderType = (payload: any): string | undefined => payload?.senderType || payload?.sender?.type;
+const hasVisibleAssistantOutput = (message: ChatViewMessage): boolean => {
+  if (message.role !== 'assistant') return false;
+  if (typeof message.content === 'string' && message.content.trim().length > 0) return true;
+  if (Array.isArray(message.attachments) && message.attachments.length > 0) return true;
+  if (Array.isArray(message.toolCalls) && message.toolCalls.length > 0) return true;
+  return false;
+};
 
 type ServerThread = Awaited<ReturnType<typeof fetchThreads>>[number];
 type ServerMessage = Awaited<ReturnType<typeof fetchThreadMessages>>[number];
@@ -272,6 +281,7 @@ const convertServerMessage = (msg: ServerMessage): ChatViewMessage => {
 
 export interface UseCopilotzOptions {
   userId: string | null;
+  authToken?: string | null;
   initialContext?: ChatUserContext;
   bootstrap?: {
     initialMessage?: string;
@@ -303,6 +313,7 @@ export interface UseCopilotzOptions {
 
 export function useCopilotz({
   userId,
+  authToken,
   initialContext,
   bootstrap,
   defaultThreadName,
@@ -390,7 +401,7 @@ export function useCopilotz({
     if (!eventInterceptor) return undefined;
     try {
       const result = eventInterceptor(event);
-      if (result?.specialState) {
+      if (result && typeof result === 'object' && result.specialState) {
         setSpecialState(result.specialState);
       }
       return result;
@@ -411,10 +422,11 @@ export function useCopilotz({
   }, [runErrorInterceptor]);
 
   const handleStreamMessageEvent = useCallback((event: any) => {
-    const payload = event?.payload;
+    const payload = getEventPayload(event);
     if (!payload) return;
+    const senderType = getEventSenderType(payload);
 
-    if (payload.senderType === 'tool') {
+    if (senderType === 'tool') {
       const metadata = (payload.metadata ?? event.metadata ?? {}) as Record<string, unknown>;
       const output = (metadata?.output ?? metadata) as Record<string, unknown> | undefined;
       if (output) processToolOutput(output);
@@ -457,17 +469,34 @@ export function useCopilotz({
       return;
     }
 
-    if (payload.senderType === 'agent' && typeof payload.content === 'string') {
+    if (senderType === 'agent' && typeof payload.content === 'string') {
       setMessages((prev) => {
         const next = [...prev];
         for (let i = next.length - 1; i >= 0; i--) {
           const m = next[i];
           if (m.role === 'assistant' && m.isStreaming) {
             next[i] = { ...m, content: payload.content, isStreaming: false, isComplete: true };
-            break;
+            return next;
           }
         }
-        return next;
+
+        const trimmedContent = payload.content.trim();
+        if (!trimmedContent) {
+          return prev;
+        }
+
+        return [
+          ...next,
+          {
+            id: generateId(),
+            role: 'assistant',
+            content: payload.content,
+            timestamp: nowTs(),
+            isStreaming: false,
+            isComplete: true,
+            metadata: (payload.metadata ?? undefined) as Record<string, unknown> | undefined,
+          },
+        ];
       });
     }
   }, [processToolOutput]);
@@ -530,21 +559,21 @@ export function useCopilotz({
 
   const fetchAndSetThreadsState = useCallback(async (uid: string, preferredExternalId?: string | null) => {
     try {
-      const rawThreads = await fetchThreads(uid);
+      const rawThreads = await fetchThreads(uid, authToken);
       return updateThreadsState(rawThreads, preferredExternalId);
     } catch (error) {
       if (isAbortError(error)) return;
       console.error('Error loading threads', error);
       return null;
     }
-  }, [updateThreadsState]);
+  }, [authToken, updateThreadsState]);
 
   const loadThreadMessages = useCallback(async (threadId: string) => {
     const requestId = messagesRequestRef.current + 1;
     messagesRequestRef.current = requestId;
     setIsMessagesLoading(true);
     try {
-      const rawMessages = await fetchThreadMessages(threadId);
+      const rawMessages = await fetchThreadMessages(threadId, authToken);
       const resolvedMessages = await resolveAssetsInMessages(rawMessages as unknown as any[]);
       if (messagesRequestRef.current !== requestId) return;
 
@@ -586,7 +615,7 @@ export function useCopilotz({
         setIsMessagesLoading(false);
       }
     }
-  }, [processToolOutput]);
+  }, [authToken, processToolOutput]);
 
   const handleSelectThread = useCallback(async (threadId: string) => {
     setCurrentThreadId(threadId);
@@ -641,7 +670,7 @@ export function useCopilotz({
     } else {
       // Persist to backend
       try {
-        await updateThreadApi(threadId, { name: trimmedTitle });
+        await updateThreadApi(threadId, { name: trimmedTitle }, authToken);
       } catch (error) {
         console.error('Failed to rename thread:', error);
         // Revert on error - refetch threads
@@ -650,7 +679,7 @@ export function useCopilotz({
         }
       }
     }
-  }, [userId, fetchAndSetThreadsState]);
+  }, [authToken, userId, fetchAndSetThreadsState]);
 
   const handleArchiveThread = useCallback(async (threadId: string) => {
     // Find current archive status
@@ -670,7 +699,7 @@ export function useCopilotz({
 
     if (!isPlaceholder) {
       try {
-        await updateThreadApi(threadId, { status: newArchivedStatus ? 'archived' : 'active' });
+        await updateThreadApi(threadId, { status: newArchivedStatus ? 'archived' : 'active' }, authToken);
       } catch (error) {
         console.error('Failed to archive thread:', error);
         // Revert on error
@@ -679,7 +708,7 @@ export function useCopilotz({
         }
       }
     }
-  }, [userId, fetchAndSetThreadsState]);
+  }, [authToken, userId, fetchAndSetThreadsState]);
 
   const handleDeleteThread = useCallback(async (threadId: string) => {
     // Check if this is a placeholder thread
@@ -715,7 +744,7 @@ export function useCopilotz({
 
     if (!isPlaceholder) {
       try {
-        await deleteThreadApi(threadId);
+        await deleteThreadApi(threadId, authToken);
       } catch (error) {
         console.error('Failed to delete thread:', error);
         // Refetch to restore state on error
@@ -724,7 +753,7 @@ export function useCopilotz({
         }
       }
     }
-  }, [userId, fetchAndSetThreadsState, loadThreadMessages]);
+  }, [authToken, userId, fetchAndSetThreadsState, loadThreadMessages]);
 
   const handleStop = useCallback(() => {
     abortControllerRef.current?.abort();
@@ -806,7 +835,7 @@ export function useCopilotz({
       setMessages((prev) => {
         // First, check if we need to create a new streaming bubble
         const idx = prev.findIndex((m) => m.id === currentAssistantId);
-        if (idx >= 0 && prev[idx].role === 'assistant') {
+        if (idx >= 0 && prev[idx].role === 'assistant' && prev[idx].isStreaming) {
           // Found our current bubble - just update it
           const msg = prev[idx];
           if (msg.content === partial && msg.isStreaming === nextStreaming && msg.isComplete === nextComplete) {
@@ -1022,6 +1051,7 @@ export function useCopilotz({
       const finalMetadata = Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined;
 
       await runCopilotzStream({
+        authToken,
         threadId: params.threadId ?? undefined,
         threadExternalId: params.threadExternalId ?? undefined,
         content: requestContent,
@@ -1041,16 +1071,16 @@ export function useCopilotz({
         onToken: (token) => updateStreamingMessage(token),
         onMessageEvent: async (event: any) => {
           const intercepted = applyEventInterceptor(event);
-          if (intercepted?.handled) {
+          if (intercepted && typeof intercepted === 'object' && intercepted.handled) {
             return;
           }
 
           const type = (event?.type as string) || '';
-          const payload = event?.payload ?? event;
+          const payload = getEventPayload(event);
 
           // Handle MESSAGE/NEW_MESSAGE events for tool responses
           if (type === 'MESSAGE' || type === 'NEW_MESSAGE') {
-            const senderType = payload?.senderType || payload?.sender?.type;
+            const senderType = getEventSenderType(payload);
             
             // Handle tool responses: update the matching tool call status
             if (senderType === 'tool') {
@@ -1124,7 +1154,11 @@ export function useCopilotz({
               return; // Don't create a separate bubble for tool responses
             }
             
-            // Ignore other MESSAGE snapshots; TOKEN stream already rendered content
+            handleStreamMessageEvent(event);
+            if (senderType === 'agent') {
+              currentAssistantId = generateId();
+              pendingStartNewAssistantBubble = true;
+            }
             return;
           }
 
@@ -1157,24 +1191,41 @@ export function useCopilotz({
                   ],
                 });
 
-                // Try to attach to the most recent assistant message
-                for (let i = prev.length - 1; i >= 0; i--) {
-                  if (prev[i].role === 'assistant') {
-                    const next = [...prev];
-                    next[i] = appendToolCall({
-                      ...next[i],
-                      isStreaming: true,
-                      isComplete: false,
-                    });
-                    return next;
-                  }
+                const currentIdx = prev.findIndex((message) => (
+                  message.id === currentAssistantId &&
+                  message.role === 'assistant' &&
+                  message.isStreaming
+                ));
+                if (currentIdx >= 0) {
+                  const next = [...prev];
+                  next[currentIdx] = appendToolCall({
+                    ...next[currentIdx],
+                    isStreaming: true,
+                    isComplete: false,
+                  });
+                  return next;
+                }
+
+                const last = prev[prev.length - 1];
+                if (!pendingStartNewAssistantBubble && last?.role === 'assistant' && last.isStreaming) {
+                  currentAssistantId = last.id;
+                  const next = [...prev];
+                  next[prev.length - 1] = appendToolCall({
+                    ...last,
+                    isStreaming: true,
+                    isComplete: false,
+                  });
+                  return next;
                 }
 
                 // No assistant message yet – create one to host the tool call
+                const newId = generateId();
+                currentAssistantId = newId;
+                pendingStartNewAssistantBubble = false;
                 return [
                   ...prev,
                   appendToolCall({
-                    id: generateId(),
+                    id: newId,
                     role: 'assistant',
                     content: '',
                     timestamp: nowTs(),
@@ -1204,7 +1255,7 @@ export function useCopilotz({
         },
         onAssetEvent: async (payload: any) => {
           const intercepted = applyEventInterceptor({ type: 'ASSET_CREATED', payload });
-          if (intercepted?.handled) {
+          if (intercepted && typeof intercepted === 'object' && intercepted.handled) {
             return;
           }
 
@@ -1237,7 +1288,7 @@ export function useCopilotz({
     }
 
     return currentAssistantId;
-  }, [applyEventInterceptor, handleStreamMessageEvent, handleStreamAssetEvent]);
+  }, [authToken, applyEventInterceptor, handleStreamMessageEvent, handleStreamAssetEvent]);
 
   const handleSendMessage = useCallback(async (content: string, attachments: MediaAttachment[] = []) => {
     if (!content.trim() && attachments.length === 0) return;
@@ -1338,16 +1389,45 @@ export function useCopilotz({
         setMessages((prev) => prev.filter((msg) => !msg.isStreaming));
         return;
       }
-      setMessages((prev) => prev.map((msg) => (msg.isStreaming
-        ? {
-          ...msg,
-          isStreaming: false,
-          isComplete: true,
-          content: 'Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente novamente.',
+      setMessages((prev) => {
+        const finalized = prev.map((msg) => (
+          msg.isStreaming
+            ? { ...msg, isStreaming: false, isComplete: true }
+            : msg
+        ));
+
+        if (finalized.some(hasVisibleAssistantOutput)) {
+          return finalized;
         }
-        : msg)));
+
+        for (let i = finalized.length - 1; i >= 0; i--) {
+          const message = finalized[i];
+          if (message.role !== 'assistant') continue;
+
+          const updated = [...finalized];
+          updated[i] = {
+            ...message,
+            content: 'Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente novamente.',
+            isStreaming: false,
+            isComplete: true,
+          };
+          return updated;
+        }
+
+        return [
+          ...finalized,
+          {
+            id: generateId(),
+            role: 'assistant',
+            content: 'Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente novamente.',
+            timestamp: nowTs(),
+            isStreaming: false,
+            isComplete: true,
+          },
+        ];
+      });
     }
-  }, [userId, fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage, getSpecialStateFromError]);
+  }, [userId, authToken, fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage, getSpecialStateFromError]);
 
   const bootstrapConversation = useCallback(async (uid: string) => {
     if (!bootstrap?.initialToolCalls && !bootstrap?.initialMessage) return;
@@ -1399,7 +1479,7 @@ export function useCopilotz({
         },
       ]);
     }
-  }, [fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage, bootstrap, defaultThreadName, getSpecialStateFromError]);
+  }, [authToken, fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage, bootstrap, defaultThreadName, getSpecialStateFromError]);
 
   const reset = useCallback(() => {
     messagesRequestRef.current += 1;
@@ -1440,7 +1520,7 @@ export function useCopilotz({
       initializationRef.current = { userId: null, started: false };
       reset();
     }
-  }, [userId, fetchAndSetThreadsState, loadThreadMessages, bootstrapConversation, reset, bootstrap, isUrlSyncEnabled, urlState.threadId]);
+  }, [userId, authToken, fetchAndSetThreadsState, loadThreadMessages, bootstrapConversation, reset, bootstrap, isUrlSyncEnabled, urlState.threadId]);
 
   // Sync currentThreadExternalId to URL when it changes
   useEffect(() => {
