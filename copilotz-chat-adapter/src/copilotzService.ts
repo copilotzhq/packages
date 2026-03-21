@@ -108,7 +108,7 @@ type MessagePayload = {
 };
 
 type StreamCallbacks = {
-  onToken?: (token: string, isComplete: boolean, raw?: any) => void;
+  onToken?: (token: string, isComplete: boolean, raw?: any, options?: { isReasoning?: boolean }) => void;
   onMessageEvent?: (payload: any) => void;
   onAssetEvent?: (payload: any) => void;
   signal?: AbortSignal;
@@ -474,6 +474,7 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
   const decoder = new TextDecoder('utf-8');
   let buffer = '';
   let aggregatedText = '';
+  let aggregatedReasoning = '';
   const collectedMessages: any[] = [];
   let collectedMedia: Record<string, string> | null = null;
 
@@ -502,18 +503,23 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
 
     switch (eventType) {
       case 'TOKEN': {
+        const inner = payload?.payload ?? payload;
         const chunk =
-          typeof payload?.payload?.token === 'string'
-            ? payload.payload.token
-            : (typeof payload?.token === 'string' ? payload.token : '');
+          typeof inner?.token === 'string'
+            ? inner.token
+            : '';
+        const isReasoning = Boolean(inner?.isReasoning);
         if (chunk) {
-          aggregatedText = appendChunk(aggregatedText, chunk);
+          if (isReasoning) {
+            aggregatedReasoning = appendChunk(aggregatedReasoning, chunk);
+          } else {
+            aggregatedText = appendChunk(aggregatedText, chunk);
+          }
         }
-        const isComplete = Boolean(
-          (payload && payload.payload && payload.payload.isComplete) ?? payload?.isComplete
-        );
+        const isComplete = Boolean(inner?.isComplete);
         if (chunk || isComplete) {
-          onToken?.(aggregatedText, isComplete, payload);
+          const tokenText = isReasoning ? aggregatedReasoning : aggregatedText;
+          onToken?.(tokenText, isComplete, payload, { isReasoning });
         }
         break;
       }

@@ -19,7 +19,8 @@ import {
   Wrench,
   Clock,
   ChevronRight,
-  ChevronDown
+  ChevronDown,
+  Brain
 } from 'lucide-react';
 
 
@@ -73,6 +74,52 @@ const ThinkingIndicator: React.FC<{ label?: string }> = memo(function ThinkingIn
         />
       </div>
       <span className="text-sm text-muted-foreground animate-pulse">{label}</span>
+    </div>
+  );
+});
+
+// Claude-like collapsible reasoning/thinking block
+const ThinkingBlock: React.FC<{
+  reasoning: string;
+  isStreaming?: boolean;
+  label?: string;
+}> = memo(function ThinkingBlock({ reasoning, isStreaming = false, label = 'Thinking...' }) {
+  const [isOpen, setIsOpen] = useState(isStreaming);
+
+  useEffect(() => {
+    if (isStreaming) setIsOpen(true);
+  }, [isStreaming]);
+
+  const finishedLabel = label.replace(/\.{3}$/, '');
+
+  return (
+    <div className={`mb-3 rounded-lg border ${isStreaming ? 'border-primary/40 bg-primary/5' : 'border-border/60 bg-muted/30'} overflow-hidden transition-colors duration-300`}>
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        <Brain className={`h-4 w-4 flex-shrink-0 ${isStreaming ? 'text-primary animate-pulse' : 'text-muted-foreground'}`} />
+        <span className="flex-1">
+          {isStreaming ? label : finishedLabel}
+        </span>
+        {isStreaming && (
+          <div className="flex gap-0.5 mr-1">
+            <span className="inline-block w-1 h-1 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+            <span className="inline-block w-1 h-1 bg-primary rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+            <span className="inline-block w-1 h-1 bg-primary rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+          </div>
+        )}
+        {isOpen ? <ChevronDown className="h-3 w-3 flex-shrink-0" /> : <ChevronRight className="h-3 w-3 flex-shrink-0" />}
+      </button>
+      {isOpen && (
+        <div className="px-3 pb-3 text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap break-words border-t border-border/40">
+          <div className="pt-2">
+            {reasoning}
+            {isStreaming && <span className="inline-block w-1.5 h-3.5 bg-primary/60 animate-pulse ml-0.5" />}
+          </div>
+        </div>
+      )}
     </div>
   );
 });
@@ -187,6 +234,7 @@ const StreamingText: React.FC<{
   renderMarkdown?: boolean;
   plainTextChunkChars?: number;
   contentStyle?: React.CSSProperties;
+  hideThinkingIndicator?: boolean;
 }> = memo(function StreamingText({
   content,
   isStreaming = false,
@@ -195,6 +243,7 @@ const StreamingText: React.FC<{
   renderMarkdown = true,
   plainTextChunkChars = 12000,
   contentStyle,
+  hideThinkingIndicator = false,
 }: {
   content: string;
   isStreaming?: boolean;
@@ -203,6 +252,7 @@ const StreamingText: React.FC<{
   renderMarkdown?: boolean;
   plainTextChunkChars?: number;
   contentStyle?: React.CSSProperties;
+  hideThinkingIndicator?: boolean;
 }) {
   const hasContent = content.trim().length > 0;
   const enableSyntaxHighlight = renderMarkdown && !isStreaming && hasCodeBlocks(content);
@@ -231,8 +281,7 @@ const StreamingText: React.FC<{
             style={contentStyle}
           />
         )
-      ) : isStreaming ? (
-        // Show thinking indicator while waiting for first token
+      ) : isStreaming && !hideThinkingIndicator ? (
         <ThinkingIndicator label={thinkingLabel} />
       ) : null}
       {isStreaming && hasContent && (
@@ -635,6 +684,15 @@ export const Message: React.FC<MessageProps> = memo(({
               </div>
             ) : (
               <>
+                {/* Reasoning/Thinking Block */}
+                {!messageIsUser && message.reasoning && (
+                  <ThinkingBlock
+                    reasoning={message.reasoning}
+                    isStreaming={message.isReasoningStreaming}
+                    label={thinkingLabel}
+                  />
+                )}
+
                 {/* Tool Calls */}
                 {enableToolCallsDisplay && message.toolCalls && message.toolCalls.length > 0 && (
                   <div className="mb-3">
@@ -649,6 +707,7 @@ export const Message: React.FC<MessageProps> = memo(({
                   renderMarkdown={shouldRenderMarkdown}
                   plainTextChunkChars={normalizedChunkChars}
                   contentStyle={contentStyle}
+                  hideThinkingIndicator={!!message.reasoning}
                 />
 
                 {canCollapseMessage && (

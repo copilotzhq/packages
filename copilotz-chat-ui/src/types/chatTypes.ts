@@ -52,6 +52,10 @@ export interface ChatMessage {
   editedAt?: number;
   toolCalls?: ToolCall[];
   metadata?: Record<string, any>;
+  /** Model reasoning/thinking content (displayed in a collapsible block) */
+  reasoning?: string;
+  /** Whether reasoning tokens are still being streamed */
+  isReasoningStreaming?: boolean;
 }
 
 // Thread Management

@@ -830,59 +830,63 @@ export function useCopilotz({
     let pendingStartNewAssistantBubble = false;
 
     // Combined function to ensure bubble exists AND update content in a single setMessages call
-    const updateStreamingMessage = (partial: string) => {
+    const updateStreamingMessage = (partial: string, opts?: { isReasoning?: boolean }) => {
       if (partial && partial.length > 0) {
         hasStreamProgress = true;
       }
 
-      // Keep feedback visible while the run is active. A token segment can finish
-      // before tool calls or subsequent token segments start.
       const nextStreaming = true;
       const nextComplete = false;
+      const isReasoning = opts?.isReasoning ?? false;
+
+      const applyUpdate = (msg: ChatViewMessage): ChatViewMessage => {
+        if (isReasoning) {
+          return { ...msg, reasoning: partial, isReasoningStreaming: true, isStreaming: nextStreaming, isComplete: nextComplete };
+        }
+        // When content tokens start, mark reasoning as done streaming
+        const reasoningPatch = msg.reasoning ? { isReasoningStreaming: false } : {};
+        return { ...msg, content: partial, ...reasoningPatch, isStreaming: nextStreaming, isComplete: nextComplete };
+      };
       
       setMessages((prev) => {
-        // First, check if we need to create a new streaming bubble
         const idx = prev.findIndex((m) => m.id === currentAssistantId);
         if (idx >= 0 && prev[idx].role === 'assistant' && prev[idx].isStreaming) {
-          // Found our current bubble - just update it
           const msg = prev[idx];
-          if (msg.content === partial && msg.isStreaming === nextStreaming && msg.isComplete === nextComplete) {
-            return prev; // No change needed
+          const next = applyUpdate(msg);
+          if (msg.content === next.content && msg.reasoning === next.reasoning && msg.isReasoningStreaming === next.isReasoningStreaming && msg.isStreaming === next.isStreaming && msg.isComplete === next.isComplete) {
+            return prev;
           }
           const updated = [...prev];
-          updated[idx] = { ...msg, content: partial, isStreaming: nextStreaming, isComplete: nextComplete };
+          updated[idx] = next;
           return updated;
         }
         
-        // Check if last message is a streaming assistant we can reuse
         const last = prev[prev.length - 1];
         if (last && last.role === 'assistant' && last.isStreaming) {
           currentAssistantId = last.id;
           pendingStartNewAssistantBubble = false;
-          if (last.content === partial && last.isStreaming === nextStreaming && last.isComplete === nextComplete) {
-            return prev; // No change needed
+          const next = applyUpdate(last);
+          if (last.content === next.content && last.reasoning === next.reasoning && last.isReasoningStreaming === next.isReasoningStreaming && last.isStreaming === next.isStreaming && last.isComplete === next.isComplete) {
+            return prev;
           }
           const updated = [...prev];
-          updated[prev.length - 1] = { ...last, content: partial, isStreaming: nextStreaming, isComplete: nextComplete };
+          updated[prev.length - 1] = next;
           return updated;
         }
         
-        // Need to create a new bubble
         if (pendingStartNewAssistantBubble || !prev.length || (prev[prev.length - 1].role !== 'assistant' || !prev[prev.length - 1].isStreaming)) {
           const newId = generateId();
           currentAssistantId = newId;
           pendingStartNewAssistantBubble = false;
-          return [
-            ...prev,
-            {
-              id: newId,
-              role: 'assistant' as const,
-              content: partial,
-              timestamp: nowTs(),
-              isStreaming: nextStreaming,
-              isComplete: nextComplete,
-            },
-          ];
+          const base: ChatViewMessage = {
+            id: newId,
+            role: 'assistant' as const,
+            content: '',
+            timestamp: nowTs(),
+            isStreaming: nextStreaming,
+            isComplete: nextComplete,
+          };
+          return [...prev, applyUpdate(base)];
         }
         
         return prev;
@@ -914,11 +918,15 @@ export function useCopilotz({
       // TOOL_CALL bubble
       if (type === 'TOOL_CALL') {
         const metadata = (payload?.metadata ?? {}) as Record<string, unknown>;
+        // New copilotz lib structure: payload.toolCall.tool.name / .id / .args
+        const tc = (payload?.toolCall ?? undefined) as Record<string, unknown> | undefined;
+        const tcTool = (tc?.tool ?? undefined) as Record<string, unknown> | undefined;
+        // Legacy structures
         const call = (payload?.call ?? (metadata as any)?.call) as Record<string, unknown> | undefined;
         const func = (call?.function ?? (payload as any)?.function) as Record<string, unknown> | undefined;
 
-        // Extract tool name from various possible locations
         const toolName =
+          (tcTool?.name as string) ||
           (func?.name as string) ||
           (payload?.name as string) ||
           (call?.name as string) ||
@@ -926,10 +934,10 @@ export function useCopilotz({
           (metadata.tool as string) ||
           'tool';
 
-        // Robust args extraction across shapes, including the call.function.arguments pattern
         let argsObj: Record<string, unknown> = {};
         const possibleArgs = [
-          func?.arguments,  // Try call.function.arguments first (most specific for this event structure)
+          tc?.args,
+          func?.arguments,
           payload?.args,
           call?.arguments,
           (metadata as any)?.args,
@@ -950,18 +958,19 @@ export function useCopilotz({
         }
 
         const output =
-          (metadata as any)?.output !== undefined ? (metadata as any).output
-            : payload?.output !== undefined ? payload.output
-              : undefined;
+          (tc?.output !== undefined ? tc.output : undefined) ??
+          ((metadata as any)?.output !== undefined ? (metadata as any).output : undefined) ??
+          (payload?.output !== undefined ? payload.output : undefined);
 
-        // Extract call ID from various locations
         const callId =
+          (tc?.id as string) ||
           (call?.id as string) ||
           (func?.id as string) ||
           (payload?.id as string) ||
           generateId();
 
         const statusVal =
+          (tc?.status as string) ||
           (payload?.status as string) ||
           ((event as any)?.status as string) ||
           'pending';
@@ -1076,7 +1085,7 @@ export function useCopilotz({
         toolCalls: params.toolCalls,
         selectedAgent: params.agentName ?? preferredAgentRef.current ?? null,
         getRequestHeaders,
-        onToken: (token) => updateStreamingMessage(token),
+        onToken: (token, _isComplete, _raw, opts) => updateStreamingMessage(token, opts),
         onMessageEvent: async (event: any) => {
           const intercepted = applyEventInterceptor(event);
           if (intercepted?.handled) {
