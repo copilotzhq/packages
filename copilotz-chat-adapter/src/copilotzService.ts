@@ -57,6 +57,7 @@ type RestMessage = {
   senderType: string;
   senderUserId?: string | null;
   content?: string | null;
+  reasoning?: string | null;
   metadata?: Record<string, unknown> | null;
   toolCalls?: Array<Record<string, unknown>> | null;
   createdAt?: string;
@@ -475,6 +476,8 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
   let buffer = '';
   let aggregatedText = '';
   let aggregatedReasoning = '';
+  let lastTokenWasReasoning = false;
+  let hadNonReasoningContent = false;
   const collectedMessages: any[] = [];
   let collectedMedia: Record<string, string> | null = null;
 
@@ -509,6 +512,13 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
             ? inner.token
             : '';
         const isReasoning = Boolean(inner?.isReasoning);
+        if (isReasoning && !lastTokenWasReasoning && hadNonReasoningContent) {
+          aggregatedReasoning = '';
+          aggregatedText = '';
+          hadNonReasoningContent = false;
+        }
+        lastTokenWasReasoning = isReasoning;
+        if (!isReasoning) hadNonReasoningContent = true;
         if (chunk) {
           if (isReasoning) {
             aggregatedReasoning = appendChunk(aggregatedReasoning, chunk);
@@ -524,9 +534,9 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
         break;
       }
       case 'MESSAGE': {
+        hadNonReasoningContent = true;
+        lastTokenWasReasoning = false;
         collectedMessages.push(payload);
-        // Pass the payload with its internal type (e.g., NEW_MESSAGE, MESSAGE, etc.)
-        // The hook will use payload.type to determine the actual event type
         onMessageEvent?.(payload);
         const senderType =
           payload?.payload?.senderType ??
@@ -538,8 +548,8 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
         break;
       }
       case 'TOOL_CALL': {
-        // Pass TOOL_CALL events directly to the message event handler
-        // The payload already has the full event structure with type: "TOOL_CALL"
+        hadNonReasoningContent = true;
+        lastTokenWasReasoning = false;
         onMessageEvent?.(payload);
         break;
       }
@@ -616,44 +626,11 @@ export async function fetchThreads(userId: string, getRequestHeaders?: RequestHe
 }
 
 export async function fetchThreadMessages(threadId: string, getRequestHeaders?: RequestHeadersProvider) {
-  const graphParams = new URLSearchParams();
-  graphParams.set('threadId', threadId);
-  graphParams.set('limit', '500');
-
-  try {
-    const graphRes = await fetch(apiUrl(`/v1/messages?${graphParams.toString()}`), {
-      headers: await withAuthHeaders({ Accept: 'application/json' }, getRequestHeaders),
-    });
-
-    if (graphRes.ok) {
-      const graphData = await graphRes.json();
-      if (Array.isArray(graphData)) {
-        return graphData as RestMessage[];
-      }
-      if (Array.isArray(graphData?.data)) {
-        return graphData.data as RestMessage[];
-      }
-      return [];
-    }
-
-    // Only fall back for endpoint absence or gateway errors. For other failures,
-    // preserve the real error instead of silently switching stores.
-    if (![404, 405, 501, 502, 503, 504].includes(graphRes.status)) {
-      const errorText = await graphRes.text().catch(() => graphRes.statusText);
-      throw new Error(errorText || `Failed to load graph thread messages (${graphRes.status})`);
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : '';
-    if (!/Failed to fetch/i.test(message)) {
-      throw error;
-    }
-  }
-
   const params = new URLSearchParams();
-  params.set('filters', JSON.stringify({ threadId }));
-  params.set('sort', 'createdAt:asc');
+  params.set('threadId', threadId);
+  params.set('limit', '500');
 
-  const res = await fetch(apiUrl(`/v1/rest/messages?${params.toString()}`), {
+  const res = await fetch(apiUrl(`/v1/messages?${params.toString()}`), {
     headers: await withAuthHeaders({ Accept: 'application/json' }, getRequestHeaders),
   });
 
@@ -662,12 +639,14 @@ export async function fetchThreadMessages(threadId: string, getRequestHeaders?: 
     throw new Error(errorText || `Failed to load thread messages (${res.status})`);
   }
 
-  const { data } = await res.json();
-  if (!Array.isArray(data)) {
-    return [];
+  const data = await res.json();
+  if (Array.isArray(data)) {
+    return data as RestMessage[];
   }
-
-  return data as RestMessage[];
+  if (Array.isArray(data?.data)) {
+    return data.data as RestMessage[];
+  }
+  return [];
 }
 
 export async function updateThread(
@@ -694,57 +673,17 @@ export async function deleteMessagesByThreadId(
   threadId: string,
   getRequestHeaders?: RequestHeadersProvider,
 ) {
-  const graphParams = new URLSearchParams();
-  graphParams.set('threadId', threadId);
-
-  try {
-    const graphRes = await fetch(apiUrl(`/v1/messages?${graphParams.toString()}`), {
-      method: 'DELETE',
-      headers: await withAuthHeaders({ Accept: 'application/json' }, getRequestHeaders),
-    });
-
-    if (!graphRes.ok && ![404, 405, 501].includes(graphRes.status)) {
-      const errorText = await graphRes.text().catch(() => graphRes.statusText);
-      throw new Error(errorText || `Failed to delete graph messages (${graphRes.status})`);
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : '';
-    if (!/Failed to fetch/i.test(message)) {
-      throw error;
-    }
-  }
-
-  // First fetch all messages for the thread (no field selection to avoid issues)
   const params = new URLSearchParams();
-  params.set('filters', JSON.stringify({ threadId }));
+  params.set('threadId', threadId);
 
-  const res = await fetch(apiUrl(`/v1/rest/messages?${params.toString()}`), {
+  const res = await fetch(apiUrl(`/v1/messages?${params.toString()}`), {
+    method: 'DELETE',
     headers: await withAuthHeaders({ Accept: 'application/json' }, getRequestHeaders),
   });
 
   if (!res.ok) {
-    // If we can't fetch messages, we can't delete them - but this might be ok if there are none
-    console.warn('Could not fetch messages for deletion:', res.status);
-    return;
-  }
-
-  const { data } = await res.json();
-  if (!Array.isArray(data) || data.length === 0) {
-    return; // No messages to delete
-  }
-
-  // Delete each message sequentially to avoid overwhelming the server
-  for (const msg of data) {
-    if (msg?.id) {
-      try {
-        await fetch(apiUrl(`/v1/rest/messages/${msg.id}`), {
-          method: 'DELETE',
-          headers: await withAuthHeaders({ Accept: 'application/json' }, getRequestHeaders),
-        });
-      } catch {
-        // Ignore individual message delete errors
-      }
-    }
+    const errorText = await res.text().catch(() => res.statusText);
+    throw new Error(errorText || `Failed to delete thread messages (${res.status})`);
   }
 }
 

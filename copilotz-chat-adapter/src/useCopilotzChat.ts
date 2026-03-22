@@ -274,6 +274,10 @@ const convertServerMessage = (msg: ServerMessage): ChatViewMessage => {
       ? '' // Do not render textual content for tool messages; attachments only
       : ((msg.content ?? '') || (hasToolCalls ? '' : ''));
 
+  const reasoning = typeof (msg as any).reasoning === 'string' && (msg as any).reasoning.length > 0
+    ? (msg as any).reasoning as string
+    : undefined;
+
   return {
     id: msg.id,
     role,
@@ -284,6 +288,7 @@ const convertServerMessage = (msg: ServerMessage): ChatViewMessage => {
     isComplete: true,
     metadata,
     toolCalls: hasToolCalls ? mappedToolCalls : undefined,
+    ...(reasoning ? { reasoning } : {}),
   };
 };
 
