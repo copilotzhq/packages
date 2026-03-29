@@ -46,7 +46,7 @@ export const defaultChatConfig: Required<ChatConfig> = {
     voiceSendNow: 'Send now',
     voiceCancel: 'Cancel',
     voiceDiscard: 'Delete recording',
-    voiceRecordAgain: 'Record again',
+    voiceRecordAgain: 'Continue recording',
     voiceAutoSendIn: 'Auto-sends in {{seconds}}s',
     voiceTranscriptPending: 'Transcript unavailable',
     voicePermissionDenied: 'Microphone access was denied.',

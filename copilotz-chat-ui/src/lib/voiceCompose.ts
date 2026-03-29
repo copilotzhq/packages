@@ -1,8 +1,11 @@
 import type {
+  AudioAttachment,
   CreateVoiceProvider,
   VoiceProvider,
   VoiceProviderHandlers,
   VoiceProviderOptions,
+  VoiceSegment,
+  VoiceTranscript,
 } from '../types/chatTypes';
 
 const AUDIO_MIME_TYPES = [
@@ -31,6 +34,157 @@ const blobToDataUrl = (blob: Blob): Promise<string> =>
     reader.onerror = () => reject(reader.error ?? new Error('Failed to read recorded audio'));
     reader.readAsDataURL(blob);
   });
+
+const joinTranscriptParts = (...parts: Array<string | undefined>): string | undefined => {
+  const value = parts
+    .map((part) => part?.trim())
+    .filter((part): part is string => Boolean(part && part.length > 0))
+    .join(' ')
+    .trim();
+
+  return value.length > 0 ? value : undefined;
+};
+
+const getAudioContextCtor = (): typeof AudioContext | undefined =>
+  globalThis.AudioContext ||
+  (globalThis as typeof globalThis & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+
+const getOfflineAudioContextCtor = (): typeof OfflineAudioContext | undefined =>
+  globalThis.OfflineAudioContext ||
+  (globalThis as typeof globalThis & { webkitOfflineAudioContext?: typeof OfflineAudioContext }).webkitOfflineAudioContext;
+
+const attachmentToArrayBuffer = async (attachment: AudioAttachment): Promise<ArrayBuffer> => {
+  const response = await fetch(attachment.dataUrl);
+  return response.arrayBuffer();
+};
+
+const decodeAudioAttachment = async (attachment: AudioAttachment): Promise<AudioBuffer> => {
+  const AudioContextCtor = getAudioContextCtor();
+  if (!AudioContextCtor) {
+    throw new Error('Audio decoding is not supported in this browser');
+  }
+
+  const audioContext = new AudioContextCtor();
+
+  try {
+    const arrayBuffer = await attachmentToArrayBuffer(attachment);
+    return await audioContext.decodeAudioData(arrayBuffer.slice(0));
+  } finally {
+    await closeAudioContext(audioContext);
+  }
+};
+
+const renderMergedBuffer = async (buffers: AudioBuffer[]): Promise<AudioBuffer> => {
+  const OfflineAudioContextCtor = getOfflineAudioContextCtor();
+  if (!OfflineAudioContextCtor) {
+    throw new Error('Offline audio rendering is not supported in this browser');
+  }
+
+  const numberOfChannels = Math.max(...buffers.map((buffer) => buffer.numberOfChannels));
+  const sampleRate = Math.max(...buffers.map((buffer) => buffer.sampleRate));
+  const totalFrames = Math.max(1, Math.ceil(buffers.reduce((sum, buffer) => sum + (buffer.duration * sampleRate), 0)));
+  const offlineContext = new OfflineAudioContextCtor(numberOfChannels, totalFrames, sampleRate);
+
+  let offsetSeconds = 0;
+  for (const buffer of buffers) {
+    const source = offlineContext.createBufferSource();
+    source.buffer = buffer;
+    source.connect(offlineContext.destination);
+    source.start(offsetSeconds);
+    offsetSeconds += buffer.duration;
+  }
+
+  return offlineContext.startRendering();
+};
+
+const encodeWav = (audioBuffer: AudioBuffer): Blob => {
+  const numberOfChannels = audioBuffer.numberOfChannels;
+  const sampleRate = audioBuffer.sampleRate;
+  const bitsPerSample = 16;
+  const bytesPerSample = bitsPerSample / 8;
+  const dataLength = audioBuffer.length * numberOfChannels * bytesPerSample;
+  const buffer = new ArrayBuffer(44 + dataLength);
+  const view = new DataView(buffer);
+
+  const writeString = (offset: number, value: string) => {
+    for (let index = 0; index < value.length; index += 1) {
+      view.setUint8(offset + index, value.charCodeAt(index));
+    }
+  };
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + dataLength, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numberOfChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * numberOfChannels * bytesPerSample, true);
+  view.setUint16(32, numberOfChannels * bytesPerSample, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeString(36, 'data');
+  view.setUint32(40, dataLength, true);
+
+  let offset = 44;
+  const channelData = Array.from({ length: numberOfChannels }, (_, index) => audioBuffer.getChannelData(index));
+
+  for (let sampleIndex = 0; sampleIndex < audioBuffer.length; sampleIndex += 1) {
+    for (let channelIndex = 0; channelIndex < numberOfChannels; channelIndex += 1) {
+      const sample = Math.max(-1, Math.min(1, channelData[channelIndex][sampleIndex]));
+      const pcmValue = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+      view.setInt16(offset, pcmValue, true);
+      offset += 2;
+    }
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' });
+};
+
+const resolveSegmentCount = (segment?: VoiceSegment | null): number => {
+  const candidate = segment?.metadata?.segmentCount;
+  return typeof candidate === 'number' && Number.isFinite(candidate) && candidate > 0 ? candidate : (segment ? 1 : 0);
+};
+
+export const mergeVoiceTranscripts = (
+  previous?: VoiceTranscript,
+  incoming?: VoiceTranscript,
+): VoiceTranscript => ({
+  final: joinTranscriptParts(previous?.final, incoming?.final),
+  partial: joinTranscriptParts(previous?.final, incoming?.partial),
+});
+
+export const appendVoiceSegments = async (
+  previous: VoiceSegment,
+  incoming: VoiceSegment,
+): Promise<VoiceSegment> => {
+  const [previousBuffer, incomingBuffer] = await Promise.all([
+    decodeAudioAttachment(previous.attachment),
+    decodeAudioAttachment(incoming.attachment),
+  ]);
+  const mergedBuffer = await renderMergedBuffer([previousBuffer, incomingBuffer]);
+  const mergedBlob = encodeWav(mergedBuffer);
+  const dataUrl = await blobToDataUrl(mergedBlob);
+  const segmentCount = resolveSegmentCount(previous) + resolveSegmentCount(incoming);
+
+  return {
+    attachment: {
+      kind: 'audio',
+      dataUrl,
+      mimeType: mergedBlob.type,
+      durationMs: Math.round(mergedBuffer.duration * 1000),
+      fileName: `voice-${new Date().toISOString().replace(/[:.]/g, '-')}.wav`,
+      size: mergedBlob.size,
+    },
+    transcript: mergeVoiceTranscripts(previous.transcript, incoming.transcript),
+    metadata: {
+      ...previous.metadata,
+      ...incoming.metadata,
+      segmentCount,
+      source: segmentCount > 1 ? 'merged' : (incoming.metadata?.source ?? previous.metadata?.source),
+    },
+  };
+};
 
 const stopStream = (stream: MediaStream | null) => {
   if (!stream) return;
@@ -183,7 +337,7 @@ export const createManualVoiceProvider: CreateVoiceProvider = async (
                 fileName: `voice-${new Date().toISOString().replace(/[:.]/g, '-')}.webm`,
                 size: blob.size,
               },
-              metadata: { source: 'manual' },
+              metadata: { source: 'manual', segmentCount: 1 },
             });
           } else {
             handlers.onStateChange?.('idle');

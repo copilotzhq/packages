@@ -10,7 +10,7 @@ import {
   VoiceTranscript,
 } from '../../types/chatTypes';
 import { createObjectUrlFromDataUrl } from '../../lib/utils';
-import { resolveVoiceProviderFactory } from '../../lib/voiceCompose';
+import { appendVoiceSegments, mergeVoiceTranscripts, resolveVoiceProviderFactory } from '../../lib/voiceCompose';
 import { Button } from '../ui/button';
 import { Textarea } from '../ui/textarea';
 import { Card, CardContent } from '../ui/card';
@@ -349,6 +349,7 @@ const resolveVoiceErrorMessage = (error: unknown, config?: ChatConfig): string =
 };
 
 const clearVoiceTranscript = (): VoiceTranscript => ({});
+const resolveVoiceSegmentDuration = (segment: VoiceSegment): number => segment.attachment.durationMs ?? 0;
 
 export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   value,
@@ -399,6 +400,9 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   const recordingInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const voiceProviderRef = useRef<VoiceProvider | null>(null);
+  const voiceDraftRef = useRef<VoiceSegment | null>(null);
+  const voiceAppendBaseRef = useRef<VoiceSegment | null>(null);
+  const voiceAppendBaseDurationRef = useRef(0);
 
   // Cleanup recording on unmount
   useEffect(() => {
@@ -415,6 +419,10 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
       }
     };
   }, []);
+
+  useEffect(() => {
+    voiceDraftRef.current = voiceDraft;
+  }, [voiceDraft]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -634,6 +642,9 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   const resetVoiceComposerState = useCallback((nextState: VoiceComposerState = 'idle') => {
     setVoiceState(nextState);
     setVoiceDraft(null);
+    voiceDraftRef.current = null;
+    voiceAppendBaseRef.current = null;
+    voiceAppendBaseDurationRef.current = 0;
     setVoiceTranscript(clearVoiceTranscript());
     setVoiceDurationMs(0);
     setVoiceAudioLevel(0);
@@ -651,23 +662,87 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
     const provider = await createProvider({
       onStateChange: setVoiceState,
       onAudioLevelChange: setVoiceAudioLevel,
-      onDurationChange: setVoiceDurationMs,
-      onTranscriptChange: setVoiceTranscript,
+      onDurationChange: (durationMs) => {
+        setVoiceDurationMs(voiceAppendBaseDurationRef.current + durationMs);
+      },
+      onTranscriptChange: (transcript) => {
+        const baseTranscript = voiceAppendBaseRef.current?.transcript;
+        setVoiceTranscript(
+          baseTranscript
+            ? mergeVoiceTranscripts(baseTranscript, transcript)
+            : transcript,
+        );
+      },
       onSegmentReady: (segment) => {
-        setVoiceDraft(segment);
-        setVoiceTranscript(segment.transcript ?? clearVoiceTranscript());
-        setVoiceDurationMs(segment.attachment.durationMs ?? 0);
-        setVoiceAudioLevel(0);
-        setVoiceCountdownMs(voiceAutoSendDelayMs);
-        setIsVoiceAutoSendActive(voiceAutoSendDelayMs > 0);
-        setVoiceError(null);
-        setVoiceState('review');
+        void (async () => {
+          const previousSegment = voiceAppendBaseRef.current;
+
+          try {
+            const nextSegment = previousSegment
+              ? await appendVoiceSegments(previousSegment, segment)
+              : segment;
+
+            voiceAppendBaseRef.current = null;
+            voiceAppendBaseDurationRef.current = 0;
+            voiceDraftRef.current = nextSegment;
+            setVoiceDraft(nextSegment);
+            setVoiceTranscript(nextSegment.transcript ?? clearVoiceTranscript());
+            setVoiceDurationMs(resolveVoiceSegmentDuration(nextSegment));
+            setVoiceAudioLevel(0);
+            setVoiceCountdownMs(voiceAutoSendDelayMs);
+            setIsVoiceAutoSendActive(voiceAutoSendDelayMs > 0);
+            setVoiceError(null);
+            setVoiceState('review');
+          } catch (error) {
+            const resolvedError = resolveVoiceErrorMessage(error, config);
+
+            voiceAppendBaseRef.current = null;
+            voiceAppendBaseDurationRef.current = 0;
+            setVoiceAudioLevel(0);
+            setVoiceCountdownMs(0);
+            setIsVoiceAutoSendActive(false);
+
+            if (previousSegment) {
+              voiceDraftRef.current = previousSegment;
+              setVoiceDraft(previousSegment);
+              setVoiceTranscript(previousSegment.transcript ?? clearVoiceTranscript());
+              setVoiceDurationMs(resolveVoiceSegmentDuration(previousSegment));
+              setVoiceError(resolvedError);
+              setVoiceState('review');
+              return;
+            }
+
+            voiceDraftRef.current = null;
+            setVoiceDraft(null);
+            setVoiceTranscript(clearVoiceTranscript());
+            setVoiceDurationMs(0);
+            setVoiceError(resolvedError);
+            setVoiceState('error');
+          }
+        })();
       },
       onError: (error) => {
+        const previousSegment = voiceAppendBaseRef.current;
+        voiceAppendBaseRef.current = null;
+        voiceAppendBaseDurationRef.current = 0;
         setVoiceError(resolveVoiceErrorMessage(error, config));
         setVoiceAudioLevel(0);
         setVoiceCountdownMs(0);
         setIsVoiceAutoSendActive(false);
+
+        if (previousSegment) {
+          voiceDraftRef.current = previousSegment;
+          setVoiceDraft(previousSegment);
+          setVoiceTranscript(previousSegment.transcript ?? clearVoiceTranscript());
+          setVoiceDurationMs(resolveVoiceSegmentDuration(previousSegment));
+          setVoiceState('review');
+          return;
+        }
+
+        voiceDraftRef.current = null;
+        setVoiceDraft(null);
+        setVoiceTranscript(clearVoiceTranscript());
+        setVoiceDurationMs(0);
         setVoiceState('error');
       },
     }, {
@@ -679,12 +754,15 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   }, [config, voiceAutoSendDelayMs, voiceMaxRecordingMs]);
 
   const closeVoiceComposer = useCallback(async () => {
+    voiceAppendBaseRef.current = null;
+    voiceAppendBaseDurationRef.current = 0;
     setIsVoiceComposerOpen(false);
     setVoiceError(null);
     setVoiceCountdownMs(0);
     setVoiceAudioLevel(0);
     setVoiceTranscript(clearVoiceTranscript());
     setVoiceDraft(null);
+    voiceDraftRef.current = null;
     setVoiceDurationMs(0);
     setVoiceState('idle');
 
@@ -693,25 +771,58 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
     }
   }, []);
 
-  const startVoiceCapture = useCallback(async () => {
+  const startVoiceCapture = useCallback(async (appendToDraft = false) => {
     if (disabled || isGenerating) {
       return;
     }
 
+    const previousDraft = appendToDraft ? voiceDraftRef.current : null;
+    const previousDurationMs = previousDraft ? resolveVoiceSegmentDuration(previousDraft) : 0;
+
     setIsVoiceComposerOpen(true);
     setVoiceError(null);
-    setVoiceDraft(null);
     setVoiceCountdownMs(0);
-    setVoiceTranscript(clearVoiceTranscript());
     setVoiceAudioLevel(0);
-    setVoiceDurationMs(0);
     setIsVoiceAutoSendActive(false);
+    voiceAppendBaseRef.current = previousDraft;
+    voiceAppendBaseDurationRef.current = previousDurationMs;
+
+    if (!previousDraft) {
+      setVoiceDraft(null);
+      voiceDraftRef.current = null;
+      setVoiceTranscript(clearVoiceTranscript());
+      setVoiceDurationMs(0);
+    } else {
+      setVoiceTranscript(previousDraft.transcript ?? clearVoiceTranscript());
+      setVoiceDurationMs(previousDurationMs);
+    }
 
     try {
       const provider = await ensureVoiceProvider();
       await provider.start();
     } catch (error) {
-      setVoiceError(resolveVoiceErrorMessage(error, config));
+      const resolvedError = resolveVoiceErrorMessage(error, config);
+      voiceAppendBaseRef.current = null;
+      voiceAppendBaseDurationRef.current = 0;
+      setVoiceAudioLevel(0);
+      setVoiceCountdownMs(0);
+      setIsVoiceAutoSendActive(false);
+
+      if (previousDraft) {
+        voiceDraftRef.current = previousDraft;
+        setVoiceDraft(previousDraft);
+        setVoiceTranscript(previousDraft.transcript ?? clearVoiceTranscript());
+        setVoiceDurationMs(previousDurationMs);
+        setVoiceError(resolvedError);
+        setVoiceState('review');
+        return;
+      }
+
+      voiceDraftRef.current = null;
+      setVoiceDraft(null);
+      setVoiceTranscript(clearVoiceTranscript());
+      setVoiceDurationMs(0);
+      setVoiceError(resolvedError);
       setVoiceState('error');
     }
   }, [disabled, isGenerating, ensureVoiceProvider, config]);
@@ -728,6 +839,8 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   }, [config]);
 
   const cancelVoiceCapture = useCallback(async () => {
+    voiceAppendBaseRef.current = null;
+    voiceAppendBaseDurationRef.current = 0;
     if (voiceProviderRef.current) {
       await voiceProviderRef.current.cancel();
     }
@@ -888,7 +1001,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                   void cancelVoiceCapture();
                 }}
                 onRecordAgain={() => {
-                  void startVoiceCapture();
+                  void startVoiceCapture(true);
                 }}
                 onSendNow={sendVoiceDraft}
                 onExit={() => {

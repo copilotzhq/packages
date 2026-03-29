@@ -254,7 +254,7 @@ export const VoiceComposer: React.FC<VoiceComposerProps> = ({
         </div>
       )}
 
-      {state === 'error' && errorMessage && (
+      {errorMessage && (
         <div className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
           {errorMessage}
         </div>

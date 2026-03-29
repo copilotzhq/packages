@@ -52,7 +52,7 @@ Add an opt-in voice composer to `@copilotz/chat-ui` that can replace the bottom 
 - Review starts an auto-send countdown.
 - `Send now` sends immediately.
 - `Cancel` pauses the auto-send countdown but keeps the draft visible.
-- Once auto-send is paused, a compact record-again icon lets the user restart from the review state.
+- Once auto-send is paused, a compact continue-recording icon lets the user append more audio onto the same draft.
 - Trash discards the draft and returns to idle voice compose.
 - After send:
   - if `voiceCompose.persistComposer` is `true`, stay in voice compose idle
@@ -79,6 +79,13 @@ The UI supports the full state superset below. The default provider only uses a 
 - `review`
 - `sending`
 - `error`
+
+### Draft Append Behavior
+
+- A voice draft may be composed from multiple captured segments.
+- In the default manual provider, tapping the continue-recording action from review appends the next captured segment to the existing draft instead of replacing it.
+- The review player, duration, transcript, and auto-send countdown all refresh against the merged draft.
+- Trash remains the explicit reset/start-over action.
 
 ### Future VAD/STT Provider Usage
 
