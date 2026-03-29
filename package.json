@@ -4,11 +4,18 @@
   "workspaces": [
     "copilotz-chat-ui",
     "copilotz-chat-adapter",
-    "copilotz-chat-voice-moonshine"
+    "copilotz-chat-voice-moonshine",
+    "copilotz-chat-voice-vad"
   ],
   "scripts": {
-    "build": "npm -w copilotz-chat-ui run build && npm -w copilotz-chat-adapter run build && npm -w copilotz-chat-voice-moonshine run build",
+    "changeset": "changeset",
+    "build": "npm -w copilotz-chat-ui run build && npm -w copilotz-chat-adapter run build && npm -w copilotz-chat-voice-moonshine run build && npm -w copilotz-chat-voice-vad run build",
     "build:css": "npm -w copilotz-chat-ui run build:css",
-    "dev": "npm -w copilotz-chat-ui run dev & npm -w copilotz-chat-adapter run dev & npm -w copilotz-chat-voice-moonshine run dev"
+    "dev": "npm -w copilotz-chat-ui run dev & npm -w copilotz-chat-adapter run dev & npm -w copilotz-chat-voice-moonshine run dev & npm -w copilotz-chat-voice-vad run dev",
+    "release": "changeset publish",
+    "version-packages": "changeset version"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.29.7"
   }
 }

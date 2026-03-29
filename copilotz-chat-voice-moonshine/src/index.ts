@@ -134,7 +134,9 @@ export const createMoonshineVoiceProvider = (
   let durationTimer: ReturnType<typeof setInterval> | null = null;
   let segmentStartedAt = 0;
   let isCancelling = false;
-  let didEmitSegment = false;
+  let shouldStayArmed = true;
+  let isFinalizingManualStop = false;
+  let ignoreCommittedSegments = false;
   let isSpeechActive = false;
   let currentDurationMs = 0;
 
@@ -154,8 +156,7 @@ export const createMoonshineVoiceProvider = (
     mediaStream = null;
   };
 
-  const resetSegmentFlags = () => {
-    didEmitSegment = false;
+  const resetLiveState = () => {
     isSpeechActive = false;
     currentDurationMs = 0;
     segmentStartedAt = 0;
@@ -218,21 +219,27 @@ export const createMoonshineVoiceProvider = (
     return moonshineModule;
   };
 
-  const cleanupAfterSegment = () => {
+  const cleanupSegmentCapture = () => {
+    clearDurationTimer();
+    resetLiveState();
+  };
+
+  const stopSession = async () => {
     clearDurationTimer();
     handlers.onAudioLevelChange?.(0);
-    isSpeechActive = false;
+    resetLiveState();
     releaseStream();
     transcriber?.stop();
+    await stopRecorder();
   };
 
   const emitSegment = async (attachment: AudioAttachment, transcriptText?: string) => {
-    if (didEmitSegment || isCancelling) {
+    if (isCancelling) {
       return;
     }
 
-    didEmitSegment = true;
-    cleanupAfterSegment();
+    const shouldResumeListening = shouldStayArmed && !isSpeechActive;
+    cleanupSegmentCapture();
     handlers.onDurationChange?.(attachment.durationMs ?? currentDurationMs);
     handlers.onTranscriptChange?.(transcriptText ? { final: transcriptText } : {});
     handlers.onSegmentReady?.({
@@ -244,6 +251,10 @@ export const createMoonshineVoiceProvider = (
         segmentCount: 1,
       },
     });
+
+    if (shouldResumeListening) {
+      handlers.onStateChange?.('waiting_for_speech');
+    }
   };
 
   const callbacks: import('@moonshine-ai/moonshine-js').TranscriberCallbacks = {
@@ -251,18 +262,18 @@ export const createMoonshineVoiceProvider = (
       handlers.onStateChange?.('preparing');
     },
     onModelLoaded() {
-      if (!didEmitSegment && !isCancelling) {
+      if (!isCancelling && !isFinalizingManualStop) {
         handlers.onStateChange?.('waiting_for_speech');
       }
     },
     onTranscribeStarted() {
-      if (!didEmitSegment && !isCancelling) {
+      if (!isCancelling && !isFinalizingManualStop) {
         handlers.onStateChange?.('waiting_for_speech');
       }
     },
     onTranscribeStopped() {
       handlers.onAudioLevelChange?.(0);
-      if (!didEmitSegment && !isCancelling) {
+      if (!isCancelling && !isFinalizingManualStop) {
         handlers.onStateChange?.('idle');
       }
     },
@@ -272,10 +283,11 @@ export const createMoonshineVoiceProvider = (
       }
     },
     onSpeechStart() {
-      if (isCancelling || didEmitSegment) {
+      if (isCancelling || isFinalizingManualStop) {
         return;
       }
 
+      ignoreCommittedSegments = false;
       isSpeechActive = true;
       currentDurationMs = 0;
       segmentStartedAt = Date.now();
@@ -290,7 +302,7 @@ export const createMoonshineVoiceProvider = (
       }, 200);
     },
     onSpeechEnd() {
-      if (isCancelling || didEmitSegment) {
+      if (isCancelling || isFinalizingManualStop) {
         return;
       }
 
@@ -300,7 +312,7 @@ export const createMoonshineVoiceProvider = (
       void stopRecorder();
     },
     onTranscriptionCommitted(text, buffer) {
-      if (isCancelling || didEmitSegment) {
+      if (isCancelling || ignoreCommittedSegments || isSpeechActive) {
         return;
       }
 
@@ -330,7 +342,10 @@ export const createMoonshineVoiceProvider = (
       }
 
       isCancelling = false;
-      resetSegmentFlags();
+      shouldStayArmed = true;
+      isFinalizingManualStop = false;
+      ignoreCommittedSegments = false;
+      resetLiveState();
       handlers.onTranscriptChange?.({});
       handlers.onDurationChange?.(0);
       handlers.onStateChange?.('preparing');
@@ -361,10 +376,14 @@ export const createMoonshineVoiceProvider = (
       await transcriber.start();
     },
     stop: async () => {
-      if (isCancelling || didEmitSegment) {
+      if (isCancelling) {
         return;
       }
 
+      shouldStayArmed = false;
+      const wasSpeechActive = isSpeechActive;
+      ignoreCommittedSegments = wasSpeechActive;
+      isFinalizingManualStop = wasSpeechActive;
       handlers.onStateChange?.('finishing');
       clearDurationTimer();
       handlers.onAudioLevelChange?.(0);
@@ -373,7 +392,9 @@ export const createMoonshineVoiceProvider = (
       releaseStream();
 
       const blob = await stopRecorder();
-      if (isCancelling || didEmitSegment || !blob) {
+      isFinalizingManualStop = false;
+
+      if (isCancelling || !wasSpeechActive || !blob) {
         return;
       }
 
@@ -381,24 +402,20 @@ export const createMoonshineVoiceProvider = (
     },
     cancel: async () => {
       isCancelling = true;
-      clearDurationTimer();
-      handlers.onAudioLevelChange?.(0);
-      transcriber?.stop();
-      releaseStream();
-      await stopRecorder();
+      shouldStayArmed = false;
+      ignoreCommittedSegments = true;
+      await stopSession();
       handlers.onStateChange?.('idle');
-      resetSegmentFlags();
+      resetLiveState();
       isCancelling = false;
     },
     destroy: async () => {
       isCancelling = true;
-      clearDurationTimer();
-      handlers.onAudioLevelChange?.(0);
-      transcriber?.stop();
-      releaseStream();
-      await stopRecorder();
+      shouldStayArmed = false;
+      ignoreCommittedSegments = true;
+      await stopSession();
       handlers.onStateChange?.('idle');
-      resetSegmentFlags();
+      resetLiveState();
     },
   };
 };

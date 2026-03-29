@@ -110,47 +110,56 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     runErrorInterceptor,
   });
 
-  const chatCallbacks: ChatCallbacks = useMemo(() => ({
-    onSendMessage: (content, attachments) => {
-      void sendMessage(content, attachments);
-      userCallbacks?.onSendMessage?.(content, attachments);
-    },
-    onStopGeneration: () => {
-      stopGeneration();
-      userCallbacks?.onStopGeneration?.();
-    },
-    onCreateThread: (title) => {
-      createThread(title);
-      userCallbacks?.onCreateThread?.(title);
-    },
-    onSelectThread: (threadId) => {
-      void selectThread(threadId);
-      userCallbacks?.onSelectThread?.(threadId);
-    },
-    onRenameThread: (threadId, newTitle) => {
-      void renameThread(threadId, newTitle);
-      userCallbacks?.onRenameThread?.(threadId, newTitle);
-    },
-    onArchiveThread: (threadId) => {
-      void archiveThread(threadId);
-      userCallbacks?.onArchiveThread?.(threadId);
-    },
-    onDeleteThread: (threadId) => {
-      void deleteThread(threadId);
-      userCallbacks?.onDeleteThread?.(threadId);
-    },
-    onCopyMessage: async (messageId, content) => {
-      try {
-        await navigator.clipboard.writeText(content);
-        userCallbacks?.onCopyMessage?.(messageId, content);
-      } catch (error) {
-        console.error('Failed to copy message', error);
-      }
-    },
-    onLogout,
-    onViewProfile,
-    ...userCallbacks,
-  }), [sendMessage, stopGeneration, createThread, selectThread, renameThread, archiveThread, deleteThread, userCallbacks, onLogout, onViewProfile]);
+  const chatCallbacks: ChatCallbacks = useMemo(() => {
+    const {
+      onSendMessage: _1, onStopGeneration: _2, onCreateThread: _3,
+      onSelectThread: _4, onRenameThread: _5, onArchiveThread: _6,
+      onDeleteThread: _7, onCopyMessage: _8,
+      ...restUserCallbacks
+    } = userCallbacks || {};
+
+    return {
+      ...restUserCallbacks,
+      onSendMessage: (content: string, attachments?: any[]) => {
+        void sendMessage(content, attachments);
+        userCallbacks?.onSendMessage?.(content, attachments);
+      },
+      onStopGeneration: () => {
+        stopGeneration();
+        userCallbacks?.onStopGeneration?.();
+      },
+      onCreateThread: (title?: string) => {
+        createThread(title);
+        userCallbacks?.onCreateThread?.(title);
+      },
+      onSelectThread: (threadId: string) => {
+        void selectThread(threadId);
+        userCallbacks?.onSelectThread?.(threadId);
+      },
+      onRenameThread: (threadId: string, newTitle: string) => {
+        void renameThread(threadId, newTitle);
+        userCallbacks?.onRenameThread?.(threadId, newTitle);
+      },
+      onArchiveThread: (threadId: string) => {
+        void archiveThread(threadId);
+        userCallbacks?.onArchiveThread?.(threadId);
+      },
+      onDeleteThread: (threadId: string) => {
+        void deleteThread(threadId);
+        userCallbacks?.onDeleteThread?.(threadId);
+      },
+      onCopyMessage: async (messageId: string, content: string) => {
+        try {
+          await navigator.clipboard.writeText(content);
+          userCallbacks?.onCopyMessage?.(messageId, content);
+        } catch (error) {
+          console.error('Failed to copy message', error);
+        }
+      },
+      onLogout,
+      onViewProfile,
+    };
+  }, [sendMessage, stopGeneration, createThread, selectThread, renameThread, archiveThread, deleteThread, userCallbacks, onLogout, onViewProfile]);
 
   const mergedConfig: ChatConfig = useMemo(() => {
     const base = userConfig || {};

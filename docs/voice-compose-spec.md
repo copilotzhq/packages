@@ -227,7 +227,12 @@ Examples:
 - Server-assisted provider: local capture with remote transcript
 
 Optional shared provider packages can live alongside `chat-ui` without becoming core dependencies.
-The first extracted package is `@copilotz/chat-voice-moonshine`.
+Current extracted packages:
+
+- `@copilotz/chat-voice-moonshine`
+- `@copilotz/chat-voice-vad`
+
+For `reviewMode: "armed"`, smart providers should keep the capture session alive after each committed segment and emit additional `onSegmentReady` events for follow-up speech so `chat-ui` can append them into the same draft.
 
 The shared packages should not ship those dependencies by default. Projects should lazy-load them inside their provider factory.
 
