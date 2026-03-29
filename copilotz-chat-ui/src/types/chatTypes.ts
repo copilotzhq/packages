@@ -150,15 +150,18 @@ export interface ChatConfig {
     voiceEnter?: string;
     voiceExit?: string;
     voiceTitle?: string;
+    voiceIdle?: string;
     voicePreparing?: string;
     voiceWaiting?: string;
     voiceListening?: string;
     voiceFinishing?: string;
     voiceReview?: string;
+    voiceSending?: string;
     voiceStart?: string;
     voiceStop?: string;
     voiceSendNow?: string;
     voiceCancel?: string;
+    voiceDiscard?: string;
     voiceRecordAgain?: string;
     voiceAutoSendIn?: string;
     voiceTranscriptPending?: string;
@@ -227,6 +230,7 @@ export interface ChatConfig {
   };
   voiceCompose?: {
     enabled?: boolean;
+    defaultMode?: 'text' | 'voice';
     autoSendDelayMs?: number;
     persistComposer?: boolean;
     showTranscriptPreview?: boolean;

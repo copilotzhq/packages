@@ -178,7 +178,7 @@ const AttachmentPreview: React.FC<{
           <div className="relative">
             <img
               src={attachment.dataUrl}
-              alt={attachment.fileName || 'Anexo'}
+              alt={attachment.fileName || 'Attachment'}
               className="w-full h-20 object-cover rounded"
             />
             <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity rounded flex items-center justify-center">
@@ -230,7 +230,7 @@ const AttachmentPreview: React.FC<{
             </Button>
             <div className="flex-1">
               <p className="text-xs font-medium">
-                {attachment.fileName || 'Áudio'}
+                {attachment.fileName || 'Audio'}
               </p>
               <p className="text-xs text-muted-foreground">
                 {formatDuration(attachment.durationMs)}
@@ -306,7 +306,7 @@ const AudioRecorder: React.FC<{
           <div className="flex items-center gap-2">
             <div className="h-3 w-3 bg-red-500 rounded-full animate-pulse" />
             <span className="text-sm font-medium text-red-700 dark:text-red-300">
-              Gravando
+              {config?.labels?.voiceListening || 'Recording'}
             </span>
           </div>
           <Badge variant="outline" className="text-xs">
@@ -319,7 +319,7 @@ const AudioRecorder: React.FC<{
               onClick={onCancel}
             >
               <X className="h-3 w-3 mr-1" />
-              Cancelar
+              {config?.labels?.cancel || 'Cancel'}
             </Button>
             <Button
               variant="default"
@@ -327,7 +327,7 @@ const AudioRecorder: React.FC<{
               onClick={onStopRecording}
             >
               <Square className="h-3 w-3 mr-1" />
-              Parar
+              {config?.labels?.voiceStop || 'Stop'}
             </Button>
           </div>
         </div>
@@ -356,7 +356,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   onSubmit,
   attachments,
   onAttachmentsChange,
-  placeholder = 'Digite sua mensagem...',
+  placeholder = 'Type your message...',
   disabled = false,
   isGenerating = false,
   onStopGeneration,
@@ -368,17 +368,28 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   className = '',
   config,
 }: ChatInputProps) {
+  const voiceComposeEnabled = config?.voiceCompose?.enabled === true;
+  const voiceDefaultMode = config?.voiceCompose?.defaultMode ?? 'text';
+  const voiceAutoSendDelayMs = config?.voiceCompose?.autoSendDelayMs ?? 5000;
+  const voicePersistComposer = config?.voiceCompose?.persistComposer ?? true;
+  const voiceShowTranscriptPreview = config?.voiceCompose?.showTranscriptPreview ?? true;
+  const voiceTranscriptMode = config?.voiceCompose?.transcriptMode ?? 'final-only';
+  const voiceMaxRecordingMs = config?.voiceCompose?.maxRecordingMs;
+
   const [isRecording, setIsRecording] = useState(false);
   const { setContext } = useChatUserContext();
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [uploadProgress, setUploadProgress] = useState<Map<string, FileUploadProgress>>(new Map());
-  const [isVoiceComposerOpen, setIsVoiceComposerOpen] = useState(false);
+  const [isVoiceComposerOpen, setIsVoiceComposerOpen] = useState(
+    () => voiceComposeEnabled && voiceDefaultMode === 'voice',
+  );
   const [voiceState, setVoiceState] = useState<VoiceComposerState>('idle');
   const [voiceDraft, setVoiceDraft] = useState<VoiceSegment | null>(null);
   const [voiceTranscript, setVoiceTranscript] = useState<VoiceTranscript>(clearVoiceTranscript);
   const [voiceDurationMs, setVoiceDurationMs] = useState(0);
   const [voiceAudioLevel, setVoiceAudioLevel] = useState(0);
   const [voiceCountdownMs, setVoiceCountdownMs] = useState(0);
+  const [isVoiceAutoSendActive, setIsVoiceAutoSendActive] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -388,13 +399,6 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   const recordingInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const voiceProviderRef = useRef<VoiceProvider | null>(null);
-
-  const voiceComposeEnabled = config?.voiceCompose?.enabled === true;
-  const voiceAutoSendDelayMs = config?.voiceCompose?.autoSendDelayMs ?? 5000;
-  const voicePersistComposer = config?.voiceCompose?.persistComposer ?? true;
-  const voiceShowTranscriptPreview = config?.voiceCompose?.showTranscriptPreview ?? true;
-  const voiceTranscriptMode = config?.voiceCompose?.transcriptMode ?? 'final-only';
-  const voiceMaxRecordingMs = config?.voiceCompose?.maxRecordingMs;
 
   // Cleanup recording on unmount
   useEffect(() => {
@@ -430,7 +434,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
 
   const processFile = async (file: File): Promise<MediaAttachment | null> => {
     if (file.size > maxFileSize) {
-      alert(`Arquivo muito grande. Máximo permitido: ${Math.round(maxFileSize / 1024 / 1024)}MB`);
+      alert(`File too large. Max allowed: ${Math.round(maxFileSize / 1024 / 1024)}MB`);
       return null;
     }
 
@@ -503,7 +507,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
         newMap.delete(fileId);
         return newMap;
       });
-      alert('Erro ao processar arquivo');
+      alert('Failed to process file');
       return null;
     }
   };
@@ -598,7 +602,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
 
     } catch (error) {
       console.error('Error starting recording:', error);
-      alert('Não foi possível acessar o microfone');
+      alert(config?.labels?.voicePermissionDenied || 'Microphone access was denied.');
     }
   };
 
@@ -634,6 +638,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
     setVoiceDurationMs(0);
     setVoiceAudioLevel(0);
     setVoiceCountdownMs(0);
+    setIsVoiceAutoSendActive(false);
     setVoiceError(null);
   }, []);
 
@@ -654,6 +659,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
         setVoiceDurationMs(segment.attachment.durationMs ?? 0);
         setVoiceAudioLevel(0);
         setVoiceCountdownMs(voiceAutoSendDelayMs);
+        setIsVoiceAutoSendActive(voiceAutoSendDelayMs > 0);
         setVoiceError(null);
         setVoiceState('review');
       },
@@ -661,6 +667,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
         setVoiceError(resolveVoiceErrorMessage(error, config));
         setVoiceAudioLevel(0);
         setVoiceCountdownMs(0);
+        setIsVoiceAutoSendActive(false);
         setVoiceState('error');
       },
     }, {
@@ -698,6 +705,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
     setVoiceTranscript(clearVoiceTranscript());
     setVoiceAudioLevel(0);
     setVoiceDurationMs(0);
+    setIsVoiceAutoSendActive(false);
 
     try {
       const provider = await ensureVoiceProvider();
@@ -744,6 +752,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
 
     setVoiceState('sending');
     setVoiceCountdownMs(0);
+    setIsVoiceAutoSendActive(false);
     onSubmit('', [...attachments, voiceDraft.attachment]);
     onChange('');
     onAttachmentsChange([]);
@@ -759,13 +768,18 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
     finalizeVoiceComposerAfterSend,
   ]);
 
-  const recordVoiceAgain = useCallback(async () => {
-    resetVoiceComposerState('idle');
-    await startVoiceCapture();
-  }, [resetVoiceComposerState, startVoiceCapture]);
+  const cancelVoiceAutoSend = useCallback(() => {
+    setVoiceCountdownMs(0);
+    setIsVoiceAutoSendActive(false);
+  }, []);
 
   useEffect(() => {
-    if (voiceState !== 'review' || !voiceDraft || voiceAutoSendDelayMs <= 0) {
+    if (
+      voiceState !== 'review' ||
+      !voiceDraft ||
+      voiceAutoSendDelayMs <= 0 ||
+      !isVoiceAutoSendActive
+    ) {
       return;
     }
 
@@ -783,7 +797,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
     }, 100);
 
     return () => clearInterval(timer);
-  }, [voiceState, voiceDraft, voiceAutoSendDelayMs, sendVoiceDraft]);
+  }, [voiceState, voiceDraft, voiceAutoSendDelayMs, isVoiceAutoSendActive, sendVoiceDraft]);
 
   const removeAttachment = (index: number) => {
     const newAttachments = attachments.filter((_, i) => i !== index);
@@ -852,10 +866,12 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                 transcript={voiceTranscript}
                 transcriptMode={voiceTranscriptMode}
                 showTranscriptPreview={voiceShowTranscriptPreview}
+                attachment={voiceDraft?.attachment ?? null}
                 durationMs={voiceDurationMs}
                 audioLevel={voiceAudioLevel}
                 countdownMs={voiceCountdownMs}
                 autoSendDelayMs={voiceAutoSendDelayMs}
+                isAutoSendActive={isVoiceAutoSendActive}
                 errorMessage={voiceError}
                 disabled={disabled || isGenerating}
                 labels={config?.labels}
@@ -865,13 +881,16 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                 onStop={() => {
                   void stopVoiceCapture();
                 }}
-                onCancel={() => {
+                onCancelAutoSend={() => {
+                  cancelVoiceAutoSend();
+                }}
+                onDiscard={() => {
                   void cancelVoiceCapture();
                 }}
-                onSendNow={sendVoiceDraft}
                 onRecordAgain={() => {
-                  void recordVoiceAgain();
+                  void startVoiceCapture();
                 }}
+                onSendNow={sendVoiceDraft}
                 onExit={() => {
                   void closeVoiceComposer();
                 }}

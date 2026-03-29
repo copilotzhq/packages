@@ -39,16 +39,21 @@ Add an opt-in voice composer to `@copilotz/chat-ui` that can replace the bottom 
 
 - If `voiceCompose.enabled` is `false`, the current inline recorder behavior remains unchanged.
 - If `voiceCompose.enabled` is `true`, the mic button opens the voice composer and immediately attempts to start the provider.
+- `voiceCompose.defaultMode` controls whether the composer initially opens in text or voice state.
 
 ### Voice Composer Behavior
 
 - The text composer is replaced by a voice panel.
 - The voice panel stays open until the user clicks the keyboard/back action.
-- After a capture finishes, the panel enters review state.
+- In the default manual provider:
+  - the central orb starts recording
+  - the same orb stops recording
+- After a capture finishes, the panel enters a compact review state.
 - Review starts an auto-send countdown.
 - `Send now` sends immediately.
-- `Cancel` discards the draft and returns to idle voice compose.
-- `Record again` discards the draft and starts a fresh capture.
+- `Cancel` pauses the auto-send countdown but keeps the draft visible.
+- Once auto-send is paused, a compact record-again icon lets the user restart from the review state.
+- Trash discards the draft and returns to idle voice compose.
 - After send:
   - if `voiceCompose.persistComposer` is `true`, stay in voice compose idle
   - otherwise return to text compose
@@ -91,15 +96,18 @@ Add voice-specific labels:
 - `voiceEnter`
 - `voiceExit`
 - `voiceTitle`
+- `voiceIdle`
 - `voicePreparing`
 - `voiceWaiting`
 - `voiceListening`
 - `voiceFinishing`
 - `voiceReview`
+- `voiceSending`
 - `voiceStart`
 - `voiceStop`
 - `voiceSendNow`
 - `voiceCancel`
+- `voiceDiscard`
 - `voiceRecordAgain`
 - `voiceAutoSendIn`
 - `voiceTranscriptPending`
@@ -113,6 +121,7 @@ Add voice-specific labels:
 ```ts
 voiceCompose?: {
   enabled?: boolean;
+  defaultMode?: "text" | "voice";
   autoSendDelayMs?: number;
   persistComposer?: boolean;
   showTranscriptPreview?: boolean;

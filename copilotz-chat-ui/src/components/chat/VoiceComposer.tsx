@@ -1,27 +1,30 @@
 import React from 'react';
-import type { ChatConfig, VoiceComposerState, VoiceTranscript, VoiceTranscriptMode } from '../../types/chatTypes';
+import type { AudioAttachment, ChatConfig, VoiceComposerState, VoiceTranscript, VoiceTranscriptMode } from '../../types/chatTypes';
 import { Button } from '../ui/button';
 import { Progress } from '../ui/progress';
 import { Badge } from '../ui/badge';
-import { Keyboard, Loader2, Mic, RotateCcw, Send, Square, X } from 'lucide-react';
+import { Keyboard, Loader2, Mic, Send, Square, Trash2, X } from 'lucide-react';
 
 interface VoiceComposerProps {
   state: VoiceComposerState;
   transcript?: VoiceTranscript;
   transcriptMode: VoiceTranscriptMode;
   showTranscriptPreview: boolean;
+  attachment?: AudioAttachment | null;
   durationMs: number;
   audioLevel: number;
   countdownMs: number;
   autoSendDelayMs: number;
+  isAutoSendActive: boolean;
   errorMessage?: string | null;
   disabled?: boolean;
   labels?: ChatConfig['labels'];
   onStart: () => void;
   onStop: () => void;
-  onCancel: () => void;
-  onSendNow: () => void;
+  onCancelAutoSend: () => void;
+  onDiscard: () => void;
   onRecordAgain: () => void;
+  onSendNow: () => void;
   onExit: () => void;
 }
 
@@ -57,12 +60,12 @@ const resolveStateLabel = (state: VoiceComposerState, labels?: ChatConfig['label
     case 'review':
       return labels?.voiceReview || 'Ready to send';
     case 'sending':
-      return 'Sending...';
+      return labels?.voiceSending || 'Sending...';
     case 'error':
       return errorMessage || labels?.voiceCaptureError || 'Unable to capture audio.';
     case 'idle':
     default:
-      return labels?.voiceTitle || 'Voice input';
+      return labels?.voiceIdle || 'Tap the mic to record';
   }
 };
 
@@ -86,18 +89,21 @@ export const VoiceComposer: React.FC<VoiceComposerProps> = ({
   transcript,
   transcriptMode,
   showTranscriptPreview,
+  attachment,
   durationMs,
   audioLevel,
   countdownMs,
   autoSendDelayMs,
+  isAutoSendActive,
   errorMessage,
   disabled = false,
   labels,
   onStart,
   onStop,
-  onCancel,
-  onSendNow,
+  onCancelAutoSend,
+  onDiscard,
   onRecordAgain,
+  onSendNow,
   onExit,
 }) => {
   const transcriptText = resolveTranscriptText(transcript, transcriptMode);
@@ -107,123 +113,152 @@ export const VoiceComposer: React.FC<VoiceComposerProps> = ({
     : 100;
   const isBusy = state === 'preparing' || state === 'finishing' || state === 'sending';
   const isCapturing = state === 'waiting_for_speech' || state === 'listening';
+  const isReviewing = state === 'review';
   const levelValue = isCapturing || state === 'preparing' || state === 'finishing'
     ? Math.max(8, Math.round(audioLevel * 100))
     : 0;
+  const headerLabel = state === 'error'
+    ? (labels?.voiceCaptureError || 'Unable to capture audio.')
+    : resolveStateLabel(state, labels, errorMessage);
 
   return (
-    <div className="w-full md:min-w-3xl max-w-3xl rounded-xl border bg-background p-4 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Badge variant="outline">{labels?.voiceTitle || 'Voice input'}</Badge>
-          <span className="text-sm text-muted-foreground">
-            {resolveStateLabel(state, labels, errorMessage)}
+    <div className="w-full max-w-3xl rounded-xl border bg-background p-3 shadow-sm sm:p-4 md:min-w-3xl">
+      <div className="flex items-center justify-between gap-2 sm:gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <Badge variant="outline">{labels?.voiceTitle || 'Voice'}</Badge>
+          <span className="truncate text-xs sm:text-sm text-muted-foreground">
+            {headerLabel}
           </span>
         </div>
         <Button
           type="button"
           variant="ghost"
           size="sm"
+          className="shrink-0 px-2 sm:px-3"
           onClick={onExit}
           disabled={disabled || isBusy}
         >
           <Keyboard className="h-4 w-4" />
-          {labels?.voiceExit || 'Use keyboard'}
+          <span className="hidden sm:inline">{labels?.voiceExit || 'Use keyboard'}</span>
         </Button>
       </div>
 
-      <div className="mt-4 flex flex-col items-center gap-4 rounded-xl border border-dashed border-primary/30 bg-primary/5 px-4 py-6 text-center">
-        <div className="flex h-20 w-20 items-center justify-center rounded-full bg-primary/10">
-          {isBusy ? (
-            <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          ) : isCapturing ? (
-            <Square className="h-8 w-8 text-primary" />
-          ) : (
-            <Mic className="h-8 w-8 text-primary" />
+      {!isReviewing ? (
+        <div className="mt-3 rounded-xl border border-dashed border-primary/30 bg-primary/5 px-3 py-3 text-center sm:px-4 sm:py-4">
+          <div className="mx-auto flex w-full max-w-sm flex-col items-center gap-3">
+            <Button
+              type="button"
+              size="icon"
+              variant={isCapturing ? 'destructive' : 'outline'}
+              className={`h-16 w-16 rounded-full sm:h-20 sm:w-20 ${isCapturing ? 'bg-red-500 hover:bg-red-600 text-white border-red-500' : 'border-red-200 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700'}`}
+              onClick={isCapturing ? onStop : onStart}
+              disabled={disabled || isBusy}
+            >
+              {isBusy ? (
+                <Loader2 className="h-7 w-7 animate-spin" />
+              ) : isCapturing ? (
+                <Square className="h-7 w-7" />
+              ) : (
+                <Mic className="h-7 w-7" />
+              )}
+            </Button>
+
+            <div className="w-full space-y-2">
+              <Progress value={levelValue} className="h-2" />
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>{formatDuration(durationMs)}</span>
+                <span>{isCapturing ? (labels?.voiceStop || 'Stop recording') : (labels?.voiceStart || 'Start recording')}</span>
+              </div>
+            </div>
+
+            {showTranscriptPreview && transcriptMode !== 'none' && transcriptText && (
+              <div className="w-full rounded-lg border bg-background px-3 py-2 text-left text-sm">
+                {transcriptText}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="mt-3 rounded-xl border bg-muted/20 p-3 sm:p-4">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-foreground">
+                {labels?.voiceReview || 'Ready to send'}
+              </div>
+              <div className="text-xs text-muted-foreground">
+                {formatDuration(durationMs)}
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+              onClick={onDiscard}
+              disabled={disabled}
+              aria-label={labels?.voiceDiscard || 'Delete recording'}
+              title={labels?.voiceDiscard || 'Delete recording'}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
+
+          {attachment && (
+            <div className="mt-3 rounded-lg bg-background p-2">
+              <audio controls preload="metadata" className="w-full">
+                <source src={attachment.dataUrl} type={attachment.mimeType} />
+              </audio>
+            </div>
           )}
-        </div>
 
-        <div className="w-full max-w-md space-y-2">
-          <Progress value={levelValue} className="h-2" />
-          <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span>{formatDuration(durationMs)}</span>
-            <span>{resolveStateLabel(state, labels, errorMessage)}</span>
-          </div>
-        </div>
+          {showTranscriptPreview && transcriptMode !== 'none' && transcriptText && (
+            <div className="mt-3 rounded-lg border bg-background px-3 py-2 text-left text-sm">
+              {transcriptText}
+            </div>
+          )}
 
-        {showTranscriptPreview && transcriptMode !== 'none' && transcriptText && (
-          <div className="w-full max-w-md rounded-lg border bg-background px-3 py-2 text-left text-sm">
-            {transcriptText}
-          </div>
-        )}
-      </div>
+          {isAutoSendActive && autoSendDelayMs > 0 && (
+            <div className="mt-3 space-y-2">
+              <Progress value={countdownValue} className="h-2" />
+              <div className="text-center text-xs text-muted-foreground">
+                {interpolateSeconds(labels?.voiceAutoSendIn, countdownSeconds)}
+              </div>
+            </div>
+          )}
 
-      {state === 'review' && autoSendDelayMs > 0 && (
-        <div className="mt-4 space-y-2">
-          <Progress value={countdownValue} className="h-2" />
-          <div className="text-center text-xs text-muted-foreground">
-            {interpolateSeconds(labels?.voiceAutoSendIn, countdownSeconds)}
+          <div className="mt-3 flex items-center justify-end gap-2">
+            {isAutoSendActive && (
+              <Button type="button" variant="ghost" size="sm" onClick={onCancelAutoSend} disabled={disabled}>
+                <X className="h-4 w-4" />
+                {labels?.voiceCancel || 'Cancel'}
+              </Button>
+            )}
+            {!isAutoSendActive && (
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={onRecordAgain}
+                disabled={disabled}
+                aria-label={labels?.voiceRecordAgain || 'Record again'}
+                title={labels?.voiceRecordAgain || 'Record again'}
+              >
+                <Mic className="h-4 w-4" />
+              </Button>
+            )}
+            <Button type="button" size="sm" onClick={onSendNow} disabled={disabled}>
+              <Send className="h-4 w-4" />
+              {labels?.voiceSendNow || 'Send now'}
+            </Button>
           </div>
         </div>
       )}
 
       {state === 'error' && errorMessage && (
-        <div className="mt-4 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+        <div className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
           {errorMessage}
         </div>
       )}
-
-      <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-        {state === 'idle' && (
-          <Button type="button" onClick={onStart} disabled={disabled}>
-            <Mic className="h-4 w-4" />
-            {labels?.voiceStart || 'Start recording'}
-          </Button>
-        )}
-
-        {isCapturing && (
-          <>
-            <Button type="button" onClick={onStop} disabled={disabled}>
-              <Square className="h-4 w-4" />
-              {labels?.voiceStop || 'Stop recording'}
-            </Button>
-            <Button type="button" variant="outline" onClick={onCancel} disabled={disabled}>
-              <X className="h-4 w-4" />
-              {labels?.voiceCancel || 'Cancel'}
-            </Button>
-          </>
-        )}
-
-        {state === 'review' && (
-          <>
-            <Button type="button" variant="outline" onClick={onCancel} disabled={disabled}>
-              <X className="h-4 w-4" />
-              {labels?.voiceCancel || 'Cancel'}
-            </Button>
-            <Button type="button" variant="outline" onClick={onRecordAgain} disabled={disabled}>
-              <RotateCcw className="h-4 w-4" />
-              {labels?.voiceRecordAgain || 'Record again'}
-            </Button>
-            <Button type="button" onClick={onSendNow} disabled={disabled}>
-              <Send className="h-4 w-4" />
-              {labels?.voiceSendNow || 'Send now'}
-            </Button>
-          </>
-        )}
-
-        {state === 'error' && (
-          <>
-            <Button type="button" variant="outline" onClick={onCancel} disabled={disabled}>
-              <X className="h-4 w-4" />
-              {labels?.voiceCancel || 'Cancel'}
-            </Button>
-            <Button type="button" onClick={onRecordAgain} disabled={disabled}>
-              <RotateCcw className="h-4 w-4" />
-              {labels?.voiceRecordAgain || 'Record again'}
-            </Button>
-          </>
-        )}
-      </div>
     </div>
   );
 };
