@@ -23,6 +23,7 @@ export type {
   VoiceProvider,
   VoiceProviderHandlers,
   VoiceProviderOptions,
+  VoiceReviewMode,
   VoiceSegment,
   VoiceTranscript,
   VoiceTranscriptMode,

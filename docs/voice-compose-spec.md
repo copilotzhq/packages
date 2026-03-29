@@ -48,11 +48,17 @@ Add an opt-in voice composer to `@copilotz/chat-ui` that can replace the bottom 
 - In the default manual provider:
   - the central orb starts recording
   - the same orb stops recording
-- After a capture finishes, the panel enters a compact review state.
-- Review starts an auto-send countdown.
+- Once any audio is captured, the composer shifts into a persistent draft surface.
+- The draft surface always shows the current audio preview, duration, and the large central orb.
+- The large central orb remains visible for all providers and becomes the primary way to add more audio.
+- Auto-send countdown is a status of the draft surface, not a separate layout.
 - `Send now` sends immediately.
-- `Cancel` pauses the auto-send countdown but keeps the draft visible.
-- Once auto-send is paused, a compact continue-recording icon lets the user append more audio onto the same draft.
+- `Cancel` pauses the auto-send countdown, keeps the draft visible, and disarms armed providers.
+- The central orb in review lets the user continue/add more audio onto the same draft.
+- In `reviewMode: "armed"`, the orb stays visually active during the countdown:
+  - if the provider is listening for more speech, the orb represents an armed mic
+  - tapping the orb pauses/disarms waiting review
+  - if speech is already active, tapping the orb finishes the current appended segment
 - Trash discards the draft and returns to idle voice compose.
 - After send:
   - if `voiceCompose.persistComposer` is `true`, stay in voice compose idle
@@ -84,7 +90,9 @@ The UI supports the full state superset below. The default provider only uses a 
 
 - A voice draft may be composed from multiple captured segments.
 - In the default manual provider, tapping the continue-recording action from review appends the next captured segment to the existing draft instead of replacing it.
+- In `reviewMode: "armed"`, if a provider re-enters `listening` while a draft already exists, the next detected segment is automatically appended to that draft.
 - The review player, duration, transcript, and auto-send countdown all refresh against the merged draft.
+- If speech resumes while auto-send countdown is active, the countdown pauses and resets for the merged draft.
 - Trash remains the explicit reset/start-over action.
 
 ### Future VAD/STT Provider Usage
@@ -110,6 +118,8 @@ Add voice-specific labels:
 - `voiceFinishing`
 - `voiceReview`
 - `voiceSending`
+- `voiceReviewArmedHint`
+- `voiceReviewPausedHint`
 - `voiceStart`
 - `voiceStop`
 - `voiceSendNow`
@@ -129,6 +139,7 @@ Add voice-specific labels:
 voiceCompose?: {
   enabled?: boolean;
   defaultMode?: "text" | "voice";
+  reviewMode?: "manual" | "armed";
   autoSendDelayMs?: number;
   persistComposer?: boolean;
   showTranscriptPreview?: boolean;
@@ -215,6 +226,9 @@ Examples:
 - Moonshine: VAD + local transcript preview
 - Server-assisted provider: local capture with remote transcript
 
+Optional shared provider packages can live alongside `chat-ui` without becoming core dependencies.
+The first extracted package is `@copilotz/chat-voice-moonshine`.
+
 The shared packages should not ship those dependencies by default. Projects should lazy-load them inside their provider factory.
 
 ## `chat-adapter` Impact
@@ -233,7 +247,8 @@ After publishing a new package version:
 1. update `clients/mobizap/web/package.json` to the new `@copilotz/chat-ui` / `@copilotz/chat-adapter`
 2. enable `voiceCompose.enabled` in the Mobizap chat config
 3. test with the built-in manual provider first
-4. add a Mobizap-specific custom provider later if VAD/STT is desired
+4. switch Mobizap to a local VAD-only provider with `reviewMode: "armed"`
+5. keep Moonshine in an optional shared package for future English-friendly clients
 
 ## Success Criteria
 

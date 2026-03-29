@@ -39,6 +39,8 @@ export type VoiceComposerState =
   | 'sending'
   | 'error';
 
+export type VoiceReviewMode = 'manual' | 'armed';
+
 export type VoiceTranscriptMode = 'none' | 'final-only' | 'partial-and-final';
 
 export interface VoiceTranscript {
@@ -157,6 +159,8 @@ export interface ChatConfig {
     voiceFinishing?: string;
     voiceReview?: string;
     voiceSending?: string;
+    voiceReviewArmedHint?: string;
+    voiceReviewPausedHint?: string;
     voiceStart?: string;
     voiceStop?: string;
     voiceSendNow?: string;
@@ -231,6 +235,7 @@ export interface ChatConfig {
   voiceCompose?: {
     enabled?: boolean;
     defaultMode?: 'text' | 'voice';
+    reviewMode?: VoiceReviewMode;
     autoSendDelayMs?: number;
     persistComposer?: boolean;
     showTranscriptPreview?: boolean;

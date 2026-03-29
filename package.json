@@ -3,11 +3,12 @@
   "private": true,
   "workspaces": [
     "copilotz-chat-ui",
-    "copilotz-chat-adapter"
+    "copilotz-chat-adapter",
+    "copilotz-chat-voice-moonshine"
   ],
   "scripts": {
-    "build": "npm -w copilotz-chat-ui run build &&  npm -w copilotz-chat-adapter run build",
+    "build": "npm -w copilotz-chat-ui run build && npm -w copilotz-chat-adapter run build && npm -w copilotz-chat-voice-moonshine run build",
     "build:css": "npm -w copilotz-chat-ui run build:css",
-    "dev": "npm -w copilotz-chat-ui run dev & npm -w copilotz-chat-adapter run dev"
+    "dev": "npm -w copilotz-chat-ui run dev & npm -w copilotz-chat-adapter run dev & npm -w copilotz-chat-voice-moonshine run dev"
   }
 }

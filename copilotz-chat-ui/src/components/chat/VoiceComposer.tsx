@@ -1,5 +1,5 @@
 import React from 'react';
-import type { AudioAttachment, ChatConfig, VoiceComposerState, VoiceTranscript, VoiceTranscriptMode } from '../../types/chatTypes';
+import type { AudioAttachment, ChatConfig, VoiceComposerState, VoiceReviewMode, VoiceTranscript, VoiceTranscriptMode } from '../../types/chatTypes';
 import { Button } from '../ui/button';
 import { Progress } from '../ui/progress';
 import { Badge } from '../ui/badge';
@@ -16,11 +16,13 @@ interface VoiceComposerProps {
   countdownMs: number;
   autoSendDelayMs: number;
   isAutoSendActive: boolean;
+  reviewMode: VoiceReviewMode;
   errorMessage?: string | null;
   disabled?: boolean;
   labels?: ChatConfig['labels'];
   onStart: () => void;
   onStop: () => void;
+  onPauseReview: () => void;
   onCancelAutoSend: () => void;
   onDiscard: () => void;
   onRecordAgain: () => void;
@@ -95,11 +97,13 @@ export const VoiceComposer: React.FC<VoiceComposerProps> = ({
   countdownMs,
   autoSendDelayMs,
   isAutoSendActive,
+  reviewMode,
   errorMessage,
   disabled = false,
   labels,
   onStart,
   onStop,
+  onPauseReview,
   onCancelAutoSend,
   onDiscard,
   onRecordAgain,
@@ -113,13 +117,38 @@ export const VoiceComposer: React.FC<VoiceComposerProps> = ({
     : 100;
   const isBusy = state === 'preparing' || state === 'finishing' || state === 'sending';
   const isCapturing = state === 'waiting_for_speech' || state === 'listening';
-  const isReviewing = state === 'review';
+  const hasDraft = Boolean(attachment);
+  const isDraftLayout = hasDraft;
+  const isArmedDraft = isDraftLayout && reviewMode === 'armed' && (
+    state === 'waiting_for_speech' || state === 'listening'
+  );
   const levelValue = isCapturing || state === 'preparing' || state === 'finishing'
     ? Math.max(8, Math.round(audioLevel * 100))
     : 0;
-  const headerLabel = state === 'error'
-    ? (labels?.voiceCaptureError || 'Unable to capture audio.')
-    : resolveStateLabel(state, labels, errorMessage);
+  const headerLabel = hasDraft && state !== 'sending' && state !== 'error'
+    ? (labels?.voiceReview || 'Ready to send')
+    : state === 'error'
+      ? (labels?.voiceCaptureError || 'Unable to capture audio.')
+      : resolveStateLabel(state, labels, errorMessage);
+  const reviewHelperText = isArmedDraft
+    ? (labels?.voiceReviewArmedHint || 'Speak to add more before it sends.')
+    : (labels?.voiceReviewPausedHint || labels?.voiceRecordAgain || 'Tap the mic to continue this message.');
+  const orbIsListening = state === 'listening';
+  const orbCanStop = !isDraftLayout && (state === 'waiting_for_speech' || state === 'listening');
+  const orbIsReviewBusy = state === 'preparing' || state === 'finishing' || state === 'sending';
+  const handleReviewOrbClick = () => {
+    if (state === 'listening') {
+      onStop();
+      return;
+    }
+
+    if (isArmedDraft) {
+      onPauseReview();
+      return;
+    }
+
+    onRecordAgain();
+  };
 
   return (
     <div className="w-full max-w-3xl rounded-xl border bg-background p-3 shadow-sm sm:p-4 md:min-w-3xl">
@@ -143,7 +172,7 @@ export const VoiceComposer: React.FC<VoiceComposerProps> = ({
         </Button>
       </div>
 
-      {!isReviewing ? (
+      {!isDraftLayout ? (
         <div className="mt-3 rounded-xl border border-dashed border-primary/30 bg-primary/5 px-3 py-3 text-center sm:px-4 sm:py-4">
           <div className="mx-auto flex w-full max-w-sm flex-col items-center gap-3">
             <Button
@@ -203,6 +232,41 @@ export const VoiceComposer: React.FC<VoiceComposerProps> = ({
             </Button>
           </div>
 
+          <div className="mt-4 flex flex-col items-center gap-3 text-center">
+            <Button
+              type="button"
+              size="icon"
+              variant={orbCanStop ? 'destructive' : 'outline'}
+              className={`h-16 w-16 rounded-full sm:h-20 sm:w-20 ${
+                orbIsListening
+                  ? 'border-red-500 bg-red-500 text-white hover:bg-red-600'
+                  : isArmedDraft
+                    ? 'border-red-200 bg-red-50 text-red-600 shadow-[0_0_0_10px_rgba(239,68,68,0.08)] hover:bg-red-100 hover:text-red-700'
+                    : 'border-red-200 bg-red-50 text-red-600 hover:bg-red-100 hover:text-red-700'
+              }`}
+              onClick={handleReviewOrbClick}
+              disabled={disabled || orbIsReviewBusy}
+            >
+              {orbIsReviewBusy ? (
+                <Loader2 className="h-7 w-7 animate-spin" />
+              ) : orbIsListening ? (
+                <Square className="h-7 w-7" />
+              ) : isArmedDraft ? (
+                <Mic className="h-7 w-7 animate-pulse" />
+              ) : (
+                <Mic className="h-7 w-7" />
+              )}
+            </Button>
+
+            <div className="w-full max-w-sm space-y-2">
+              <Progress value={levelValue} className="h-2" />
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>{formatDuration(durationMs)}</span>
+                <span className="max-w-[15rem] text-right">{reviewHelperText}</span>
+              </div>
+            </div>
+          </div>
+
           {attachment && (
             <div className="mt-3 rounded-lg bg-background p-2">
               <audio controls preload="metadata" className="w-full">
@@ -231,19 +295,6 @@ export const VoiceComposer: React.FC<VoiceComposerProps> = ({
               <Button type="button" variant="ghost" size="sm" onClick={onCancelAutoSend} disabled={disabled}>
                 <X className="h-4 w-4" />
                 {labels?.voiceCancel || 'Cancel'}
-              </Button>
-            )}
-            {!isAutoSendActive && (
-              <Button
-                type="button"
-                variant="outline"
-                size="icon"
-                onClick={onRecordAgain}
-                disabled={disabled}
-                aria-label={labels?.voiceRecordAgain || 'Record again'}
-                title={labels?.voiceRecordAgain || 'Record again'}
-              >
-                <Mic className="h-4 w-4" />
               </Button>
             )}
             <Button type="button" size="sm" onClick={onSendNow} disabled={disabled}>

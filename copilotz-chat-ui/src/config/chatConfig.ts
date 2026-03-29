@@ -41,6 +41,8 @@ export const defaultChatConfig: Required<ChatConfig> = {
     voiceFinishing: 'Finishing capture...',
     voiceReview: 'Ready to send',
     voiceSending: 'Sending...',
+    voiceReviewArmedHint: 'Still listening. Speak to add more before it sends.',
+    voiceReviewPausedHint: 'Tap the mic to keep adding to this message.',
     voiceStart: 'Start recording',
     voiceStop: 'Stop recording',
     voiceSendNow: 'Send now',
@@ -118,6 +120,7 @@ export const defaultChatConfig: Required<ChatConfig> = {
   voiceCompose: {
     enabled: false,
     defaultMode: 'text',
+    reviewMode: 'manual',
     autoSendDelayMs: 5000,
     persistComposer: true,
     showTranscriptPreview: true,
