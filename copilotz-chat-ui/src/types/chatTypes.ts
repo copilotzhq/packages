@@ -27,6 +27,56 @@ export type MediaAttachment =
       poster?: string;
     };
 
+export type AudioAttachment = Extract<MediaAttachment, { kind: 'audio' }>;
+
+export type VoiceComposerState =
+  | 'idle'
+  | 'preparing'
+  | 'waiting_for_speech'
+  | 'listening'
+  | 'finishing'
+  | 'review'
+  | 'sending'
+  | 'error';
+
+export type VoiceTranscriptMode = 'none' | 'final-only' | 'partial-and-final';
+
+export interface VoiceTranscript {
+  partial?: string;
+  final?: string;
+}
+
+export interface VoiceSegment {
+  attachment: AudioAttachment;
+  transcript?: VoiceTranscript;
+  metadata?: Record<string, unknown>;
+}
+
+export interface VoiceProviderHandlers {
+  onStateChange?: (state: VoiceComposerState) => void;
+  onAudioLevelChange?: (level: number) => void;
+  onDurationChange?: (durationMs: number) => void;
+  onTranscriptChange?: (transcript: VoiceTranscript) => void;
+  onSegmentReady?: (segment: VoiceSegment) => void;
+  onError?: (error: Error) => void;
+}
+
+export interface VoiceProviderOptions {
+  maxRecordingMs?: number;
+}
+
+export interface VoiceProvider {
+  start: () => Promise<void>;
+  stop: () => Promise<void>;
+  cancel: () => Promise<void> | void;
+  destroy: () => Promise<void> | void;
+}
+
+export type CreateVoiceProvider = (
+  handlers: VoiceProviderHandlers,
+  options?: VoiceProviderOptions,
+) => VoiceProvider | Promise<VoiceProvider>;
+
 // Tool Calls for Agent Actions
 export interface ToolCall {
   id: string;
@@ -97,6 +147,23 @@ export interface ChatConfig {
     attachFileTooltip?: string;
     recordAudio?: string;
     recordAudioTooltip?: string;
+    voiceEnter?: string;
+    voiceExit?: string;
+    voiceTitle?: string;
+    voicePreparing?: string;
+    voiceWaiting?: string;
+    voiceListening?: string;
+    voiceFinishing?: string;
+    voiceReview?: string;
+    voiceStart?: string;
+    voiceStop?: string;
+    voiceSendNow?: string;
+    voiceCancel?: string;
+    voiceRecordAgain?: string;
+    voiceAutoSendIn?: string;
+    voiceTranscriptPending?: string;
+    voicePermissionDenied?: string;
+    voiceCaptureError?: string;
     // Header labels
     exportData?: string;
     importData?: string;
@@ -157,6 +224,15 @@ export interface ChatConfig {
     longMessagePreviewChars?: number;
     longMessageChunkChars?: number;
     renderUserMarkdown?: boolean;
+  };
+  voiceCompose?: {
+    enabled?: boolean;
+    autoSendDelayMs?: number;
+    persistComposer?: boolean;
+    showTranscriptPreview?: boolean;
+    transcriptMode?: VoiceTranscriptMode;
+    maxRecordingMs?: number;
+    createProvider?: CreateVoiceProvider;
   };
   customComponent?: {
     label?: string;

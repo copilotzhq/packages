@@ -20,11 +20,12 @@ export const ChatUserContextProvider: React.FC<{ children: React.ReactNode; init
 
   useEffect(() => {
     if (!initial) return;
-    setCtx(prev => ({
-      ...prev,
-      ...initial,
-      updatedAt: Date.now(),
-    }));
+    setCtx(prev => {
+      const keys = Object.keys(initial) as (keyof typeof initial)[];
+      const hasChanges = keys.some(k => prev[k] !== initial[k]);
+      if (!hasChanges) return prev;
+      return { ...prev, ...initial, updatedAt: Date.now() };
+    });
   }, [initial]);
 
   const setPartial = useCallback<Setter>((next) => {

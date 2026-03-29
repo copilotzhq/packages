@@ -1,9 +1,8 @@
-import React, { useMemo, useEffect, useState } from 'react';
+import React, { useMemo, useState, useCallback } from 'react';
 import { ChatUI, ChatUserContextProvider } from '@copilotz/chat-ui';
 import type { AgentOption, ChatConfig, ChatCallbacks, ChatUserContext, MemoryItem } from '@copilotz/chat-ui';
 import { User } from 'lucide-react';
 import { useCopilotz } from './useCopilotzChat';
-import type { UrlSyncConfig } from './useUrlState';
 import type { EventInterceptor, RenderSpecialState, RunErrorInterceptor } from './specialState';
 import type { RequestHeadersProvider } from './copilotzService';
 
@@ -53,34 +52,6 @@ export interface CopilotzChatProps {
   eventInterceptor?: EventInterceptor;
   runErrorInterceptor?: RunErrorInterceptor;
   renderSpecialState?: RenderSpecialState;
-  /**
-   * URL state synchronization configuration.
-   * When enabled, syncs thread ID, agent, and prompt to/from URL parameters.
-   * 
-   * Features:
-   * - `?thread=abc123` - Opens specific thread
-   * - `?agent=support-bot` - Pre-selects agent
-   * - `?prompt=Hello` - Pre-fills or auto-sends message
-   * 
-   * @example
-   * ```tsx
-   * <CopilotzChat
-   *   userId="user123"
-   *   urlSync={{ enabled: true }}
-   * />
-   * 
-   * // With custom param names
-   * <CopilotzChat
-   *   userId="user123"
-   *   urlSync={{
-   *     enabled: true,
-   *     params: { thread: 't', agent: 'a', prompt: 'q' },
-   *     promptBehavior: 'auto-send'
-   *   }}
-   * />
-   * ```
-   */
-  urlSync?: UrlSyncConfig;
 }
 
 export const CopilotzChat: React.FC<CopilotzChatProps> = ({
@@ -108,7 +79,6 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
   eventInterceptor,
   runErrorInterceptor,
   renderSpecialState,
-  urlSync,
 }) => {
   const selectedAgent = agentOptions.find((agent) => agent.id === selectedAgentId) || null;
 
@@ -128,10 +98,6 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     archiveThread,
     deleteThread,
     stopGeneration,
-    initialPrompt,
-    clearInitialPrompt,
-    urlAgentId,
-    setUrlAgentId,
   } = useCopilotz({ 
     userId, 
     initialContext, 
@@ -142,44 +108,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     getRequestHeaders,
     eventInterceptor,
     runErrorInterceptor,
-    urlSync,
   });
-
-  // Track if we've handled the initial prompt
-  const [promptHandled, setPromptHandled] = useState(false);
-
-  // Handle URL agent ID - call onSelectAgent if URL has agent and it differs from current
-  useEffect(() => {
-    if (urlAgentId && onSelectAgent && urlAgentId !== selectedAgentId) {
-      // Check if the agent exists in options
-      const agentExists = agentOptions.some((a) => a.id === urlAgentId);
-      if (agentExists) {
-        onSelectAgent(urlAgentId);
-      }
-    }
-  }, [urlAgentId, selectedAgentId, onSelectAgent, agentOptions]);
-
-  // Sync selected agent to URL when it changes (after initial load)
-  useEffect(() => {
-    if (selectedAgentId && urlSync?.enabled) {
-      setUrlAgentId(selectedAgentId);
-    }
-  }, [selectedAgentId, urlSync?.enabled, setUrlAgentId]);
-
-  // Handle auto-send behavior for initial prompt
-  useEffect(() => {
-    if (initialPrompt && !promptHandled && urlSync?.promptBehavior === 'auto-send') {
-      // Wait for initial load to complete
-      const timer = setTimeout(() => {
-        void sendMessage(initialPrompt);
-        clearInitialPrompt();
-        setPromptHandled(true);
-      }, 500);
-      return () => clearTimeout(timer);
-    }
-  }, [initialPrompt, promptHandled, urlSync?.promptBehavior, sendMessage, clearInitialPrompt]);
-
-  // For prefill behavior, we'll pass initialInput to ChatUI
 
   const chatCallbacks: ChatCallbacks = useMemo(() => ({
     onSendMessage: (content, attachments) => {
@@ -218,15 +147,11 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
         console.error('Failed to copy message', error);
       }
     },
-    // User menu callbacks
     onLogout,
     onViewProfile,
     ...userCallbacks,
   }), [sendMessage, stopGeneration, createThread, selectThread, renameThread, archiveThread, deleteThread, userCallbacks, onLogout, onViewProfile]);
 
-  // Merge user config with dynamic values
-  // customComponent is passed through - it will be resolved in ChatUI
-  // which can provide onClose and isMobile props
   const mergedConfig: ChatConfig = useMemo(() => {
     const base = userConfig || {};
     if (!customComponent) {
@@ -243,8 +168,21 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
   }, [userConfig, customComponent]);
 
   const effectiveUserName = userName || userId;
-  // Don't try to extract avatar from profile automatically unless it's in context
   const effectiveUserAvatar = userAvatar;
+
+  const userProp = useMemo(() => ({
+    id: userId,
+    name: effectiveUserName,
+    email: userEmail,
+    avatar: effectiveUserAvatar,
+  }), [userId, effectiveUserName, userEmail, effectiveUserAvatar]);
+
+  const assistantProp = useMemo(() => ({
+    name: userConfig?.branding?.title,
+    avatar: userConfig?.branding?.avatar,
+    description: userConfig?.branding?.subtitle,
+  }), [userConfig?.branding?.title, userConfig?.branding?.avatar, userConfig?.branding?.subtitle]);
+
   const specialStateContent = specialState ? renderSpecialState?.(specialState, { clear: clearSpecialState }) : null;
 
   return (
@@ -262,31 +200,12 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
           agentOptions={agentOptions}
           selectedAgentId={selectedAgentId}
           onSelectAgent={onSelectAgent}
-          user={{
-            id: userId,
-            name: effectiveUserName,
-            email: userEmail,
-            avatar: effectiveUserAvatar,
-          }}
-          assistant={{
-            name: userConfig?.branding?.title,
-            avatar: userConfig?.branding?.avatar,
-            description: userConfig?.branding?.subtitle,
-          }}
+          user={userProp}
+          assistant={assistantProp}
           onAddMemory={onAddMemory}
           onUpdateMemory={onUpdateMemory}
           onDeleteMemory={onDeleteMemory}
           className={className}
-          // Pass initial prompt for prefill behavior (not auto-send)
-          initialInput={
-            initialPrompt && !promptHandled && urlSync?.promptBehavior !== 'auto-send'
-              ? initialPrompt
-              : undefined
-          }
-          onInitialInputConsumed={() => {
-            clearInitialPrompt();
-            setPromptHandled(true);
-          }}
         />
       )}
     </ChatUserContextProvider>

@@ -18,6 +18,14 @@ export type {
   ChatMessage,
   ChatThread,
   MediaAttachment,
-  MemoryItem
+  MemoryItem,
+  VoiceComposerState,
+  VoiceProvider,
+  VoiceProviderHandlers,
+  VoiceProviderOptions,
+  VoiceSegment,
+  VoiceTranscript,
+  VoiceTranscriptMode,
+  CreateVoiceProvider,
 } from '@copilotz/chat-ui';
-export type { UrlSyncConfig, UrlParamsConfig, UrlState, UseUrlStateReturn } from './useUrlState';
+export type { UrlParamsConfig, UrlState, UseUrlStateReturn } from './useUrlState';

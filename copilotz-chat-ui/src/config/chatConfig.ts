@@ -31,6 +31,23 @@ export const defaultChatConfig: Required<ChatConfig> = {
     attachFileTooltip: 'Attach file',
     recordAudio: 'Record Audio',
     recordAudioTooltip: 'Record audio',
+    voiceEnter: 'Voice input',
+    voiceExit: 'Use keyboard',
+    voiceTitle: 'Voice input',
+    voicePreparing: 'Preparing microphone...',
+    voiceWaiting: 'Waiting for speech...',
+    voiceListening: 'Listening...',
+    voiceFinishing: 'Finishing capture...',
+    voiceReview: 'Ready to send',
+    voiceStart: 'Start recording',
+    voiceStop: 'Stop recording',
+    voiceSendNow: 'Send now',
+    voiceCancel: 'Cancel',
+    voiceRecordAgain: 'Record again',
+    voiceAutoSendIn: 'Auto-sends in {{seconds}}s',
+    voiceTranscriptPending: 'Transcript unavailable',
+    voicePermissionDenied: 'Microphone access was denied.',
+    voiceCaptureError: 'Unable to capture audio.',
     // Header labels
     exportData: 'Export data',
     importData: 'Import data',
@@ -94,6 +111,16 @@ export const defaultChatConfig: Required<ChatConfig> = {
     longMessageChunkChars: 12000,
     renderUserMarkdown: true,
   },
+
+  voiceCompose: {
+    enabled: false,
+    autoSendDelayMs: 5000,
+    persistComposer: true,
+    showTranscriptPreview: true,
+    transcriptMode: 'final-only',
+    maxRecordingMs: 60000,
+    createProvider: undefined,
+  },
   
   customComponent: {},
   headerActions: null,
@@ -119,6 +146,10 @@ export function mergeConfig(_baseConfig: ChatConfig, userConfig?: Partial<ChatCo
     ui: {
       ...defaultChatConfig.ui,
       ...userConfig.ui,
+    },
+    voiceCompose: {
+      ...defaultChatConfig.voiceCompose,
+      ...userConfig.voiceCompose,
     },
     agentSelector: {
       ...defaultChatConfig.agentSelector,

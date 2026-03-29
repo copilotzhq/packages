@@ -326,6 +326,29 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     setState(prev => ({ ...prev, showSidebar: false }));
   }, []);
 
+  const handleCustomComponentToggle = useCallback(() => {
+    setState(prev => ({ ...prev, showSidebar: !prev.showSidebar }));
+  }, []);
+
+  const sidebarUser = useMemo(() => user ? {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    avatar: user.avatar,
+  } : null, [user?.id, user?.name, user?.email, user?.avatar]);
+
+  const handleViewProfile = useCallback(() => {
+    setIsUserProfileOpen(true);
+    callbacks.onViewProfile?.();
+  }, [callbacks.onViewProfile]);
+
+  const sidebarUserMenuCallbacks = useMemo(() => ({
+    onViewProfile: handleViewProfile,
+    onOpenSettings: callbacks.onOpenSettings,
+    onThemeChange: callbacks.onThemeChange,
+    onLogout: callbacks.onLogout,
+  }), [handleViewProfile, callbacks.onOpenSettings, callbacks.onThemeChange, callbacks.onLogout]);
+
   // Render custom component with props if it's a function
   const renderCustomComponent = useCallback(() => {
     const component = config?.customComponent?.component;
@@ -500,21 +523,8 @@ export const ChatUI: React.FC<ChatV2Props> = ({
             onDeleteThread={handleDeleteThread}
             onArchiveThread={handleArchiveThread}
             // User menu props
-            user={user ? {
-              id: user.id,
-              name: user.name,
-              email: user.email,
-              avatar: user.avatar,
-            } : null}
-            userMenuCallbacks={{
-              onViewProfile: () => {
-                setIsUserProfileOpen(true);
-                callbacks.onViewProfile?.();
-              },
-              onOpenSettings: callbacks.onOpenSettings,
-              onThemeChange: callbacks.onThemeChange,
-              onLogout: callbacks.onLogout,
-            }}
+            user={sidebarUser}
+            userMenuCallbacks={sidebarUserMenuCallbacks}
             currentTheme={config.ui.theme === 'auto' ? 'system' : config.ui.theme}
             showThemeOptions={!!callbacks.onThemeChange}
           />
@@ -527,7 +537,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                 currentThreadTitle={threads.find(t => t.id === state.selectedThreadId)?.title}
                 // onSidebarToggle is now handled by SidebarTrigger inside ChatHeader
                 isMobile={isMobile}
-                onCustomComponentToggle={() => setState(prev => ({ ...prev, showSidebar: !prev.showSidebar }))}
+                onCustomComponentToggle={handleCustomComponentToggle}
                 onNewThread={handleCreateThread}
                 showCustomComponentButton={!!config?.customComponent?.component}
                 showAgentSelector={shouldShowAgentSelector}

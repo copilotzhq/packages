@@ -102,26 +102,6 @@ const updateUrl = (params: URLSearchParams, mode: 'push' | 'replace') => {
 
 /**
  * Hook to manage chat state persistence via URL parameters.
- * 
- * Supports:
- * - Thread ID: Navigate to specific conversation
- * - Agent ID: Pre-select an agent
- * - Prompt: Pre-fill or auto-send a message
- * 
- * @example
- * ```tsx
- * const { state, setThreadId, setAgentId } = useUrlState({
- *   enabled: true,
- *   mode: 'replace',
- *   params: { thread: 't', agent: 'a', prompt: 'q' }
- * });
- * 
- * // Read initial values
- * console.log(state.threadId, state.agentId, state.prompt);
- * 
- * // Update URL when thread changes
- * setThreadId('abc123');
- * ```
  */
 export function useUrlState(config: UrlSyncConfig = {}): UseUrlStateReturn {
   const {
@@ -135,11 +115,9 @@ export function useUrlState(config: UrlSyncConfig = {}): UseUrlStateReturn {
   const isReadOnly = mode === 'read-only';
   const updateMode = mode === 'read-only' ? 'replace' : mode;
 
-  // Track if initial read has been done
   const initialReadDone = useRef(false);
   const promptCleared = useRef(false);
 
-  // Parse initial state from URL
   const parseUrlState = useCallback((): UrlState => {
     if (!enabled || !isBrowser) {
       return { threadId: null, agentId: null, prompt: null };
@@ -160,13 +138,11 @@ export function useUrlState(config: UrlSyncConfig = {}): UseUrlStateReturn {
   useEffect(() => {
     if (!enabled || !isBrowser) return;
 
-    // Initial read
     if (!initialReadDone.current) {
       const initialState = parseUrlState();
       setState(initialState);
       initialReadDone.current = true;
 
-      // Clear prompt from URL after reading if configured
       if (clearPromptAfterRead && initialState.prompt && !isReadOnly) {
         const searchParams = getSearchParams();
         searchParams.delete(params.prompt);
@@ -175,7 +151,6 @@ export function useUrlState(config: UrlSyncConfig = {}): UseUrlStateReturn {
       }
     }
 
-    // Listen for popstate (browser back/forward)
     const handlePopState = () => {
       setState(parseUrlState());
     };
@@ -184,39 +159,32 @@ export function useUrlState(config: UrlSyncConfig = {}): UseUrlStateReturn {
     return () => globalThis.removeEventListener('popstate', handlePopState);
   }, [enabled, parseUrlState, clearPromptAfterRead, params.prompt, isReadOnly]);
 
-  // Update thread ID in URL
   const setThreadId = useCallback((threadId: string | null) => {
     if (!enabled || isReadOnly || !isBrowser) return;
 
     const searchParams = getSearchParams();
-    
     if (threadId) {
       searchParams.set(params.thread, threadId);
     } else {
       searchParams.delete(params.thread);
     }
-
     updateUrl(searchParams, updateMode);
-    setState(prev => ({ ...prev, threadId }));
+    setState((prev) => ({ ...prev, threadId }));
   }, [enabled, isReadOnly, params.thread, updateMode]);
 
-  // Update agent ID in URL
   const setAgentId = useCallback((agentId: string | null) => {
     if (!enabled || isReadOnly || !isBrowser) return;
 
     const searchParams = getSearchParams();
-    
     if (agentId) {
       searchParams.set(params.agent, agentId);
     } else {
       searchParams.delete(params.agent);
     }
-
     updateUrl(searchParams, updateMode);
-    setState(prev => ({ ...prev, agentId }));
+    setState((prev) => ({ ...prev, agentId }));
   }, [enabled, isReadOnly, params.agent, updateMode]);
 
-  // Clear prompt from URL
   const clearPrompt = useCallback(() => {
     if (!enabled || isReadOnly || !isBrowser) return;
 
@@ -224,7 +192,7 @@ export function useUrlState(config: UrlSyncConfig = {}): UseUrlStateReturn {
     searchParams.delete(params.prompt);
     updateUrl(searchParams, 'replace');
     promptCleared.current = true;
-    setState(prev => ({ ...prev, prompt: null }));
+    setState((prev) => ({ ...prev, prompt: null }));
   }, [enabled, isReadOnly, params.prompt]);
 
   return {

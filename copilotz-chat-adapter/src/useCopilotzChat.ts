@@ -9,7 +9,7 @@ import {
 } from './copilotzService';
 import { resolveAssetsInMessages } from './assetsService';
 import type { ChatMessage as ChatViewMessage, ChatThread, MediaAttachment, ChatUserContext } from '@copilotz/chat-ui';
-import { useUrlState, type UrlSyncConfig } from './useUrlState';
+import { useUrlState } from './useUrlState';
 import type { EventInterceptor, RunErrorInterceptor, SpecialChatState } from './specialState';
 import type { RequestHeadersProvider } from './copilotzService';
 
@@ -85,9 +85,17 @@ const extractToolCallsFromServerMessage = (msg: ServerMessage): ParsedToolCall[]
   const usedMetadataIndexes = new Set<number>();
   const parsed: ParsedToolCall[] = [];
 
+  const extractToolName = (obj: Record<string, unknown>): string | undefined => {
+    if (typeof obj.name === 'string') return obj.name;
+    const t = obj.tool as Record<string, unknown> | undefined;
+    if (typeof t?.name === 'string') return t.name;
+    if (typeof t?.id === 'string') return t.id;
+    return undefined;
+  };
+
   const findMatchingMetadataIndex = (toolCall: Record<string, unknown>): number => {
     const id = typeof toolCall.id === 'string' ? toolCall.id : undefined;
-    const name = typeof toolCall.name === 'string' ? toolCall.name : undefined;
+    const name = extractToolName(toolCall);
 
     const byId = id
       ? metadataToolCalls.findIndex((candidate, idx) => !usedMetadataIndexes.has(idx) && candidate?.id === id)
@@ -95,7 +103,7 @@ const extractToolCallsFromServerMessage = (msg: ServerMessage): ParsedToolCall[]
     if (byId >= 0) return byId;
 
     return name
-      ? metadataToolCalls.findIndex((candidate, idx) => !usedMetadataIndexes.has(idx) && candidate?.name === name)
+      ? metadataToolCalls.findIndex((candidate, idx) => !usedMetadataIndexes.has(idx) && extractToolName(candidate) === name)
       : -1;
   };
 
@@ -106,9 +114,21 @@ const extractToolCallsFromServerMessage = (msg: ServerMessage): ParsedToolCall[]
     const id = typeof primary.id === 'string'
       ? primary.id
       : (typeof secondary?.id === 'string' ? secondary.id : undefined);
+    const toolObj = primary.tool as Record<string, unknown> | undefined;
+    const secondaryToolObj = secondary?.tool as Record<string, unknown> | undefined;
     const name = typeof primary.name === 'string'
       ? primary.name
-      : (typeof secondary?.name === 'string' ? secondary.name : 'tool');
+      : typeof toolObj?.name === 'string'
+        ? toolObj.name
+        : typeof toolObj?.id === 'string'
+          ? toolObj.id
+          : typeof secondary?.name === 'string'
+            ? secondary.name
+            : typeof secondaryToolObj?.name === 'string'
+              ? secondaryToolObj.name
+              : typeof secondaryToolObj?.id === 'string'
+                ? secondaryToolObj.id
+                : 'tool';
     const argsRaw =
       primary.args ?? primary.arguments ?? secondary?.args ?? secondary?.arguments;
     const result =
@@ -305,23 +325,6 @@ export interface UseCopilotzOptions {
   getRequestHeaders?: RequestHeadersProvider;
   eventInterceptor?: EventInterceptor;
   runErrorInterceptor?: RunErrorInterceptor;
-  /**
-   * URL state synchronization configuration.
-   * When enabled, thread ID and agent are synced to/from URL parameters.
-   * 
-   * @example
-   * ```tsx
-   * const chat = useCopilotz({
-   *   userId: 'user123',
-   *   urlSync: {
-   *     enabled: true,
-   *     mode: 'replace',
-   *     params: { thread: 't', agent: 'a', prompt: 'q' }
-   *   }
-   * });
-   * ```
-   */
-  urlSync?: UrlSyncConfig;
 }
 
 export function useCopilotz({
@@ -334,16 +337,13 @@ export function useCopilotz({
   getRequestHeaders,
   eventInterceptor,
   runErrorInterceptor,
-  urlSync,
 }: UseCopilotzOptions) {
-  // URL state management
+  // URL state — thread ID is synced to/from URL by default
   const {
     state: urlState,
     setThreadId: setUrlThreadId,
-    setAgentId: setUrlAgentId,
-    clearPrompt: clearUrlPrompt,
     isEnabled: isUrlSyncEnabled,
-  } = useUrlState(urlSync);
+  } = useUrlState();
 
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [threadMetadataMap, setThreadMetadataMap] = useState<Record<string, Record<string, unknown> | undefined>>({});
@@ -1542,7 +1542,11 @@ export function useCopilotz({
       initializationRef.current = { userId: null, started: false };
       reset();
     }
-  }, [userId, fetchAndSetThreadsState, loadThreadMessages, bootstrapConversation, reset, bootstrap, isUrlSyncEnabled, urlState.threadId]);
+  // urlState.threadId intentionally excluded: only needed on first init (captured
+  // by the lazy initializer in useUrlState). Including it would re-trigger the
+  // effect when the thread-sync effect writes back to the URL.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, fetchAndSetThreadsState, loadThreadMessages, bootstrapConversation, reset, bootstrap, isUrlSyncEnabled]);
 
   // Sync currentThreadExternalId to URL when it changes
   useEffect(() => {
@@ -1583,14 +1587,5 @@ export function useCopilotz({
     fetchAndSetThreadsState,
     loadThreadMessages,
     reset,
-    // URL state
-    /** Initial prompt from URL (if urlSync enabled) - use for pre-filling input */
-    initialPrompt: isUrlSyncEnabled ? urlState.prompt : null,
-    /** Clear the initial prompt from URL (call after consuming it) */
-    clearInitialPrompt: clearUrlPrompt,
-    /** URL agent ID (if urlSync enabled) - use for agent pre-selection */
-    urlAgentId: isUrlSyncEnabled ? urlState.agentId : null,
-    /** Update agent ID in URL */
-    setUrlAgentId,
   };
 }

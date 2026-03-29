@@ -1,18 +1,27 @@
 import React, { useState, useRef, useCallback, useEffect, memo } from 'react';
 import { useChatUserContext } from './UserContext';
-import { MediaAttachment, FileUploadProgress, ChatConfig } from '../../types/chatTypes';
+import {
+  MediaAttachment,
+  FileUploadProgress,
+  ChatConfig,
+  VoiceComposerState,
+  VoiceProvider,
+  VoiceSegment,
+  VoiceTranscript,
+} from '../../types/chatTypes';
 import { createObjectUrlFromDataUrl } from '../../lib/utils';
+import { resolveVoiceProviderFactory } from '../../lib/voiceCompose';
 import { Button } from '../ui/button';
 import { Textarea } from '../ui/textarea';
 import { Card, CardContent } from '../ui/card';
 import { Badge } from '../ui/badge';
 import { Progress } from '../ui/progress';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
+import { VoiceComposer } from './VoiceComposer';
 import {
   Send,
   Paperclip,
   Mic,
-  MicOff,
   Image,
   Video,
   FileText,
@@ -20,7 +29,6 @@ import {
   Square,
   Play,
   Pause,
-  RotateCcw,
   Loader2,
 } from 'lucide-react';
 
@@ -328,6 +336,20 @@ const AudioRecorder: React.FC<{
   );
 });
 
+const resolveVoiceErrorMessage = (error: unknown, config?: ChatConfig): string => {
+  if (error instanceof DOMException && error.name === 'NotAllowedError') {
+    return config?.labels?.voicePermissionDenied || 'Microphone access was denied.';
+  }
+
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+
+  return config?.labels?.voiceCaptureError || 'Unable to capture audio.';
+};
+
+const clearVoiceTranscript = (): VoiceTranscript => ({});
+
 export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   value,
   onChange,
@@ -350,6 +372,14 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   const { setContext } = useChatUserContext();
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [uploadProgress, setUploadProgress] = useState<Map<string, FileUploadProgress>>(new Map());
+  const [isVoiceComposerOpen, setIsVoiceComposerOpen] = useState(false);
+  const [voiceState, setVoiceState] = useState<VoiceComposerState>('idle');
+  const [voiceDraft, setVoiceDraft] = useState<VoiceSegment | null>(null);
+  const [voiceTranscript, setVoiceTranscript] = useState<VoiceTranscript>(clearVoiceTranscript);
+  const [voiceDurationMs, setVoiceDurationMs] = useState(0);
+  const [voiceAudioLevel, setVoiceAudioLevel] = useState(0);
+  const [voiceCountdownMs, setVoiceCountdownMs] = useState(0);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -357,6 +387,14 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   const recordingStartTime = useRef<number>(0);
   const recordingInterval = useRef<ReturnType<typeof setInterval> | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
+  const voiceProviderRef = useRef<VoiceProvider | null>(null);
+
+  const voiceComposeEnabled = config?.voiceCompose?.enabled === true;
+  const voiceAutoSendDelayMs = config?.voiceCompose?.autoSendDelayMs ?? 5000;
+  const voicePersistComposer = config?.voiceCompose?.persistComposer ?? true;
+  const voiceShowTranscriptPreview = config?.voiceCompose?.showTranscriptPreview ?? true;
+  const voiceTranscriptMode = config?.voiceCompose?.transcriptMode ?? 'final-only';
+  const voiceMaxRecordingMs = config?.voiceCompose?.maxRecordingMs;
 
   // Cleanup recording on unmount
   useEffect(() => {
@@ -366,6 +404,10 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
       }
       if (recordingInterval.current) {
         clearInterval(recordingInterval.current);
+      }
+      if (voiceProviderRef.current) {
+        void voiceProviderRef.current.destroy();
+        voiceProviderRef.current = null;
       }
     };
   }, []);
@@ -585,12 +627,171 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
     }
   };
 
+  const resetVoiceComposerState = useCallback((nextState: VoiceComposerState = 'idle') => {
+    setVoiceState(nextState);
+    setVoiceDraft(null);
+    setVoiceTranscript(clearVoiceTranscript());
+    setVoiceDurationMs(0);
+    setVoiceAudioLevel(0);
+    setVoiceCountdownMs(0);
+    setVoiceError(null);
+  }, []);
+
+  const ensureVoiceProvider = useCallback(async () => {
+    if (voiceProviderRef.current) {
+      return voiceProviderRef.current;
+    }
+
+    const createProvider = resolveVoiceProviderFactory(config?.voiceCompose?.createProvider);
+    const provider = await createProvider({
+      onStateChange: setVoiceState,
+      onAudioLevelChange: setVoiceAudioLevel,
+      onDurationChange: setVoiceDurationMs,
+      onTranscriptChange: setVoiceTranscript,
+      onSegmentReady: (segment) => {
+        setVoiceDraft(segment);
+        setVoiceTranscript(segment.transcript ?? clearVoiceTranscript());
+        setVoiceDurationMs(segment.attachment.durationMs ?? 0);
+        setVoiceAudioLevel(0);
+        setVoiceCountdownMs(voiceAutoSendDelayMs);
+        setVoiceError(null);
+        setVoiceState('review');
+      },
+      onError: (error) => {
+        setVoiceError(resolveVoiceErrorMessage(error, config));
+        setVoiceAudioLevel(0);
+        setVoiceCountdownMs(0);
+        setVoiceState('error');
+      },
+    }, {
+      maxRecordingMs: voiceMaxRecordingMs,
+    });
+
+    voiceProviderRef.current = provider;
+    return provider;
+  }, [config, voiceAutoSendDelayMs, voiceMaxRecordingMs]);
+
+  const closeVoiceComposer = useCallback(async () => {
+    setIsVoiceComposerOpen(false);
+    setVoiceError(null);
+    setVoiceCountdownMs(0);
+    setVoiceAudioLevel(0);
+    setVoiceTranscript(clearVoiceTranscript());
+    setVoiceDraft(null);
+    setVoiceDurationMs(0);
+    setVoiceState('idle');
+
+    if (voiceProviderRef.current) {
+      await voiceProviderRef.current.cancel();
+    }
+  }, []);
+
+  const startVoiceCapture = useCallback(async () => {
+    if (disabled || isGenerating) {
+      return;
+    }
+
+    setIsVoiceComposerOpen(true);
+    setVoiceError(null);
+    setVoiceDraft(null);
+    setVoiceCountdownMs(0);
+    setVoiceTranscript(clearVoiceTranscript());
+    setVoiceAudioLevel(0);
+    setVoiceDurationMs(0);
+
+    try {
+      const provider = await ensureVoiceProvider();
+      await provider.start();
+    } catch (error) {
+      setVoiceError(resolveVoiceErrorMessage(error, config));
+      setVoiceState('error');
+    }
+  }, [disabled, isGenerating, ensureVoiceProvider, config]);
+
+  const stopVoiceCapture = useCallback(async () => {
+    if (!voiceProviderRef.current) return;
+
+    try {
+      await voiceProviderRef.current.stop();
+    } catch (error) {
+      setVoiceError(resolveVoiceErrorMessage(error, config));
+      setVoiceState('error');
+    }
+  }, [config]);
+
+  const cancelVoiceCapture = useCallback(async () => {
+    if (voiceProviderRef.current) {
+      await voiceProviderRef.current.cancel();
+    }
+
+    resetVoiceComposerState('idle');
+  }, [resetVoiceComposerState]);
+
+  const finalizeVoiceComposerAfterSend = useCallback(() => {
+    if (voicePersistComposer) {
+      resetVoiceComposerState('idle');
+      setIsVoiceComposerOpen(true);
+      return;
+    }
+
+    void closeVoiceComposer();
+  }, [voicePersistComposer, resetVoiceComposerState, closeVoiceComposer]);
+
+  const sendVoiceDraft = useCallback(() => {
+    if (!voiceDraft || disabled || isGenerating) {
+      return;
+    }
+
+    setVoiceState('sending');
+    setVoiceCountdownMs(0);
+    onSubmit('', [...attachments, voiceDraft.attachment]);
+    onChange('');
+    onAttachmentsChange([]);
+    finalizeVoiceComposerAfterSend();
+  }, [
+    voiceDraft,
+    disabled,
+    isGenerating,
+    onSubmit,
+    attachments,
+    onChange,
+    onAttachmentsChange,
+    finalizeVoiceComposerAfterSend,
+  ]);
+
+  const recordVoiceAgain = useCallback(async () => {
+    resetVoiceComposerState('idle');
+    await startVoiceCapture();
+  }, [resetVoiceComposerState, startVoiceCapture]);
+
+  useEffect(() => {
+    if (voiceState !== 'review' || !voiceDraft || voiceAutoSendDelayMs <= 0) {
+      return;
+    }
+
+    const startedAt = Date.now();
+    setVoiceCountdownMs(voiceAutoSendDelayMs);
+
+    const timer = setInterval(() => {
+      const remaining = Math.max(0, voiceAutoSendDelayMs - (Date.now() - startedAt));
+      setVoiceCountdownMs(remaining);
+
+      if (remaining <= 0) {
+        clearInterval(timer);
+        sendVoiceDraft();
+      }
+    }, 100);
+
+    return () => clearInterval(timer);
+  }, [voiceState, voiceDraft, voiceAutoSendDelayMs, sendVoiceDraft]);
+
   const removeAttachment = (index: number) => {
     const newAttachments = attachments.filter((_, i) => i !== index);
     onAttachmentsChange(newAttachments);
   };
 
   const canAddMoreAttachments = attachments.length < maxAttachments;
+  const showVoiceComposer = voiceComposeEnabled && isVoiceComposerOpen;
 
   return (
     <TooltipProvider>
@@ -644,23 +845,126 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
           )}
 
           {/* Input area */}
-          <form onSubmit={handleSubmit} className="mb-1 flex justify-center">
-            <div
-              className="flex  items-end gap-2 p-3 border rounded-lg bg-background w-full md:min-w-3xl max-w-3xl"
-              onDrop={handleDrop}
-              onDragOver={handleDragOver}
-            >
-              {/* File upload */}
-              {enableFileUpload && canAddMoreAttachments && (
-                <>
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    multiple
-                    accept={acceptedFileTypes.join(',')}
-                    onChange={handleFileSelect}
-                    className="hidden"
+          {showVoiceComposer ? (
+            <div className="mb-1 flex justify-center">
+              <VoiceComposer
+                state={voiceState}
+                transcript={voiceTranscript}
+                transcriptMode={voiceTranscriptMode}
+                showTranscriptPreview={voiceShowTranscriptPreview}
+                durationMs={voiceDurationMs}
+                audioLevel={voiceAudioLevel}
+                countdownMs={voiceCountdownMs}
+                autoSendDelayMs={voiceAutoSendDelayMs}
+                errorMessage={voiceError}
+                disabled={disabled || isGenerating}
+                labels={config?.labels}
+                onStart={() => {
+                  void startVoiceCapture();
+                }}
+                onStop={() => {
+                  void stopVoiceCapture();
+                }}
+                onCancel={() => {
+                  void cancelVoiceCapture();
+                }}
+                onSendNow={sendVoiceDraft}
+                onRecordAgain={() => {
+                  void recordVoiceAgain();
+                }}
+                onExit={() => {
+                  void closeVoiceComposer();
+                }}
+              />
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="mb-1 flex justify-center">
+              <div
+                className="flex  items-end gap-2 p-3 border rounded-lg bg-background w-full md:min-w-3xl max-w-3xl"
+                onDrop={handleDrop}
+                onDragOver={handleDragOver}
+              >
+                {/* File upload */}
+                {enableFileUpload && canAddMoreAttachments && (
+                  <>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      accept={acceptedFileTypes.join(',')}
+                      onChange={handleFileSelect}
+                      className="hidden"
+                    />
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-10 w-10"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            fileInputRef.current?.click();
+                          }}
+                          disabled={disabled}
+                        >
+                          <Paperclip className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{config?.labels?.attachFileTooltip}</TooltipContent>
+                    </Tooltip>
+                  </>
+                )}
+
+                {/* Text input */}
+                <div className="flex-1">
+                  <Textarea
+                    ref={textareaRef}
+                    value={value}
+                    onChange={(e) => onChange(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder={placeholder}
+                    disabled={disabled}
+                    className="max-h-[120px] resize-none border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
+                    rows={1}
                   />
+                </div>
+
+                {/* Audio recording / voice compose entry */}
+                {enableAudioRecording && !isRecording && canAddMoreAttachments && !value.trim() && (
+                  voiceComposeEnabled ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-10 w-10"
+                          onClick={() => {
+                            void startVoiceCapture();
+                          }}
+                          disabled={disabled || isGenerating}
+                        >
+                          <Mic className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>{config?.labels?.voiceEnter || config?.labels?.recordAudioTooltip}</TooltipContent>
+                    </Tooltip>
+                  ) : (
+                    <AudioRecorder
+                      isRecording={isRecording}
+                      onStartRecording={startRecording}
+                      onStopRecording={stopRecording}
+                      onCancel={cancelRecording}
+                      recordingDuration={recordingDuration}
+                      config={config}
+                    />
+                  )
+                )}
+
+                {/* Submit/Stop button */}
+                {isGenerating ? (
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <Button
@@ -668,84 +972,35 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                         variant="outline"
                         size="icon"
                         className="h-10 w-10"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          fileInputRef.current?.click();
-                        }}
-                        disabled={disabled}
+                        onClick={onStopGeneration}
                       >
-                        <Paperclip className="h-4 w-4" />
+                        <Square className="h-4 w-4" />
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent>{config?.labels?.attachFileTooltip}</TooltipContent>
+                    <TooltipContent>{config?.labels?.stopGenerationTooltip}</TooltipContent>
                   </Tooltip>
-                </>
-              )}
-
-              {/* Text input */}
-              <div className="flex-1">
-                <Textarea
-                  ref={textareaRef}
-                  value={value}
-                  onChange={(e) => onChange(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={placeholder}
-                  disabled={disabled}
-                  className="max-h-[120px] resize-none border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
-                  rows={1}
-                />
+                ) : (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="submit"
+                        size="icon"
+                        className="h-10 w-10"
+                        disabled={disabled || (!value.trim() && attachments.length === 0)}
+                      >
+                        {disabled ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Send className="h-4 w-4" />
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>{config?.labels?.sendMessageTooltip}</TooltipContent>
+                  </Tooltip>
+                )}
               </div>
-
-              {/* Audio recording */}
-              {enableAudioRecording && !isRecording && canAddMoreAttachments && !value.trim() && (
-                <AudioRecorder
-                  isRecording={isRecording}
-                  onStartRecording={startRecording}
-                  onStopRecording={stopRecording}
-                  onCancel={cancelRecording}
-                  recordingDuration={recordingDuration}
-                  config={config}
-                />
-              )}
-
-              {/* Submit/Stop button */}
-              {isGenerating ? (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      className="h-10 w-10"
-                      onClick={onStopGeneration}
-                    >
-                      <Square className="h-4 w-4" />
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>{config?.labels?.stopGenerationTooltip}</TooltipContent>
-                </Tooltip>
-              ) : (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      type="submit"
-                      size="icon"
-                      className="h-10 w-10"
-                      disabled={disabled || (!value.trim() && attachments.length === 0)}
-                    >
-                      {disabled ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <Send className="h-4 w-4" />
-                      )}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>{config?.labels?.sendMessageTooltip}</TooltipContent>
-                </Tooltip>
-              )}
-            </div>
-          </form>
+            </form>
+          )}
 
           {/* Help text */}
           <div className="text-[10px] text-muted-foreground text-center">
