@@ -112,9 +112,6 @@ export const VoiceComposer: React.FC<VoiceComposerProps> = ({
 }) => {
   const transcriptText = resolveTranscriptText(transcript, transcriptMode);
   const countdownSeconds = Math.max(1, Math.ceil(countdownMs / 1000));
-  const countdownValue = autoSendDelayMs > 0
-    ? Math.min(100, Math.max(0, ((autoSendDelayMs - countdownMs) / autoSendDelayMs) * 100))
-    : 100;
   const isBusy = state === 'preparing' || state === 'finishing' || state === 'sending';
   const isCapturing = state === 'waiting_for_speech' || state === 'listening';
   const hasDraft = Boolean(attachment);
@@ -122,11 +119,20 @@ export const VoiceComposer: React.FC<VoiceComposerProps> = ({
   const isArmedDraft = isDraftLayout && reviewMode === 'armed' && (
     state === 'waiting_for_speech' || state === 'listening'
   );
+  const draftStatusLabel = state === 'listening'
+    ? (labels?.voiceListening || 'Listening...')
+    : state === 'waiting_for_speech'
+      ? (labels?.voiceWaiting || 'Waiting for speech...')
+      : state === 'finishing'
+        ? (labels?.voiceFinishing || 'Finishing capture...')
+        : state === 'sending'
+          ? (labels?.voiceSending || 'Sending...')
+          : (labels?.voiceReview || 'Ready to send');
   const levelValue = isCapturing || state === 'preparing' || state === 'finishing'
     ? Math.max(8, Math.round(audioLevel * 100))
     : 0;
   const headerLabel = hasDraft && state !== 'sending' && state !== 'error'
-    ? (labels?.voiceReview || 'Ready to send')
+    ? draftStatusLabel
     : state === 'error'
       ? (labels?.voiceCaptureError || 'Unable to capture audio.')
       : resolveStateLabel(state, labels, errorMessage);
@@ -151,11 +157,11 @@ export const VoiceComposer: React.FC<VoiceComposerProps> = ({
   };
 
   return (
-    <div className="w-full max-w-3xl rounded-xl border bg-background p-3 shadow-sm sm:p-4 md:min-w-3xl">
+    <div className="w-full max-w-3xl rounded-2xl border bg-background p-3 shadow-sm sm:p-4 md:min-w-3xl">
       <div className="flex items-center justify-between gap-2 sm:gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <Badge variant="outline">{labels?.voiceTitle || 'Voice'}</Badge>
-          <span className="truncate text-xs sm:text-sm text-muted-foreground">
+          <span className="truncate rounded-full bg-muted px-2.5 py-1 text-[11px] sm:text-xs text-muted-foreground">
             {headerLabel}
           </span>
         </div>
@@ -209,15 +215,8 @@ export const VoiceComposer: React.FC<VoiceComposerProps> = ({
         </div>
       ) : (
         <div className="mt-3 rounded-xl border bg-muted/20 p-3 sm:p-4">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <div className="text-sm font-medium text-foreground">
-                {labels?.voiceReview || 'Ready to send'}
-              </div>
-              <div className="text-xs text-muted-foreground">
-                {formatDuration(durationMs)}
-              </div>
-            </div>
+          <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span>{formatDuration(durationMs)}</span>
             <Button
               type="button"
               variant="ghost"
@@ -232,12 +231,12 @@ export const VoiceComposer: React.FC<VoiceComposerProps> = ({
             </Button>
           </div>
 
-          <div className="mt-4 flex flex-col items-center gap-3 text-center">
+          <div className="mt-4 flex flex-col items-center gap-4 text-center">
             <Button
               type="button"
               size="icon"
               variant={orbCanStop ? 'destructive' : 'outline'}
-              className={`h-16 w-16 rounded-full sm:h-20 sm:w-20 ${
+              className={`h-20 w-20 rounded-full sm:h-24 sm:w-24 ${
                 orbIsListening
                   ? 'border-red-500 bg-red-500 text-white hover:bg-red-600'
                   : isArmedDraft
@@ -258,17 +257,21 @@ export const VoiceComposer: React.FC<VoiceComposerProps> = ({
               )}
             </Button>
 
-            <div className="w-full max-w-sm space-y-2">
-              <Progress value={levelValue} className="h-2" />
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span>{formatDuration(durationMs)}</span>
-                <span className="max-w-[15rem] text-right">{reviewHelperText}</span>
-              </div>
+            <div className="max-w-sm space-y-1 px-2">
+              <p className="text-sm text-foreground">{reviewHelperText}</p>
+              {isCapturing && (
+                <div className="mx-auto h-1.5 w-32 overflow-hidden rounded-full bg-red-100">
+                  <div
+                    className="h-full rounded-full bg-red-500 transition-[width] duration-150"
+                    style={{ width: `${levelValue}%` }}
+                  />
+                </div>
+              )}
             </div>
           </div>
 
           {attachment && (
-            <div className="mt-3 rounded-lg bg-background p-2">
+            <div className="mt-4 rounded-lg border bg-background/90 p-2 shadow-sm">
               <audio controls preload="metadata" className="w-full">
                 <source src={attachment.dataUrl} type={attachment.mimeType} />
               </audio>
@@ -282,22 +285,21 @@ export const VoiceComposer: React.FC<VoiceComposerProps> = ({
           )}
 
           {isAutoSendActive && autoSendDelayMs > 0 && (
-            <div className="mt-3 space-y-2">
-              <Progress value={countdownValue} className="h-2" />
-              <div className="text-center text-xs text-muted-foreground">
+            <div className="mt-3 flex justify-center">
+              <div className="inline-flex items-center rounded-full border bg-background px-3 py-1 text-xs text-muted-foreground">
                 {interpolateSeconds(labels?.voiceAutoSendIn, countdownSeconds)}
               </div>
             </div>
           )}
 
-          <div className="mt-3 flex items-center justify-end gap-2">
+          <div className="mt-4 grid grid-cols-1 gap-2 sm:flex sm:items-center sm:justify-end">
             {isAutoSendActive && (
-              <Button type="button" variant="ghost" size="sm" onClick={onCancelAutoSend} disabled={disabled}>
+              <Button type="button" variant="ghost" size="sm" onClick={onCancelAutoSend} disabled={disabled} className="w-full sm:w-auto">
                 <X className="h-4 w-4" />
                 {labels?.voiceCancel || 'Cancel'}
               </Button>
             )}
-            <Button type="button" size="sm" onClick={onSendNow} disabled={disabled}>
+            <Button type="button" size="sm" onClick={onSendNow} disabled={disabled} className="w-full sm:w-auto">
               <Send className="h-4 w-4" />
               {labels?.voiceSendNow || 'Send now'}
             </Button>
