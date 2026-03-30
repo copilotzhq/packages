@@ -636,12 +636,14 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                 {/* Right sidebar custom component for desktop */}
                 {config?.customComponent?.component && !isMobile && (
                   <div
-                    className={`h-full transition-all duration-300 ease-in-out overflow-hidden ${
-                      state.showSidebar ? 'w-80' : 'w-0'
-                    }`}
+                    className="h-full transition-all duration-300 ease-in-out overflow-hidden"
+                    style={{ width: state.showSidebar ? (config.customComponent.panelWidth ?? 320) : 0 }}
                   >
                     {state.showSidebar && (
-                      <div className="flex flex-col h-full border-l bg-background animate-in slide-in-from-right-4 duration-300 w-80">
+                      <div
+                        className="flex flex-col h-full border-l bg-background animate-in slide-in-from-right-4 duration-300"
+                        style={{ width: config.customComponent.panelWidth ?? 320 }}
+                      >
                         {renderCustomComponent()}
                       </div>
                     )}

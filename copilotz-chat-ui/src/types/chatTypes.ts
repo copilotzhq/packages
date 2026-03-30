@@ -248,6 +248,8 @@ export interface ChatConfig {
     icon?: ReactNode;
     /** Static component or render function receiving panel props */
     component?: ReactNode | ((props: { onClose: () => void; isMobile: boolean }) => ReactNode);
+    /** Desktop panel width in pixels (default: 320) */
+    panelWidth?: number;
   };
   /** Additional actions to render in the header */
   headerActions?: ReactNode;
