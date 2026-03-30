@@ -1,8 +1,8 @@
 import React, { useState, useMemo, useEffect, memo } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import { ChatMessage, MediaAttachment, ToolCall, MessageActionEvent } from '../../types/chatTypes';
+import { ChatMarkdownConfig, ChatMessage, MediaAttachment, ToolCall, MessageActionEvent } from '../../types/chatTypes';
 import { Button } from '../ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import { Badge } from '../ui/badge';
@@ -49,6 +49,7 @@ interface MessageProps {
   longMessagePreviewChars?: number;
   longMessageChunkChars?: number;
   renderUserMarkdown?: boolean;
+  markdown?: ChatMarkdownConfig;
   isExpanded?: boolean;
   onToggleExpanded?: (messageId: string) => void;
   /** When true, hides the avatar and name (for grouped consecutive messages from same sender) */
@@ -125,7 +126,7 @@ const ThinkingBlock: React.FC<{
 });
 
 // Memoized markdown components configuration to prevent recreation on every render
-const markdownComponents = {
+const defaultMarkdownComponents: Components = {
   code: ({ node, className, children, ...props }: any) => {
     const inline = (props as { inline?: boolean }).inline;
     const match = /language-(\w+)/.exec(className || '');
@@ -144,9 +145,9 @@ const markdownComponents = {
 };
 
 // Memoized plugins arrays to prevent recreation
-const remarkPluginsDefault = [remarkGfm];
-const rehypePluginsDefault = [rehypeHighlight];
-const rehypePluginsEmpty: never[] = [];
+const remarkPluginsDefault = [remarkGfm] as NonNullable<ChatMarkdownConfig['remarkPlugins']>;
+const rehypePluginsDefault = [rehypeHighlight] as NonNullable<ChatMarkdownConfig['rehypePlugins']>;
+const rehypePluginsEmpty = [] as NonNullable<ChatMarkdownConfig['rehypePlugins']>;
 
 const getPlainTextChunks = (content: string, chunkSize: number): string[] => {
   if (chunkSize <= 0 || content.length <= chunkSize) {
@@ -232,6 +233,7 @@ const StreamingText: React.FC<{
   thinkingLabel?: string;
   className?: string;
   renderMarkdown?: boolean;
+  markdown?: ChatMarkdownConfig;
   plainTextChunkChars?: number;
   contentStyle?: React.CSSProperties;
   hideThinkingIndicator?: boolean;
@@ -241,6 +243,7 @@ const StreamingText: React.FC<{
   thinkingLabel = 'Thinking...',
   className = '',
   renderMarkdown = true,
+  markdown,
   plainTextChunkChars = 12000,
   contentStyle,
   hideThinkingIndicator = false,
@@ -250,12 +253,34 @@ const StreamingText: React.FC<{
   thinkingLabel?: string;
   className?: string;
   renderMarkdown?: boolean;
+  markdown?: ChatMarkdownConfig;
   plainTextChunkChars?: number;
   contentStyle?: React.CSSProperties;
   hideThinkingIndicator?: boolean;
 }) {
   const hasContent = content.trim().length > 0;
   const enableSyntaxHighlight = renderMarkdown && !isStreaming && hasCodeBlocks(content);
+  const mergedComponents = useMemo<Components>(
+    () => ({
+      ...defaultMarkdownComponents,
+      ...markdown?.components,
+    }),
+    [markdown?.components],
+  );
+  const mergedRemarkPlugins = useMemo<NonNullable<ChatMarkdownConfig['remarkPlugins']>>(
+    () => [
+      ...remarkPluginsDefault,
+      ...(markdown?.remarkPlugins ?? []),
+    ],
+    [markdown?.remarkPlugins],
+  );
+  const mergedRehypePlugins = useMemo<NonNullable<ChatMarkdownConfig['rehypePlugins']>>(
+    () => [
+      ...(enableSyntaxHighlight ? rehypePluginsDefault : rehypePluginsEmpty),
+      ...(markdown?.rehypePlugins ?? []),
+    ],
+    [enableSyntaxHighlight, markdown?.rehypePlugins],
+  );
 
   return (
     <>
@@ -266,9 +291,9 @@ const StreamingText: React.FC<{
             style={contentStyle}
           >
             <ReactMarkdown
-              remarkPlugins={remarkPluginsDefault}
-              rehypePlugins={enableSyntaxHighlight ? rehypePluginsDefault : rehypePluginsEmpty}
-              components={markdownComponents}
+              remarkPlugins={mergedRemarkPlugins}
+              rehypePlugins={mergedRehypePlugins}
+              components={mergedComponents}
             >
               {content}
             </ReactMarkdown>
@@ -487,6 +512,7 @@ const arePropsEqual = (prevProps: MessageProps, nextProps: MessageProps): boolea
   if (prevProps.longMessagePreviewChars !== nextProps.longMessagePreviewChars) return false;
   if (prevProps.longMessageChunkChars !== nextProps.longMessageChunkChars) return false;
   if (prevProps.renderUserMarkdown !== nextProps.renderUserMarkdown) return false;
+  if (prevProps.markdown !== nextProps.markdown) return false;
   if (prevProps.isExpanded !== nextProps.isExpanded) return false;
   if (prevProps.onToggleExpanded !== nextProps.onToggleExpanded) return false;
   if (prevProps.isGrouped !== nextProps.isGrouped) return false;
@@ -520,6 +546,7 @@ export const Message: React.FC<MessageProps> = memo(({
   longMessagePreviewChars = 4000,
   longMessageChunkChars = 12000,
   renderUserMarkdown = true,
+  markdown,
   isExpanded = false,
   onToggleExpanded,
   isGrouped = false,
@@ -705,6 +732,7 @@ export const Message: React.FC<MessageProps> = memo(({
                   isStreaming={message.isStreaming}
                   thinkingLabel={thinkingLabel}
                   renderMarkdown={shouldRenderMarkdown}
+                  markdown={markdown}
                   plainTextChunkChars={normalizedChunkChars}
                   contentStyle={contentStyle}
                   hideThinkingIndicator={!!message.reasoning}

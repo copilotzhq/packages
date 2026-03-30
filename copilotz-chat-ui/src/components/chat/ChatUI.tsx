@@ -475,6 +475,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     longMessagePreviewChars: config.ui.longMessagePreviewChars,
     longMessageChunkChars: config.ui.longMessageChunkChars,
     renderUserMarkdown: config.ui.renderUserMarkdown,
+    markdown: config.markdown,
     onToggleExpanded: handleToggleMessageExpansion,
   }), [
     user?.avatar,
@@ -497,6 +498,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     config.ui.longMessagePreviewChars,
     config.ui.longMessageChunkChars,
     config.ui.renderUserMarkdown,
+    config.markdown,
     handleMessageAction,
     handleToggleMessageExpansion,
   ]);

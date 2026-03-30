@@ -117,6 +117,12 @@ export const defaultChatConfig: Required<ChatConfig> = {
     renderUserMarkdown: true,
   },
 
+  markdown: {
+    remarkPlugins: [],
+    rehypePlugins: [],
+    components: {},
+  },
+
   voiceCompose: {
     enabled: false,
     defaultMode: 'text',
@@ -153,6 +159,10 @@ export function mergeConfig(_baseConfig: ChatConfig, userConfig?: Partial<ChatCo
     ui: {
       ...defaultChatConfig.ui,
       ...userConfig.ui,
+    },
+    markdown: {
+      ...defaultChatConfig.markdown,
+      ...userConfig.markdown,
     },
     voiceCompose: {
       ...defaultChatConfig.voiceCompose,

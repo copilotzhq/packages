@@ -1,4 +1,5 @@
 import { ReactNode } from 'react';
+import type { Components, Options as ReactMarkdownOptions } from 'react-markdown';
 
 // Enhanced Media Attachments
 export type MediaAttachment =
@@ -121,6 +122,12 @@ export interface ChatThread {
   metadata?: Record<string, any>;
 }
 
+export interface ChatMarkdownConfig {
+  remarkPlugins?: ReactMarkdownOptions['remarkPlugins'];
+  rehypePlugins?: ReactMarkdownOptions['rehypePlugins'];
+  components?: Components;
+}
+
 // Configuration for Chat Customization
 export interface ChatConfig {
   branding?: {
@@ -232,6 +239,7 @@ export interface ChatConfig {
     longMessageChunkChars?: number;
     renderUserMarkdown?: boolean;
   };
+  markdown?: ChatMarkdownConfig;
   voiceCompose?: {
     enabled?: boolean;
     defaultMode?: 'text' | 'voice';
