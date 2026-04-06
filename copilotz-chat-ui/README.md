@@ -31,7 +31,7 @@ Then you need to show tool calls — the library doesn't support that. Streaming
 | Input | File upload (drag & drop), audio recording, attachment previews |
 | Threads | Sidebar with search, archive, date grouping, rename, delete |
 | User Profile | Dynamic fields, memories (CRUD), agent vs user distinction |
-| Customization | 50+ labels (i18n-ready), feature toggles, 4 presets, theming |
+| Customization | 50+ labels (i18n-ready), feature toggles, theming |
 
 **One package. Backend-agnostic. Production-ready.**
 
@@ -141,26 +141,6 @@ const agents = [
 ## Configuration
 
 The configuration system lets you customize everything without touching the component internals.
-
-### Presets
-
-Start with a preset and override what you need:
-
-```tsx
-import { ChatUI, chatConfigPresets } from '@copilotz/chat-ui';
-
-// Minimal: no threads, no file upload, compact mode
-<ChatUI config={chatConfigPresets.minimal} />
-
-// Full: all features enabled, timestamps, word count
-<ChatUI config={chatConfigPresets.full} />
-
-// Developer: tool calls visible, timestamps, file upload
-<ChatUI config={chatConfigPresets.developer} />
-
-// Customer Support: threads, file upload, no message editing
-<ChatUI config={chatConfigPresets.customer_support} />
-```
 
 ### Custom Configuration
 
@@ -437,8 +417,7 @@ export { UserMenu } from './components/chat/UserMenu';
 export { ChatUserContextProvider, useChatUserContext } from './components/chat/UserContext';
 
 // Configuration
-export { defaultChatConfig, mergeConfig, chatConfigPresets, validateConfig } from './config/chatConfig';
-export { themeUtils, featureFlags, configUtils } from './config/chatConfig';
+export { defaultChatConfig, mergeConfig } from './config/chatConfig';
 
 // Types
 export type { ChatMessage, ChatThread, ChatConfig, ChatCallbacks } from './types/chatTypes';
@@ -460,17 +439,7 @@ import '@copilotz/chat-ui/styles.css';
 
 ### Theming
 
-The component respects the `dark` class on your document root. Set theme programmatically:
-
-```tsx
-import { themeUtils } from '@copilotz/chat-ui';
-
-// Apply theme
-themeUtils.applyTheme('dark'); // or 'light' or 'auto'
-
-// Get system preference
-const systemTheme = themeUtils.getSystemTheme(); // 'light' | 'dark'
-```
+The component respects the `dark` class on your document root. Set `ui.theme` to `'light'`, `'dark'`, or `'auto'` (follows system preference).
 
 ### CSS Variables
 
