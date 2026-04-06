@@ -298,6 +298,12 @@ const convertServerMessage = (msg: ServerMessage): ChatViewMessage => {
     ? (msg as any).reasoning as string
     : undefined;
 
+  // Extract sender identity for multi-agent display
+  const senderAgentId = msg.senderType === 'agent' ? (msg.senderId ?? undefined) : undefined;
+  const senderName = msg.senderType === 'agent'
+    ? (typeof (msg as any).senderName === 'string' ? (msg as any).senderName : (msg.senderId ?? undefined))
+    : undefined;
+
   return {
     id: msg.id,
     role,
@@ -309,6 +315,8 @@ const convertServerMessage = (msg: ServerMessage): ChatViewMessage => {
     metadata,
     toolCalls: hasToolCalls ? mappedToolCalls : undefined,
     ...(reasoning ? { reasoning } : {}),
+    ...(senderAgentId ? { senderAgentId } : {}),
+    ...(senderName ? { senderName } : {}),
   };
 };
 
@@ -322,6 +330,10 @@ export interface UseCopilotzOptions {
   defaultThreadName?: string;
   onToolOutput?: (output: Record<string, unknown>) => void;
   preferredAgentName?: string | null;
+  /** Agent participants in the thread (multi-agent). When set, overrides preferredAgentName for thread.participants. */
+  participants?: string[] | null;
+  /** Explicit target agent for each message. When set, maps to MessagePayload.target. */
+  targetAgentName?: string | null;
   getRequestHeaders?: RequestHeadersProvider;
   eventInterceptor?: EventInterceptor;
   runErrorInterceptor?: RunErrorInterceptor;
@@ -334,6 +346,8 @@ export function useCopilotz({
   defaultThreadName,
   onToolOutput,
   preferredAgentName,
+  participants,
+  targetAgentName,
   getRequestHeaders,
   eventInterceptor,
   runErrorInterceptor,
@@ -359,6 +373,8 @@ export function useCopilotz({
 
   const [userContextSeed, setUserContextSeed] = useState<Partial<ChatUserContext>>(initialContext || {});
   const preferredAgentRef = useRef<string | null>(preferredAgentName ?? null);
+  const participantsRef = useRef<string[] | null>(participants ?? null);
+  const targetAgentNameRef = useRef<string | null>(targetAgentName ?? null);
 
   // Refs to hold latest state for callbacks to avoid dependency cycles
   // Using direct assignment pattern instead of useEffect for better performance
@@ -377,6 +393,8 @@ export function useCopilotz({
   currentThreadExternalIdRef.current = currentThreadExternalId;
   userContextSeedRef.current = userContextSeed;
   preferredAgentRef.current = preferredAgentName ?? null;
+  participantsRef.current = participants ?? null;
+  targetAgentNameRef.current = targetAgentName ?? null;
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesRequestRef = useRef<number>(0);
@@ -483,12 +501,23 @@ export function useCopilotz({
     }
 
     if (senderType === 'agent' && typeof payload.content === 'string') {
+      // Extract sender identity from the event payload for multi-agent display
+      const agentSenderId = payload.senderId ?? payload.sender?.id ?? payload.sender?.name ?? undefined;
+      const agentSenderName = payload.sender?.name ?? payload.senderId ?? undefined;
+
       setMessages((prev) => {
         const next = [...prev];
         for (let i = next.length - 1; i >= 0; i--) {
           const m = next[i];
           if (m.role === 'assistant' && m.isStreaming) {
-            next[i] = { ...m, content: payload.content, isStreaming: false, isComplete: true };
+            next[i] = {
+              ...m,
+              content: payload.content,
+              isStreaming: false,
+              isComplete: true,
+              ...(agentSenderId ? { senderAgentId: agentSenderId } : {}),
+              ...(agentSenderName ? { senderName: agentSenderName } : {}),
+            };
             return next;
           }
         }
@@ -508,6 +537,8 @@ export function useCopilotz({
             isStreaming: false,
             isComplete: true,
             metadata: (payload.metadata ?? undefined) as Record<string, unknown> | undefined,
+            ...(agentSenderId ? { senderAgentId: agentSenderId } : {}),
+            ...(agentSenderName ? { senderName: agentSenderName } : {}),
           },
         ];
       });
@@ -1089,6 +1120,8 @@ export function useCopilotz({
         threadMetadata: params.threadMetadata ?? threadMetadata,
         toolCalls: params.toolCalls,
         selectedAgent: params.agentName ?? preferredAgentRef.current ?? null,
+        participants: participantsRef.current,
+        targetAgent: targetAgentNameRef.current,
         getRequestHeaders,
         onToken: (token, _isComplete, _raw, opts) => updateStreamingMessage(token, opts),
         onMessageEvent: async (event: any) => {

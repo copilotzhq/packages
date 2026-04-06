@@ -26,6 +26,7 @@ import {
 import { ReactNode } from 'react';
 import { SidebarTrigger } from '../ui/sidebar';
 import type { AgentOption } from '../../types/chatTypes';
+import { ParticipantsSelector } from './AgentSelectors';
 
 export interface ChatHeaderConfig {
   branding?: {
@@ -71,9 +72,12 @@ export interface ChatHeaderProps {
   showCustomComponentButton?: boolean;
   isMobile?: boolean;
   showAgentSelector?: boolean;
+  isMultiAgentMode?: boolean;
   agentOptions?: AgentOption[];
   selectedAgentId?: string | null;
   onSelectAgent?: (agentId: string) => void;
+  participantIds?: string[];
+  onParticipantsChange?: (ids: string[]) => void;
   className?: string;
 }
 
@@ -89,9 +93,12 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   showCustomComponentButton,
   isMobile,
   showAgentSelector = false,
+  isMultiAgentMode = false,
   agentOptions = [],
   selectedAgentId = null,
   onSelectAgent,
+  participantIds,
+  onParticipantsChange,
   className = '',
 }) => {
   const [isDarkMode, setIsDarkMode] = React.useState(() => {
@@ -175,8 +182,15 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
               </TooltipContent>
             </Tooltip>
 
-            {/* Agent Selector - ChatGPT style */}
-            {showAgentSelector && (
+            {/* Agent Selector */}
+            {showAgentSelector && isMultiAgentMode && onParticipantsChange && (
+              <ParticipantsSelector
+                agents={agentOptions}
+                participantIds={participantIds ?? agentOptions.map(a => a.id)}
+                onParticipantsChange={onParticipantsChange}
+              />
+            )}
+            {showAgentSelector && !isMultiAgentMode && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button

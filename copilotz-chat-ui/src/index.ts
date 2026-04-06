@@ -1,5 +1,6 @@
 export * from './components/chat/ChatUI';
 export * from './components/chat/ChatHeader';
+export * from './components/chat/AgentSelectors';
 export * from './components/chat/ChatInput';
 export * from './components/chat/Message';
 export * from './components/chat/Sidebar';

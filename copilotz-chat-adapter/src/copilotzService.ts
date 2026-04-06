@@ -1,34 +1,45 @@
-import type { MediaAttachment } from '@copilotz/chat-ui';
+import type { MediaAttachment } from "@copilotz/chat-ui";
 
 const rawBaseValue = import.meta.env?.VITE_API_URL;
-const rawBase = typeof rawBaseValue === 'string' && rawBaseValue.length > 0 ? rawBaseValue : '/api';
-const normalizedBase = rawBase.replace(/\/$/, '');
-const API_BASE = normalizedBase.startsWith('http') || normalizedBase.startsWith('/')
-  ? normalizedBase
-  : `/${normalizedBase}`;
+const rawBase = typeof rawBaseValue === "string" && rawBaseValue.length > 0
+  ? rawBaseValue
+  : "/api";
+const normalizedBase = rawBase.replace(/\/$/, "");
+const API_BASE =
+  normalizedBase.startsWith("http") || normalizedBase.startsWith("/")
+    ? normalizedBase
+    : `/${normalizedBase}`;
 
 const apiUrl = (path: string) => `${API_BASE}${path}`;
 
-const runtimeProcess: typeof process | undefined = typeof process !== 'undefined' ? process : undefined;
+const runtimeProcess: typeof process | undefined =
+  typeof process !== "undefined" ? process : undefined;
 
 const API_KEY = (() => {
-  const env = (import.meta as { env?: Record<string, string | undefined> }).env ?? {};
+  const env =
+    (import.meta as { env?: Record<string, string | undefined> }).env ?? {};
   const candidates = [
     env.VITE_API_KEY,
     env.VITE_COPILOTZ_API_KEY,
     runtimeProcess?.env?.COPILOTZ_API_KEY,
     runtimeProcess?.env?.API_KEY,
   ];
-  return candidates.find((value) => typeof value === 'string' && value.length > 0);
+  return candidates.find((value) =>
+    typeof value === "string" && value.length > 0
+  );
 })();
 
-export type RequestHeadersProvider = () => Record<string, string> | Promise<Record<string, string>>;
+export type RequestHeadersProvider = () =>
+  | Record<string, string>
+  | Promise<Record<string, string>>;
 
 const withAuthHeaders = async (
   headers: Record<string, string> = {},
   getRequestHeaders?: RequestHeadersProvider,
 ): Promise<Record<string, string>> => {
-  const providedHeaders = getRequestHeaders ? await getRequestHeaders() : undefined;
+  const providedHeaders = getRequestHeaders
+    ? await getRequestHeaders()
+    : undefined;
   if (providedHeaders && Object.keys(providedHeaders).length > 0) {
     return { ...headers, ...providedHeaders };
   }
@@ -64,17 +75,35 @@ type RestMessage = {
   updatedAt?: string;
 };
 
-type MessageSenderType = 'agent' | 'user' | 'tool' | 'system';
+type MessageSenderType = "agent" | "user" | "tool" | "system";
 
 type MessageContent =
   | string
   | Array<
-      | { type: 'text'; text: string }
-      | { type: 'image'; url?: string; dataBase64?: string; mimeType?: string; alt?: string }
-      | { type: 'audio'; url?: string; dataBase64?: string; mimeType?: string; transcript?: string }
-      | { type: 'file'; url?: string; dataBase64?: string; mimeType?: string; name?: string }
-      | { type: 'json'; value: unknown }
-    >;
+    | { type: "text"; text: string }
+    | {
+      type: "image";
+      url?: string;
+      dataBase64?: string;
+      mimeType?: string;
+      alt?: string;
+    }
+    | {
+      type: "audio";
+      url?: string;
+      dataBase64?: string;
+      mimeType?: string;
+      transcript?: string;
+    }
+    | {
+      type: "file";
+      url?: string;
+      dataBase64?: string;
+      mimeType?: string;
+      name?: string;
+    }
+    | { type: "json"; value: unknown }
+  >;
 
 type MessageToolCall = {
   id?: string | null;
@@ -96,7 +125,7 @@ type MessageSender = {
   externalId?: string | null;
   type: MessageSenderType;
   name?: string | null;
-  identifierType?: 'id' | 'name' | 'email' | null;
+  identifierType?: "id" | "name" | "email" | null;
   metadata?: Record<string, unknown> | null;
 };
 
@@ -105,11 +134,18 @@ type MessagePayload = {
   sender: MessageSender;
   thread?: MessageThread | null;
   toolCalls?: MessageToolCall[] | null;
+  target?: string | null;
+  targetQueue?: string[] | null;
   metadata?: Record<string, unknown> | null;
 };
 
 type StreamCallbacks = {
-  onToken?: (token: string, isComplete: boolean, raw?: any, options?: { isReasoning?: boolean }) => void;
+  onToken?: (
+    token: string,
+    isComplete: boolean,
+    raw?: any,
+    options?: { isReasoning?: boolean },
+  ) => void;
   onMessageEvent?: (payload: any) => void;
   onAssetEvent?: (payload: any) => void;
   signal?: AbortSignal;
@@ -128,8 +164,14 @@ type RunOptions = {
   attachments?: MediaAttachment[];
   metadata?: Record<string, unknown>;
   threadMetadata?: Record<string, unknown>;
-  toolCalls?: Array<{ name: string; args: Record<string, unknown>; id?: string }>;
+  toolCalls?: Array<
+    { name: string; args: Record<string, unknown>; id?: string }
+  >;
   selectedAgent?: string | null;
+  /** Agent participants in the thread (multi-agent). Overrides selectedAgent for thread.participants when provided. */
+  participants?: string[] | null;
+  /** Explicit target agent for this message (who should respond). Maps to MessagePayload.target. */
+  targetAgent?: string | null;
   getRequestHeaders?: RequestHeadersProvider;
 } & StreamCallbacks;
 
@@ -144,16 +186,19 @@ export class CopilotzRequestError extends Error {
   code?: string;
   details?: unknown;
 
-  constructor(message: string, options: { status: number; code?: string; details?: unknown }) {
+  constructor(
+    message: string,
+    options: { status: number; code?: string; details?: unknown },
+  ) {
     super(message);
-    this.name = 'CopilotzRequestError';
+    this.name = "CopilotzRequestError";
     this.status = options.status;
     this.code = options.code;
     this.details = options.details;
   }
 }
 
-const SSE_LINE_BREAK = '\n\n';
+const SSE_LINE_BREAK = "\n\n";
 
 const appendChunk = (buffer: string, chunk: string): string => {
   if (!buffer) return chunk;
@@ -180,18 +225,20 @@ const parseErrorText = (rawText: string): unknown => {
 
 const toAttachmentPayload = (attachments?: MediaAttachment[]) => {
   if (!attachments || attachments.length === 0) return undefined;
-  return attachments.map(att => {
+  return attachments.map((att) => {
     const base = {
       kind: att.kind,
       dataUrl: att.dataUrl,
       mimeType: att.mimeType,
       fileName: att.fileName,
     };
-    if (att.kind === 'audio' || att.kind === 'video') {
+    if (att.kind === "audio" || att.kind === "video") {
       return {
         ...base,
         durationMs: att.durationMs,
-        ...(att.kind === 'video' && 'poster' in att ? { poster: att.poster } : {}),
+        ...(att.kind === "video" && "poster" in att
+          ? { poster: att.poster }
+          : {}),
       };
     }
     return base;
@@ -210,7 +257,9 @@ const base64FromUint8 = (bytes: Uint8Array): string => {
   return btoa(binary);
 };
 
-const parseDataUrl = (dataUrl: string): { mime: string; base64: string } | null => {
+const parseDataUrl = (
+  dataUrl: string,
+): { mime: string; base64: string } | null => {
   const match = dataUrl.match(/^data:(.+?);base64,(.+)$/s);
   if (!match) return null;
   return { mime: match[1], base64: match[2] };
@@ -245,23 +294,36 @@ const encodeWav16BitPCM = (audioBuffer: AudioBuffer): Uint8Array => {
   };
 
   let offset = 0;
-  writeString(offset, "RIFF"); offset += 4;
-  view.setUint32(offset, 36 + dataSize, true); offset += 4;
-  writeString(offset, "WAVE"); offset += 4;
+  writeString(offset, "RIFF");
+  offset += 4;
+  view.setUint32(offset, 36 + dataSize, true);
+  offset += 4;
+  writeString(offset, "WAVE");
+  offset += 4;
 
   // fmt  subchunk
-  writeString(offset, "fmt "); offset += 4;
-  view.setUint32(offset, 16, true); offset += 4;          // Subchunk1Size (16 for PCM)
-  view.setUint16(offset, 1, true); offset += 2;           // AudioFormat (1 = PCM)
-  view.setUint16(offset, numChannels, true); offset += 2; // NumChannels
-  view.setUint32(offset, sampleRate, true); offset += 4;  // SampleRate
-  view.setUint32(offset, sampleRate * numChannels * bytesPerSample, true); offset += 4; // ByteRate
-  view.setUint16(offset, numChannels * bytesPerSample, true); offset += 2; // BlockAlign
-  view.setUint16(offset, 16, true); offset += 2;          // BitsPerSample
+  writeString(offset, "fmt ");
+  offset += 4;
+  view.setUint32(offset, 16, true);
+  offset += 4; // Subchunk1Size (16 for PCM)
+  view.setUint16(offset, 1, true);
+  offset += 2; // AudioFormat (1 = PCM)
+  view.setUint16(offset, numChannels, true);
+  offset += 2; // NumChannels
+  view.setUint32(offset, sampleRate, true);
+  offset += 4; // SampleRate
+  view.setUint32(offset, sampleRate * numChannels * bytesPerSample, true);
+  offset += 4; // ByteRate
+  view.setUint16(offset, numChannels * bytesPerSample, true);
+  offset += 2; // BlockAlign
+  view.setUint16(offset, 16, true);
+  offset += 2; // BitsPerSample
 
   // data subchunk
-  writeString(offset, "data"); offset += 4;
-  view.setUint32(offset, dataSize, true); offset += 4;
+  writeString(offset, "data");
+  offset += 4;
+  view.setUint32(offset, dataSize, true);
+  offset += 4;
 
   // Interleave channels and write PCM samples
   const channelData: Float32Array[] = [];
@@ -285,10 +347,13 @@ const encodeWav16BitPCM = (audioBuffer: AudioBuffer): Uint8Array => {
   return new Uint8Array(buffer);
 };
 
-const convertAudioDataUrlToWavBase64 = async (dataUrl: string): Promise<string | null> => {
+const convertAudioDataUrlToWavBase64 = async (
+  dataUrl: string,
+): Promise<string | null> => {
   try {
     const ab = dataUrlToArrayBuffer(dataUrl);
-    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const ctx =
+      new (window.AudioContext || (window as any).webkitAudioContext)();
     const audioBuffer = await ctx.decodeAudioData(ab.slice(0)); // ensure detached buffer
     // Optionally downsample here if desired; we'll keep source sampleRate.
     const wavBytes = encodeWav16BitPCM(audioBuffer);
@@ -298,7 +363,9 @@ const convertAudioDataUrlToWavBase64 = async (dataUrl: string): Promise<string |
   }
 };
 
-export async function runCopilotzStream(options: RunOptions): Promise<CopilotzStreamResult> {
+export async function runCopilotzStream(
+  options: RunOptions,
+): Promise<CopilotzStreamResult> {
   const {
     threadId,
     threadExternalId,
@@ -309,6 +376,8 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
     threadMetadata,
     toolCalls,
     selectedAgent,
+    participants,
+    targetAgent,
     getRequestHeaders,
     onToken,
     onMessageEvent,
@@ -318,29 +387,30 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
 
   const controller = new AbortController();
   if (signal) {
-    signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
+    signal.addEventListener("abort", () => controller.abort(signal.reason), {
+      once: true,
+    });
   }
 
   // Audio attachments are sent as content parts and also mirrored in metadata
   // so the persisted message can render the same media after reload.
-  const audioAttachments = attachments?.filter(att => att.kind === 'audio') ?? [];
+  const audioAttachments = attachments?.filter((att) => att.kind === "audio") ??
+    [];
   const attachmentPayload = toAttachmentPayload(attachments);
 
-  const normalizedToolCalls =
-    toolCalls?.map<MessageToolCall>((call) => ({
-      id: call.id ?? crypto.randomUUID(),
-      name: call.name,
-      args: call.args ?? {},
-    })) ?? [];
+  const normalizedToolCalls = toolCalls?.map<MessageToolCall>((call) => ({
+    id: call.id ?? crypto.randomUUID(),
+    name: call.name,
+    args: call.args ?? {},
+  })) ?? [];
 
-  const metadataToolCalls =
-    normalizedToolCalls.length > 0
-      ? normalizedToolCalls.map((tc) => ({
-          id: tc.id ?? undefined,
-          name: tc.name,
-          args: JSON.stringify(tc.args ?? {}),
-        }))
-      : undefined;
+  const metadataToolCalls = normalizedToolCalls.length > 0
+    ? normalizedToolCalls.map((tc) => ({
+      id: tc.id ?? undefined,
+      name: tc.name,
+      args: JSON.stringify(tc.args ?? {}),
+    }))
+    : undefined;
 
   const baseMetadata = {
     ...(metadata ?? {}),
@@ -349,7 +419,9 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
     userExternalId: user.externalId,
   } as Record<string, unknown>;
 
-  const messageMetadata = Object.keys(baseMetadata).length > 0 ? baseMetadata : undefined;
+  const messageMetadata = Object.keys(baseMetadata).length > 0
+    ? baseMetadata
+    : undefined;
 
   const senderMetadata = {
     ...(user.metadata ?? {}),
@@ -369,26 +441,48 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
   // Remove name from metadata since it's a top-level field
   const { name: _threadName, ...restThreadMetadata } = mergedThreadMetadata;
 
-  const threadPayload: MessageThread | undefined = (threadId || threadExternalId || threadName || Object.keys(restThreadMetadata).length > 0)
-    ? {
+  // Resolve thread participants: explicit participants list > selectedAgent fallback > "assistant"
+  const resolvedParticipants: string[] =
+    Array.isArray(participants) && participants.length > 0
+      ? participants
+      : [selectedAgent || "assistant"];
+
+  const threadPayload: MessageThread | undefined =
+    (threadId || threadExternalId || threadName ||
+        Object.keys(restThreadMetadata).length > 0)
+      ? {
         id: threadId ?? null,
         externalId: threadExternalId ?? null,
         name: threadName,
-        participants: [selectedAgent || 'assistant'],
-        metadata: Object.keys(restThreadMetadata).length > 0 ? restThreadMetadata : null,
+        participants: resolvedParticipants,
+        metadata: Object.keys(restThreadMetadata).length > 0
+          ? restThreadMetadata
+          : null,
       }
-    : undefined;
+      : undefined;
 
   // Prepare audio parts (convert to WAV when needed)
-  const preparedAudioParts: Array<{ type: 'audio'; dataBase64?: string; url?: string; mimeType?: string; transcript?: string }> = [];
+  const preparedAudioParts: Array<
+    {
+      type: "audio";
+      dataBase64?: string;
+      url?: string;
+      mimeType?: string;
+      transcript?: string;
+    }
+  > = [];
   for (const audioAtt of audioAttachments) {
     if (!audioAtt.dataUrl) continue;
     const parsed = parseDataUrl(audioAtt.dataUrl);
-    if (parsed && (parsed.mime.includes('wav') || parsed.mime.includes('mp3') || parsed.mime.includes('mpeg'))) {
+    if (
+      parsed &&
+      (parsed.mime.includes("wav") || parsed.mime.includes("mp3") ||
+        parsed.mime.includes("mpeg"))
+    ) {
       preparedAudioParts.push({
-        type: 'audio',
+        type: "audio",
         dataBase64: parsed.base64,
-        mimeType: parsed.mime.includes('wav') ? 'audio/wav' : 'audio/mp3',
+        mimeType: parsed.mime.includes("wav") ? "audio/wav" : "audio/mp3",
       });
       continue;
     }
@@ -396,16 +490,16 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
     const wavBase64 = await convertAudioDataUrlToWavBase64(audioAtt.dataUrl);
     if (wavBase64) {
       preparedAudioParts.push({
-        type: 'audio',
+        type: "audio",
         dataBase64: wavBase64,
-        mimeType: 'audio/wav',
+        mimeType: "audio/wav",
       });
     } else {
       // Fallback: send as URL (may fail at provider side, but do not block)
       preparedAudioParts.push({
-        type: 'audio',
+        type: "audio",
         url: audioAtt.dataUrl,
-        mimeType: audioAtt.mimeType || 'audio/webm',
+        mimeType: audioAtt.mimeType || "audio/webm",
       });
     }
   }
@@ -413,34 +507,47 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
   // Build content array: include text and prepared audio parts
   const contentParts: MessageContent = (() => {
     const parts: Array<
-      | { type: 'text'; text: string }
-      | { type: 'audio'; url?: string; dataBase64?: string; mimeType?: string; transcript?: string }
+      | { type: "text"; text: string }
+      | {
+        type: "audio";
+        url?: string;
+        dataBase64?: string;
+        mimeType?: string;
+        transcript?: string;
+      }
     > = [];
-    const text = (typeof content === 'string' && content.trim().length > 0) ? content : '';
-    parts.push({ type: 'text', text });
+    const text = (typeof content === "string" && content.trim().length > 0)
+      ? content
+      : "";
+    parts.push({ type: "text", text });
     for (const p of preparedAudioParts) parts.push(p);
-    if (parts.length === 1 && parts[0].type === 'text') return parts[0].text;
+    if (parts.length === 1 && parts[0].type === "text") return parts[0].text;
     return parts;
   })();
+
+  // Resolve target: explicit targetAgent for this message
+  const resolvedTarget = targetAgent?.trim() || null;
 
   const payload: MessagePayload = {
     content: contentParts,
     sender: {
-      type: normalizedToolCalls.length > 0 ? 'agent' : 'user',
+      type: normalizedToolCalls.length > 0 ? "agent" : "user",
       externalId: user.externalId,
-      id: normalizedToolCalls.length > 0 ? 'assistant' : undefined,
-      name: normalizedToolCalls.length > 0 ? 'assistant' : (user.name ?? null),
+      id: normalizedToolCalls.length > 0 ? "assistant" : undefined,
+      name: normalizedToolCalls.length > 0 ? "assistant" : (user.name ?? null),
       metadata: Object.keys(senderMetadata).length > 0 ? senderMetadata : null,
     },
     metadata: messageMetadata ?? null,
     thread: threadPayload ?? null,
     toolCalls: normalizedToolCalls.length > 0 ? normalizedToolCalls : null,
+    target: resolvedTarget,
+    targetQueue: null,
   };
 
-  const response = await fetch(apiUrl('/v1/providers/web'), {
-    method: 'POST',
+  const response = await fetch(apiUrl("/v1/providers/web"), {
+    method: "POST",
     headers: await withAuthHeaders({
-      'Content-Type': 'application/json',
+      "Content-Type": "application/json",
     }, getRequestHeaders),
     body: JSON.stringify(payload),
     signal: controller.signal,
@@ -449,20 +556,20 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
   if (!response.ok || !response.body) {
     const errorText = await response.text().catch(() => response.statusText);
     const parsed = parseErrorText(errorText);
-    const details = parsed && typeof parsed === 'object' ? parsed : undefined;
+    const details = parsed && typeof parsed === "object" ? parsed : undefined;
     const detailsRecord = details as Record<string, unknown> | undefined;
     const message =
-      (typeof detailsRecord?.message === 'string' && detailsRecord.message) ||
-      (typeof detailsRecord?.error === 'string' && detailsRecord.error) ||
+      (typeof detailsRecord?.message === "string" && detailsRecord.message) ||
+      (typeof detailsRecord?.error === "string" && detailsRecord.error) ||
       errorText ||
       response.statusText ||
-      'Failed to run Copilotz agent';
-    const code =
-      typeof detailsRecord?.code === 'string'
-        ? detailsRecord.code
-        : (typeof detailsRecord?.error === 'string' && detailsRecord.error !== message
-          ? detailsRecord.error
-          : undefined);
+      "Failed to run Copilotz agent";
+    const code = typeof detailsRecord?.code === "string"
+      ? detailsRecord.code
+      : (typeof detailsRecord?.error === "string" &&
+          detailsRecord.error !== message
+        ? detailsRecord.error
+        : undefined);
 
     throw new CopilotzRequestError(message, {
       status: response.status,
@@ -472,10 +579,10 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
   }
 
   const reader = response.body.getReader();
-  const decoder = new TextDecoder('utf-8');
-  let buffer = '';
-  let aggregatedText = '';
-  let aggregatedReasoning = '';
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  let aggregatedText = "";
+  let aggregatedReasoning = "";
   let lastTokenWasReasoning = false;
   let hadNonReasoningContent = false;
   const collectedMessages: any[] = [];
@@ -483,13 +590,13 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
 
   const processEvent = (eventChunk: string) => {
     if (!eventChunk.trim()) return;
-    const lines = eventChunk.split('\n');
-    let eventType = 'message';
-    let dataRaw = '';
+    const lines = eventChunk.split("\n");
+    let eventType = "message";
+    let dataRaw = "";
     for (const line of lines) {
-      if (line.startsWith('event:')) {
+      if (line.startsWith("event:")) {
         eventType = line.slice(6).trim();
-      } else if (line.startsWith('data:')) {
+      } else if (line.startsWith("data:")) {
         dataRaw += line.slice(5).trim();
       }
     }
@@ -500,21 +607,22 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
     try {
       payload = JSON.parse(dataRaw);
     } catch (error) {
-      console.warn('copilotzService: failed to parse SSE payload', error, dataRaw);
+      console.warn(
+        "copilotzService: failed to parse SSE payload",
+        error,
+        dataRaw,
+      );
       return;
     }
 
     switch (eventType) {
-      case 'TOKEN': {
+      case "TOKEN": {
         const inner = payload?.payload ?? payload;
-        const chunk =
-          typeof inner?.token === 'string'
-            ? inner.token
-            : '';
+        const chunk = typeof inner?.token === "string" ? inner.token : "";
         const isReasoning = Boolean(inner?.isReasoning);
         if (isReasoning && !lastTokenWasReasoning && hadNonReasoningContent) {
-          aggregatedReasoning = '';
-          aggregatedText = '';
+          aggregatedReasoning = "";
+          aggregatedText = "";
           hadNonReasoningContent = false;
         }
         lastTokenWasReasoning = isReasoning;
@@ -533,42 +641,45 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
         }
         break;
       }
-      case 'MESSAGE': {
+      case "MESSAGE": {
         hadNonReasoningContent = true;
         lastTokenWasReasoning = false;
         collectedMessages.push(payload);
         onMessageEvent?.(payload);
-        const senderType =
-          payload?.payload?.senderType ??
+        const senderType = payload?.payload?.senderType ??
           payload?.payload?.sender?.type;
 
-        if (senderType === 'agent' && typeof payload?.payload?.content === 'string') {
+        if (
+          senderType === "agent" &&
+          typeof payload?.payload?.content === "string"
+        ) {
           aggregatedText = payload.payload.content;
         }
         break;
       }
-      case 'TOOL_CALL': {
+      case "TOOL_CALL": {
         hadNonReasoningContent = true;
         lastTokenWasReasoning = false;
         onMessageEvent?.(payload);
         break;
       }
-      case 'ASSET_CREATED': {
-        const assetPayload = (payload && typeof payload === 'object' && 'payload' in payload)
-          ? (payload as { payload?: any }).payload
-          : payload;
+      case "ASSET_CREATED": {
+        const assetPayload =
+          (payload && typeof payload === "object" && "payload" in payload)
+            ? (payload as { payload?: any }).payload
+            : payload;
         // Convert ASSET_CREATED to media format for backward compatibility
         if (assetPayload?.dataUrl) {
           collectedMedia = {
-            [assetPayload.assetId || '0']: assetPayload.dataUrl
+            [assetPayload.assetId || "0"]: assetPayload.dataUrl,
           };
         }
         // Call the asset event handler
         onAssetEvent?.(assetPayload);
         break;
       }
-      case 'ERROR':
-        throw new Error(payload?.error || 'Copilotz stream error');
+      case "ERROR":
+        throw new Error(payload?.error || "Copilotz stream error");
       default:
         // For other event types, wrap in a structure with type and payload
         onMessageEvent?.({ type: eventType, payload });
@@ -579,8 +690,8 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
     const { value, done } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    if (buffer.includes('\r')) {
-      buffer = buffer.replace(/\r/g, '');
+    if (buffer.includes("\r")) {
+      buffer = buffer.replace(/\r/g, "");
     }
 
     let eventBoundary = buffer.indexOf(SSE_LINE_BREAK);
@@ -603,13 +714,20 @@ export async function runCopilotzStream(options: RunOptions): Promise<CopilotzSt
   };
 }
 
-export async function fetchThreads(userId: string, getRequestHeaders?: RequestHeadersProvider) {
+export async function fetchThreads(
+  userId: string,
+  getRequestHeaders?: RequestHeadersProvider,
+) {
   const params = new URLSearchParams();
-  params.set('filters', JSON.stringify({ "metadata.userExternalId": userId } ));
-  params.set('sort', '-updatedAt');
+  params.set("participantId", userId);
+  params.set("status", "all");
+  params.set("order", "desc");
 
-  const res = await fetch(apiUrl(`/v1/rest/threads?${params.toString()}`), {
-    headers: await withAuthHeaders({ Accept: 'application/json' }, getRequestHeaders),
+  const res = await fetch(apiUrl(`/v1/threads?${params.toString()}`), {
+    headers: await withAuthHeaders(
+      { Accept: "application/json" },
+      getRequestHeaders,
+    ),
   });
 
   if (!res.ok) {
@@ -625,18 +743,28 @@ export async function fetchThreads(userId: string, getRequestHeaders?: RequestHe
   return data as RestThread[];
 }
 
-export async function fetchThreadMessages(threadId: string, getRequestHeaders?: RequestHeadersProvider) {
+export async function fetchThreadMessages(
+  threadId: string,
+  getRequestHeaders?: RequestHeadersProvider,
+) {
   const params = new URLSearchParams();
-  params.set('threadId', threadId);
-  params.set('limit', '500');
+  params.set("limit", "500");
 
-  const res = await fetch(apiUrl(`/v1/messages?${params.toString()}`), {
-    headers: await withAuthHeaders({ Accept: 'application/json' }, getRequestHeaders),
-  });
+  const res = await fetch(
+    apiUrl(`/v1/threads/${threadId}/messages?${params.toString()}`),
+    {
+      headers: await withAuthHeaders(
+        { Accept: "application/json" },
+        getRequestHeaders,
+      ),
+    },
+  );
 
   if (!res.ok) {
     const errorText = await res.text().catch(() => res.statusText);
-    throw new Error(errorText || `Failed to load thread messages (${res.status})`);
+    throw new Error(
+      errorText || `Failed to load thread messages (${res.status})`,
+    );
   }
 
   const data = await res.json();
@@ -654,9 +782,12 @@ export async function updateThread(
   updates: Partial<RestThread>,
   getRequestHeaders?: RequestHeadersProvider,
 ) {
-  const res = await fetch(apiUrl(`/v1/rest/threads/${threadId}`), {
-    method: 'PUT',
-    headers: await withAuthHeaders({ 'Content-Type': 'application/json', Accept: 'application/json' }, getRequestHeaders),
+  const res = await fetch(apiUrl(`/v1/threads/${threadId}`), {
+    method: "PATCH",
+    headers: await withAuthHeaders({
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    }, getRequestHeaders),
     body: JSON.stringify(updates),
   });
 
@@ -666,34 +797,19 @@ export async function updateThread(
   }
 
   const data = await res.json();
-  return data?.body ?? data;
+  return data?.data ?? data?.body ?? data;
 }
 
-export async function deleteMessagesByThreadId(
+export async function deleteThread(
   threadId: string,
   getRequestHeaders?: RequestHeadersProvider,
 ) {
-  const params = new URLSearchParams();
-  params.set('threadId', threadId);
-
-  const res = await fetch(apiUrl(`/v1/messages?${params.toString()}`), {
-    method: 'DELETE',
-    headers: await withAuthHeaders({ Accept: 'application/json' }, getRequestHeaders),
-  });
-
-  if (!res.ok) {
-    const errorText = await res.text().catch(() => res.statusText);
-    throw new Error(errorText || `Failed to delete thread messages (${res.status})`);
-  }
-}
-
-export async function deleteThread(threadId: string, getRequestHeaders?: RequestHeadersProvider) {
-  // First delete all messages in the thread to avoid foreign key constraint
-  await deleteMessagesByThreadId(threadId, getRequestHeaders);
-
-  const res = await fetch(apiUrl(`/v1/rest/threads/${threadId}`), {
-    method: 'DELETE',
-    headers: await withAuthHeaders({ Accept: 'application/json' }, getRequestHeaders),
+  const res = await fetch(apiUrl(`/v1/threads/${threadId}`), {
+    method: "DELETE",
+    headers: await withAuthHeaders(
+      { Accept: "application/json" },
+      getRequestHeaders,
+    ),
   });
 
   if (!res.ok) {

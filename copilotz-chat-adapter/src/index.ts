@@ -12,6 +12,7 @@ export type {
   SpecialStateControls,
 } from './specialState';
 export type {
+  AgentOption,
   ChatConfig,
   ChatCallbacks,
   ChatUserContext,

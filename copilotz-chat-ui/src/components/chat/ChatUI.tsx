@@ -13,6 +13,7 @@ import { Message } from './Message';
 import { Sidebar } from './Sidebar';
 import { ChatHeader } from './ChatHeader';
 import { ChatInput } from './ChatInput';
+import { TargetAgentSelector } from './AgentSelectors';
 import { UserProfile } from './UserProfile';
 import { useChatUserContext } from './UserContext';
 import { ScrollArea } from '../ui/scroll-area';
@@ -38,6 +39,10 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   agentOptions = [],
   selectedAgentId = null,
   onSelectAgent,
+  participantIds,
+  onParticipantsChange,
+  targetAgentId = null,
+  onTargetAgentChange,
   className = '',
   onAddMemory,
   onUpdateMemory,
@@ -451,6 +456,8 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     </div>
   );
 
+  const isMultiAgentMode = config.agentSelector?.mode === 'multi';
+
   // Stable props object for Message components — prevents unnecessary re-renders
   // when the virtualizer re-evaluates which items to show
   const messageProps = useMemo(() => ({
@@ -477,11 +484,14 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     renderUserMarkdown: config.ui.renderUserMarkdown,
     markdown: config.markdown,
     onToggleExpanded: handleToggleMessageExpansion,
+    agentOptions: isMultiAgentMode ? agentOptions : undefined,
   }), [
     user?.avatar,
     user?.name,
     assistant?.avatar,
     assistant?.name,
+    isMultiAgentMode,
+    agentOptions,
     config.ui.showTimestamps,
     config.ui.showAvatars,
     config.ui.compactMode,
@@ -505,9 +515,9 @@ export const ChatUI: React.FC<ChatV2Props> = ({
 
   const shouldShowAgentSelector = Boolean(
     config.agentSelector?.enabled &&
-    onSelectAgent &&
     agentOptions.length > 0 &&
-    (!config.agentSelector?.hideIfSingle || agentOptions.length > 1)
+    (!config.agentSelector?.hideIfSingle || agentOptions.length > 1) &&
+    (isMultiAgentMode ? onParticipantsChange : onSelectAgent)
   );
 
   return (
@@ -543,9 +553,12 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                 onNewThread={handleCreateThread}
                 showCustomComponentButton={!!config?.customComponent?.component}
                 showAgentSelector={shouldShowAgentSelector}
+                isMultiAgentMode={isMultiAgentMode}
                 agentOptions={agentOptions}
                 selectedAgentId={selectedAgentId}
                 onSelectAgent={onSelectAgent}
+                participantIds={participantIds}
+                onParticipantsChange={onParticipantsChange}
               />
 
               <div className="flex flex-1 flex-row min-h-0 overflow-hidden">
@@ -609,6 +622,20 @@ export const ChatUI: React.FC<ChatV2Props> = ({
 
                   {/* Input */}
                   <div className="bg-background pb-[env(safe-area-inset-bottom)]">
+                    {/* Target agent selector for multi-agent mode */}
+                    {isMultiAgentMode && shouldShowAgentSelector && onTargetAgentChange && (
+                      <div className="px-4 pt-1">
+                        <TargetAgentSelector
+                          agents={participantIds && participantIds.length > 0
+                            ? agentOptions.filter(a => participantIds.includes(a.id))
+                            : agentOptions}
+                          targetAgentId={targetAgentId}
+                          onTargetChange={onTargetAgentChange}
+                          placeholder={config.agentSelector?.label || 'Select agent'}
+                          disabled={isGenerating}
+                        />
+                      </div>
+                    )}
                     <ChatInput
                       value={inputValue}
                       onChange={(value) => {
@@ -643,7 +670,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                   >
                     {state.showSidebar && (
                       <div
-                        className="flex flex-col h-full border-l bg-background animate-in slide-in-from-right-4 duration-300"
+                        className="h-full overflow-hidden border-l bg-background animate-in slide-in-from-right-4 duration-300"
                         style={{ width: config.customComponent.panelWidth ?? 320 }}
                       >
                         {renderCustomComponent()}
@@ -673,7 +700,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                 }`}
                 style={{ willChange: 'transform' }}
               >
-                <div className="h-full flex flex-col">
+                <div className="h-full overflow-hidden">
                   {renderCustomComponent()}
                 </div>
               </div>

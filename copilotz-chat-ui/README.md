@@ -202,6 +202,78 @@ import { ChatUI, chatConfigPresets } from '@copilotz/chat-ui';
 />
 ```
 
+### Markdown Extensions
+
+By default, `@copilotz/chat-ui` renders messages with:
+
+- `remark-gfm`
+- syntax highlighting for non-streaming code blocks
+- the built-in markdown component overrides used by the chat UI
+
+If you need more control, you can extend the markdown pipeline through `config.markdown`.
+
+```tsx
+import type { Components } from 'react-markdown';
+
+const markdownComponents: Components = {
+  code: MyCustomCodeBlock,
+};
+
+<ChatUI
+  config={{
+    markdown: {
+      remarkPlugins: [myRemarkPlugin],
+      rehypePlugins: [myRehypePlugin],
+      components: markdownComponents,
+    },
+  }}
+/>
+```
+
+Notes:
+
+- `remarkPlugins` and `rehypePlugins` are appended to the built-in defaults.
+- `components` are merged with the built-in markdown component map.
+- This is the recommended way to add Mermaid, custom code blocks, callouts, or project-specific markdown behavior without increasing the core `chat-ui` bundle.
+
+Example: Mermaid via a custom `code` renderer
+
+````tsx
+function MermaidCodeBlock({ className, children, inline, ...props }) {
+  const isMermaid = !inline && /\blanguage-mermaid\b/.test(className || '');
+
+  if (isMermaid) {
+    return <MyMermaidRenderer definition={String(children)} />;
+  }
+
+  return !inline ? (
+    <pre>
+      <code className={className} {...props}>
+        {children}
+      </code>
+    </pre>
+  ) : (
+    <code {...props}>{children}</code>
+  );
+}
+
+<ChatUI
+  config={{
+    markdown: {
+      components: {
+        code: MermaidCodeBlock,
+      },
+    },
+  }}
+/>
+````
+
+Recommended approach for Mermaid:
+
+- keep Mermaid project-specific instead of bundling it into every `chat-ui` consumer
+- lazy-load the Mermaid runtime inside your custom renderer
+- render Mermaid only for completed code blocks, not for token-by-token streaming content
+
 ### Custom Right Sidebar
 
 Add a custom component to the right sidebar (e.g., profile info, settings, context):
@@ -279,6 +351,23 @@ All user interactions are handled through callbacks. This keeps the component pu
 | `initialInput` | `string` | Pre-fill the input field (e.g., from URL params) |
 | `onInitialInputConsumed` | `() => void` | Called when initial input is modified/sent |
 | `className` | `string` | Additional CSS classes |
+
+### ChatConfig Markdown
+
+```typescript
+interface ChatMarkdownConfig {
+  remarkPlugins?: ReactMarkdownOptions['remarkPlugins'];
+  rehypePlugins?: ReactMarkdownOptions['rehypePlugins'];
+  components?: Components;
+}
+```
+
+```typescript
+interface ChatConfig {
+  // ...
+  markdown?: ChatMarkdownConfig;
+}
+```
 
 ### ChatMessage
 

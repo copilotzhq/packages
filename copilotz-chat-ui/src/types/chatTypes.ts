@@ -109,6 +109,10 @@ export interface ChatMessage {
   reasoning?: string;
   /** Whether reasoning tokens are still being streamed */
   isReasoningStreaming?: boolean;
+  /** Agent/sender identity for multi-agent conversations */
+  senderName?: string;
+  /** Agent ID of the sender (for multi-agent conversations) */
+  senderAgentId?: string;
 }
 
 // Thread Management
@@ -140,6 +144,8 @@ export interface ChatConfig {
     enabled?: boolean;
     label?: string;
     hideIfSingle?: boolean;
+    /** 'single' = classic single-agent dropdown (default). 'multi' = participants + target selectors. */
+    mode?: 'single' | 'multi';
   };
   labels?: {
     inputPlaceholder?: string;
@@ -326,7 +332,15 @@ export interface ChatV2Props {
   agentOptions?: AgentOption[];
   selectedAgentId?: string | null;
   onSelectAgent?: (agentId: string) => void;
-  
+
+  // Multi-agent selectors
+  /** IDs of agents participating in this conversation */
+  participantIds?: string[];
+  onParticipantsChange?: (ids: string[]) => void;
+  /** ID of the agent this message is directed at */
+  targetAgentId?: string | null;
+  onTargetAgentChange?: (agentId: string | null) => void;
+
   // Advanced Features
   suggestions?: string[];
   messageSuggestions?: Record<string, string[]>;
@@ -370,6 +384,8 @@ export interface AgentOption {
   name: string;
   description?: string;
   avatarUrl?: string;
+  /** Custom color for multi-agent display. Auto-assigned if not provided. */
+  color?: string;
 }
 
 // Message Actions

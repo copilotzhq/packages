@@ -47,6 +47,12 @@ export interface CopilotzChatProps {
   agentOptions?: AgentOption[];
   selectedAgentId?: string | null;
   onSelectAgent?: (agentId: string) => void;
+  /** Multi-agent: IDs of agents participating in the conversation */
+  participantIds?: string[];
+  onParticipantsChange?: (ids: string[]) => void;
+  /** Multi-agent: ID of the agent this message is directed at */
+  targetAgentId?: string | null;
+  onTargetAgentChange?: (agentId: string | null) => void;
   getRequestHeaders?: RequestHeadersProvider;
   className?: string;
   eventInterceptor?: EventInterceptor;
@@ -74,6 +80,10 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
   agentOptions = [],
   selectedAgentId = null,
   onSelectAgent,
+  participantIds,
+  onParticipantsChange,
+  targetAgentId = null,
+  onTargetAgentChange,
   getRequestHeaders,
   className,
   eventInterceptor,
@@ -81,6 +91,20 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
   renderSpecialState,
 }) => {
   const selectedAgent = agentOptions.find((agent) => agent.id === selectedAgentId) || null;
+
+  // Resolve participant names from IDs for the adapter layer
+  const participantNames = useMemo(() => {
+    if (!participantIds || participantIds.length === 0) return null;
+    return participantIds
+      .map(id => agentOptions.find(a => a.id === id)?.name)
+      .filter((name): name is string => Boolean(name));
+  }, [participantIds, agentOptions]);
+
+  // Resolve target agent name from ID
+  const targetAgentName = useMemo(() => {
+    if (!targetAgentId) return null;
+    return agentOptions.find(a => a.id === targetAgentId)?.name ?? null;
+  }, [targetAgentId, agentOptions]);
 
   const {
     messages,
@@ -98,13 +122,15 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     archiveThread,
     deleteThread,
     stopGeneration,
-  } = useCopilotz({ 
-    userId, 
-    initialContext, 
-    bootstrap, 
+  } = useCopilotz({
+    userId,
+    initialContext,
+    bootstrap,
     defaultThreadName: userConfig?.labels?.defaultThreadName,
     onToolOutput,
     preferredAgentName: selectedAgent?.name ?? null,
+    participants: participantNames,
+    targetAgentName,
     getRequestHeaders,
     eventInterceptor,
     runErrorInterceptor,
@@ -209,6 +235,10 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
           agentOptions={agentOptions}
           selectedAgentId={selectedAgentId}
           onSelectAgent={onSelectAgent}
+          participantIds={participantIds}
+          onParticipantsChange={onParticipantsChange}
+          targetAgentId={targetAgentId}
+          onTargetAgentChange={onTargetAgentChange}
           user={userProp}
           assistant={assistantProp}
           onAddMemory={onAddMemory}

@@ -2,7 +2,8 @@ import React, { useState, useMemo, useEffect, memo } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import { ChatMarkdownConfig, ChatMessage, MediaAttachment, ToolCall, MessageActionEvent } from '../../types/chatTypes';
+import { ChatMarkdownConfig, ChatMessage, AgentOption, MediaAttachment, ToolCall, MessageActionEvent } from '../../types/chatTypes';
+import { getAgentColor, getAgentInitials } from '../../lib/chatUtils';
 import { Button } from '../ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import { Badge } from '../ui/badge';
@@ -54,6 +55,8 @@ interface MessageProps {
   onToggleExpanded?: (messageId: string) => void;
   /** When true, hides the avatar and name (for grouped consecutive messages from same sender) */
   isGrouped?: boolean;
+  /** Available agents for resolving multi-agent display (colors, avatars) */
+  agentOptions?: AgentOption[];
 }
 
 // Thinking indicator component - memoized since it's rendered during streaming
@@ -550,6 +553,7 @@ export const Message: React.FC<MessageProps> = memo(({
   isExpanded = false,
   onToggleExpanded,
   isGrouped = false,
+  agentOptions = [],
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(message.content);
@@ -557,6 +561,18 @@ export const Message: React.FC<MessageProps> = memo(({
   const [copied, setCopied] = useState(false);
 
   const messageIsUser = isUser ?? message.role === 'user';
+
+  // Resolve multi-agent sender display
+  const agentSender = !messageIsUser && message.senderAgentId
+    ? agentOptions.find(a =>
+        a.id === message.senderAgentId ||
+        a.name.toLowerCase() === (message.senderAgentId ?? '').toLowerCase() ||
+        a.name.toLowerCase() === (message.senderName ?? '').toLowerCase()
+      )
+    : undefined;
+  const isMultiAgent = agentOptions.length > 1;
+  const resolvedAssistantName = (isMultiAgent && (agentSender?.name || message.senderName)) || assistantName;
+  const agentColor = agentSender ? (agentSender.color || getAgentColor(agentSender.id)) : undefined;
   const canEdit = enableEdit && messageIsUser;
   const canRegenerate = enableRegenerate && !messageIsUser;
   const normalizedPreviewChars = Math.max(longMessagePreviewChars, 1);
@@ -650,6 +666,18 @@ export const Message: React.FC<MessageProps> = memo(({
                         {userName.charAt(0).toUpperCase()}
                       </AvatarFallback>
                     </>
+                  ) : agentSender ? (
+                    <>
+                      {agentSender.avatarUrl ? (
+                        <AvatarImage src={agentSender.avatarUrl} alt={agentSender.name} />
+                      ) : null}
+                      <AvatarFallback
+                        style={agentColor ? { backgroundColor: agentColor, color: 'white' } : undefined}
+                        className={agentColor ? 'text-[10px]' : 'bg-secondary text-secondary-foreground'}
+                      >
+                        {getAgentInitials(agentSender.name)}
+                      </AvatarFallback>
+                    </>
                   ) : (
                     <>
                       {assistantAvatar || (
@@ -665,8 +693,11 @@ export const Message: React.FC<MessageProps> = memo(({
 
             {/* Header */}
             <div className={`flex items-center gap-2 mb-1 ${messageIsUser ? 'flex-row-reverse' : 'flex-row'}`}>
-              <span className={`font-medium ${compactMode ? 'text-sm' : 'text-base'}`}>
-                {messageIsUser ? userName : assistantName}
+              <span
+                className={`font-medium ${compactMode ? 'text-sm' : 'text-base'}`}
+                style={!messageIsUser && agentColor ? { color: agentColor } : undefined}
+              >
+                {messageIsUser ? userName : resolvedAssistantName}
               </span>
               {showTimestamp && (
                 <span className="text-xs text-muted-foreground">
