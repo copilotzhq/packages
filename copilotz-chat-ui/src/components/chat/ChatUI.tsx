@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   ChatV2Props,
+  ChatMessage,
   MediaAttachment,
   MessageActionEvent,
   StateCallback,
@@ -21,6 +22,17 @@ import { Skeleton } from '../ui/skeleton';
 import { TooltipProvider } from '../ui/tooltip';
 import { SidebarProvider, SidebarInset } from '../ui/sidebar';
 import { Sparkles, ArrowRight, MessageSquare, Lightbulb, Zap, HelpCircle } from 'lucide-react';
+
+function getMessageSpeakerKey(message: ChatMessage | null | undefined): string | null {
+  if (!message) return null;
+  if (message.role === 'assistant') {
+    return message.senderAgentId ?? message.senderName ?? 'assistant';
+  }
+  if (message.role === 'user') {
+    return 'user';
+  }
+  return message.role;
+}
 
 // ChatUI is a purely presentational component
 export const ChatUI: React.FC<ChatV2Props> = ({
@@ -588,7 +600,9 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                           {virtualizer.getVirtualItems().map((virtualRow) => {
                             const message = messages[virtualRow.index];
                             const prevMessage = virtualRow.index > 0 ? messages[virtualRow.index - 1] : null;
-                            const isGrouped = prevMessage !== null && prevMessage.role === message.role;
+                            const isGrouped = prevMessage !== null &&
+                              prevMessage.role === message.role &&
+                              getMessageSpeakerKey(prevMessage) === getMessageSpeakerKey(message);
 
                             return (
                               <div
@@ -658,6 +672,10 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                       maxAttachments={config.features.maxAttachments}
                       maxFileSize={config.features.maxFileSize}
                       config={config}
+                      mentionAgents={participantIds && participantIds.length > 0
+                        ? agentOptions.filter(a => participantIds.includes(a.id))
+                        : agentOptions}
+                      onTargetAgentChange={onTargetAgentChange}
                     />
                   </div>
                 </div>

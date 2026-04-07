@@ -29,6 +29,31 @@ const hasVisibleAssistantOutput = (message: ChatViewMessage): boolean => {
   return false;
 };
 
+const isInternalMessageMetadata = (
+  metadata?: Record<string, unknown> | null,
+): boolean => metadata?.visibility === 'internal';
+
+const normalizeAgentIdentity = (
+  agent?: { id?: string | null; name?: string | null } | null,
+): { senderAgentId?: string; senderName?: string } => {
+  const senderAgentId = typeof agent?.id === 'string' && agent.id.length > 0
+    ? agent.id
+    : undefined;
+  const senderName = typeof agent?.name === 'string' && agent.name.length > 0
+    ? agent.name
+    : senderAgentId;
+
+  return {
+    ...(senderAgentId ? { senderAgentId } : {}),
+    ...(senderName ? { senderName } : {}),
+  };
+};
+
+const messageAgentKey = (message: ChatViewMessage): string | null => {
+  if (message.role !== 'assistant') return null;
+  return message.senderAgentId ?? message.senderName ?? null;
+};
+
 type ServerThread = Awaited<ReturnType<typeof fetchThreads>>[number];
 type ServerMessage = Awaited<ReturnType<typeof fetchThreadMessages>>[number];
 
@@ -455,6 +480,14 @@ export function useCopilotz({
   const handleStreamMessageEvent = useCallback((event: any) => {
     const payload = getEventPayload(event);
     if (!payload) return;
+    const liveMetadata = (
+      event?.metadata && typeof event.metadata === 'object'
+        ? event.metadata
+        : payload?.metadata
+    ) as Record<string, unknown> | undefined;
+    if (isInternalMessageMetadata(liveMetadata)) {
+      return;
+    }
     const senderType = getEventSenderType(payload);
 
     if (senderType === 'tool') {
@@ -504,12 +537,17 @@ export function useCopilotz({
       // Extract sender identity from the event payload for multi-agent display
       const agentSenderId = payload.senderId ?? payload.sender?.id ?? payload.sender?.name ?? undefined;
       const agentSenderName = payload.sender?.name ?? payload.senderId ?? undefined;
+      const incomingAgentKey = agentSenderId ?? agentSenderName ?? null;
 
       setMessages((prev) => {
         const next = [...prev];
         for (let i = next.length - 1; i >= 0; i--) {
           const m = next[i];
-          if (m.role === 'assistant' && m.isStreaming) {
+          if (
+            m.role === 'assistant' &&
+            m.isStreaming &&
+            (!incomingAgentKey || messageAgentKey(m) === incomingAgentKey)
+          ) {
             next[i] = {
               ...m,
               content: payload.content,
@@ -536,7 +574,7 @@ export function useCopilotz({
             timestamp: nowTs(),
             isStreaming: false,
             isComplete: true,
-            metadata: (payload.metadata ?? undefined) as Record<string, unknown> | undefined,
+            metadata: liveMetadata,
             ...(agentSenderId ? { senderAgentId: agentSenderId } : {}),
             ...(agentSenderName ? { senderName: agentSenderName } : {}),
           },
@@ -635,10 +673,13 @@ export function useCopilotz({
 
       const viewMessages = resolvedMessages
         .filter((msg) => {
+          const meta = (msg.metadata ?? {}) as Record<string, unknown>;
+          if (isInternalMessageMetadata(meta)) {
+            return false;
+          }
           const text = (typeof msg.content === 'string' ? msg.content : '').trim();
           const hasText = text.length > 0;
           const hasToolCalls = extractToolCallsFromServerMessage(msg as unknown as ServerMessage).length > 0;
-          const meta = (msg.metadata ?? {}) as Record<string, unknown>;
           const hasAttachments = Array.isArray(meta.attachments) && (meta.attachments as unknown[]).length > 0;
           // Keep tool messages only if they carry attachments (e.g., generated media)
           if (msg.senderType === 'tool') {
@@ -858,7 +899,7 @@ export function useCopilotz({
       onBeforeStart?: (assistantMessageId: string) => void;
     },
   ) => {
-    // Track current assistant streaming bubble id so we can split bubbles between events
+    // Track current assistant streaming bubble id so we can split bubbles between agent handoffs
     let currentAssistantId = generateId();
     params.onBeforeStart?.(currentAssistantId);
 
@@ -866,7 +907,13 @@ export function useCopilotz({
     let pendingStartNewAssistantBubble = false;
 
     // Combined function to ensure bubble exists AND update content in a single setMessages call
-    const updateStreamingMessage = (partial: string, opts?: { isReasoning?: boolean }) => {
+    const updateStreamingMessage = (
+      partial: string,
+      opts?: {
+        isReasoning?: boolean;
+        agent?: { id?: string | null; name?: string | null } | null;
+      },
+    ) => {
       if (partial && partial.length > 0) {
         hasStreamProgress = true;
       }
@@ -874,19 +921,40 @@ export function useCopilotz({
       const nextStreaming = true;
       const nextComplete = false;
       const isReasoning = opts?.isReasoning ?? false;
+      const agentIdentity = normalizeAgentIdentity(opts?.agent ?? null);
+      const nextAgentKey = agentIdentity.senderAgentId ?? agentIdentity.senderName ?? null;
 
       const applyUpdate = (msg: ChatViewMessage): ChatViewMessage => {
         if (isReasoning) {
-          return { ...msg, reasoning: partial, isReasoningStreaming: true, isStreaming: nextStreaming, isComplete: nextComplete };
+          return {
+            ...msg,
+            ...agentIdentity,
+            reasoning: partial,
+            isReasoningStreaming: true,
+            isStreaming: nextStreaming,
+            isComplete: nextComplete,
+          };
         }
         // When content tokens start, mark reasoning as done streaming
         const reasoningPatch = msg.reasoning ? { isReasoningStreaming: false } : {};
-        return { ...msg, content: partial, ...reasoningPatch, isStreaming: nextStreaming, isComplete: nextComplete };
+        return {
+          ...msg,
+          ...agentIdentity,
+          content: partial,
+          ...reasoningPatch,
+          isStreaming: nextStreaming,
+          isComplete: nextComplete,
+        };
       };
       
       setMessages((prev) => {
         const idx = prev.findIndex((m) => m.id === currentAssistantId);
-        if (idx >= 0 && prev[idx].role === 'assistant' && prev[idx].isStreaming) {
+        if (
+          idx >= 0 &&
+          prev[idx].role === 'assistant' &&
+          prev[idx].isStreaming &&
+          (!nextAgentKey || messageAgentKey(prev[idx]) === nextAgentKey)
+        ) {
           const msg = prev[idx];
           const next = applyUpdate(msg);
           if (msg.content === next.content && msg.reasoning === next.reasoning && msg.isReasoningStreaming === next.isReasoningStreaming && msg.isStreaming === next.isStreaming && msg.isComplete === next.isComplete) {
@@ -898,7 +966,12 @@ export function useCopilotz({
         }
         
         const last = prev[prev.length - 1];
-        if (last && last.role === 'assistant' && last.isStreaming) {
+        if (
+          last &&
+          last.role === 'assistant' &&
+          last.isStreaming &&
+          (!nextAgentKey || messageAgentKey(last) === nextAgentKey)
+        ) {
           currentAssistantId = last.id;
           pendingStartNewAssistantBubble = false;
           const next = applyUpdate(last);
@@ -910,7 +983,18 @@ export function useCopilotz({
           return updated;
         }
         
-        if (pendingStartNewAssistantBubble || !prev.length || (prev[prev.length - 1].role !== 'assistant' || !prev[prev.length - 1].isStreaming)) {
+        const lastStreamingBelongsToDifferentAgent =
+          Boolean(nextAgentKey) &&
+          last?.role === 'assistant' &&
+          last.isStreaming &&
+          messageAgentKey(last) !== nextAgentKey;
+
+        if (
+          pendingStartNewAssistantBubble ||
+          !prev.length ||
+          (prev[prev.length - 1].role !== 'assistant' || !prev[prev.length - 1].isStreaming) ||
+          lastStreamingBelongsToDifferentAgent
+        ) {
           const newId = generateId();
           currentAssistantId = newId;
           pendingStartNewAssistantBubble = false;
@@ -921,6 +1005,7 @@ export function useCopilotz({
             timestamp: nowTs(),
             isStreaming: nextStreaming,
             isComplete: nextComplete,
+            ...agentIdentity,
           };
           return [...prev, applyUpdate(base)];
         }
@@ -1029,6 +1114,14 @@ export function useCopilotz({
       // MESSAGE bubble (agent text only - ignore system/tool messages and empty content)
       if (type === 'MESSAGE' || type === 'NEW_MESSAGE') {
         const senderType = payload?.senderType || payload?.sender?.type;
+        const liveMetadata = (
+          event?.metadata && typeof event.metadata === 'object'
+            ? event.metadata
+            : payload?.metadata
+        ) as Record<string, unknown> | undefined;
+        if (isInternalMessageMetadata(liveMetadata)) {
+          return null;
+        }
         // Only process agent messages, skip system/tool/user messages
         if (senderType !== 'agent') {
           return null;
@@ -1043,7 +1136,7 @@ export function useCopilotz({
           threadId: curThreadId ?? '',
           senderType: 'agent',
           content,
-          metadata: (payload?.metadata ?? {}) as Record<string, unknown>,
+          metadata: (liveMetadata ?? {}) as Record<string, unknown>,
         } as unknown as ServerMessage;
       }
 
@@ -1123,7 +1216,10 @@ export function useCopilotz({
         participants: participantsRef.current,
         targetAgent: targetAgentNameRef.current,
         getRequestHeaders,
-        onToken: (token, _isComplete, _raw, opts) => updateStreamingMessage(token, opts),
+        onToken: (token, _isComplete, raw, opts) => updateStreamingMessage(token, {
+          ...opts,
+          agent: raw?.payload?.agent ?? raw?.agent ?? null,
+        }),
         onMessageEvent: async (event: any) => {
           const intercepted = applyEventInterceptor(event);
           if (intercepted?.handled) {
@@ -1396,6 +1492,7 @@ export function useCopilotz({
       timestamp: timestamp + 1,
       isStreaming: true,
       isComplete: false,
+      ...(targetAgentNameRef.current ? { senderName: targetAgentNameRef.current } : {}),
     };
 
     // Add user message and assistant placeholder for typewriter loading effect

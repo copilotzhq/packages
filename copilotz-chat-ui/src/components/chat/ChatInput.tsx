@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect, memo } from 'react';
 import { useChatUserContext } from './UserContext';
 import {
+  AgentOption,
   MediaAttachment,
   FileUploadProgress,
   ChatConfig,
@@ -49,6 +50,47 @@ interface ChatInputProps {
   acceptedFileTypes?: string[];
   className?: string;
   config?: ChatConfig;
+  mentionAgents?: AgentOption[];
+  onTargetAgentChange?: (agentId: string | null) => void;
+}
+
+interface MentionMatch {
+  start: number;
+  end: number;
+  query: string;
+}
+
+function getActiveMentionMatch(value: string, caret: number): MentionMatch | null {
+  const prefix = value.slice(0, caret);
+  const match = /(^|\s)@([\w.-]*)$/.exec(prefix);
+  if (!match) return null;
+
+  const query = match[2] ?? '';
+  return {
+    start: prefix.length - query.length - 1,
+    end: caret,
+    query,
+  };
+}
+
+function resolveTargetFromMentions(
+  value: string,
+  agents: AgentOption[],
+): AgentOption | null {
+  const matches = value.matchAll(/(^|\s)@([\w.-]+)/g);
+
+  for (const match of matches) {
+    const mention = match[2]?.toLowerCase();
+    if (!mention) continue;
+
+    const agent = agents.find((candidate) =>
+      candidate.id.toLowerCase() === mention ||
+      candidate.name.toLowerCase() === mention
+    );
+    if (agent) return agent;
+  }
+
+  return null;
 }
 
 // File upload progress component - memoized
@@ -368,6 +410,8 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   acceptedFileTypes = ['image/*', 'video/*', 'audio/*'],
   className = '',
   config,
+  mentionAgents = [],
+  onTargetAgentChange,
 }: ChatInputProps) {
   const voiceComposeEnabled = config?.voiceCompose?.enabled === true;
   const voiceDefaultMode = config?.voiceCompose?.defaultMode ?? 'text';
@@ -393,6 +437,8 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   const [voiceCountdownMs, setVoiceCountdownMs] = useState(0);
   const [isVoiceAutoSendActive, setIsVoiceAutoSendActive] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [activeMention, setActiveMention] = useState<MentionMatch | null>(null);
+  const [activeMentionIndex, setActiveMentionIndex] = useState(0);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -404,6 +450,49 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   const voiceDraftRef = useRef<VoiceSegment | null>(null);
   const voiceAppendBaseRef = useRef<VoiceSegment | null>(null);
   const voiceAppendBaseDurationRef = useRef(0);
+
+  const filteredMentionAgents = React.useMemo(() => {
+    if (!activeMention || mentionAgents.length === 0) return [];
+
+    const query = activeMention.query.trim().toLowerCase();
+    const rank = (agent: AgentOption) => {
+      const id = agent.id.toLowerCase();
+      const name = agent.name.toLowerCase();
+      if (!query) return 0;
+      if (name.startsWith(query) || id.startsWith(query)) return 0;
+      if (name.includes(query) || id.includes(query)) return 1;
+      return 2;
+    };
+
+    return mentionAgents
+      .filter((agent) => rank(agent) < 2)
+      .sort((left, right) => {
+        const rankDiff = rank(left) - rank(right);
+        if (rankDiff !== 0) return rankDiff;
+        return left.name.localeCompare(right.name);
+      })
+      .slice(0, 6);
+  }, [activeMention, mentionAgents]);
+
+  const isMentionMenuOpen = filteredMentionAgents.length > 0;
+
+  const syncMentionState = useCallback((nextValue: string, nextCaret?: number) => {
+    const caret = typeof nextCaret === 'number'
+      ? nextCaret
+      : textareaRef.current?.selectionStart ?? nextValue.length;
+    const nextMatch = getActiveMentionMatch(nextValue, caret);
+    setActiveMention((prev) => {
+      if (
+        prev?.start === nextMatch?.start &&
+        prev?.end === nextMatch?.end &&
+        prev?.query === nextMatch?.query
+      ) {
+        return prev;
+      }
+      return nextMatch;
+    });
+    setActiveMentionIndex(0);
+  }, []);
 
   // Cleanup recording on unmount
   useEffect(() => {
@@ -425,16 +514,82 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
     voiceDraftRef.current = voiceDraft;
   }, [voiceDraft]);
 
+  useEffect(() => {
+    if (!isMentionMenuOpen) {
+      setActiveMentionIndex(0);
+      return;
+    }
+    setActiveMentionIndex((prev) =>
+      prev >= filteredMentionAgents.length ? 0 : prev,
+    );
+  }, [filteredMentionAgents.length, isMentionMenuOpen]);
+
+  const selectMentionAgent = useCallback((agent: AgentOption) => {
+    if (!activeMention) return;
+
+    const replacement = `@${agent.name} `;
+    const nextValue =
+      value.slice(0, activeMention.start) +
+      replacement +
+      value.slice(activeMention.end);
+    const nextCaret = activeMention.start + replacement.length;
+
+    onChange(nextValue);
+    onTargetAgentChange?.(agent.id);
+    setActiveMention(null);
+    setActiveMentionIndex(0);
+
+    requestAnimationFrame(() => {
+      textareaRef.current?.focus();
+      textareaRef.current?.setSelectionRange(nextCaret, nextCaret);
+    });
+  }, [activeMention, onChange, onTargetAgentChange, value]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if ((!value.trim() && attachments.length === 0) || disabled || isGenerating) return;
 
+    const mentionedAgent = resolveTargetFromMentions(value, mentionAgents);
+    if (mentionedAgent) {
+      onTargetAgentChange?.(mentionedAgent.id);
+    }
+
     onSubmit(value.trim(), attachments);
     onChange('');
     onAttachmentsChange([]);
+    setActiveMention(null);
+    setActiveMentionIndex(0);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (isMentionMenuOpen) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setActiveMentionIndex((prev) =>
+          prev >= filteredMentionAgents.length - 1 ? 0 : prev + 1,
+        );
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setActiveMentionIndex((prev) =>
+          prev <= 0 ? filteredMentionAgents.length - 1 : prev - 1,
+        );
+        return;
+      }
+      if ((e.key === 'Enter' || e.key === 'Tab') && filteredMentionAgents[activeMentionIndex]) {
+        e.preventDefault();
+        selectMentionAgent(filteredMentionAgents[activeMentionIndex]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setActiveMention(null);
+        setActiveMentionIndex(0);
+        return;
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && window.innerWidth > 768) {
       e.preventDefault();
       handleSubmit(e as any);
@@ -1132,17 +1287,54 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                 )}
 
                 {/* Text input */}
-                <div className="flex-1">
+                <div className="relative flex-1">
                   <Textarea
                     ref={textareaRef}
                     value={value}
-                    onChange={(e) => onChange(e.target.value)}
+                    onChange={(e) => {
+                      onChange(e.target.value);
+                      syncMentionState(e.target.value, e.target.selectionStart ?? e.target.value.length);
+                    }}
+                    onSelect={(e) => {
+                      const target = e.target as HTMLTextAreaElement;
+                      syncMentionState(target.value, target.selectionStart ?? target.value.length);
+                    }}
+                    onClick={(e) => {
+                      const target = e.target as HTMLTextAreaElement;
+                      syncMentionState(target.value, target.selectionStart ?? target.value.length);
+                    }}
                     onKeyDown={handleKeyDown}
                     placeholder={placeholder}
                     disabled={disabled}
                     className="max-h-[120px] resize-none border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
                     rows={1}
                   />
+                  {isMentionMenuOpen && (
+                    <div className="absolute bottom-full left-0 right-0 mb-2 overflow-hidden rounded-md border bg-popover shadow-md">
+                      <div className="p-1">
+                        {filteredMentionAgents.map((agent, index) => (
+                          <button
+                            key={agent.id}
+                            type="button"
+                            className={`flex w-full items-center gap-2 rounded-sm px-3 py-2 text-left text-sm ${
+                              index === activeMentionIndex ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/60'
+                            }`}
+                            onMouseDown={(mouseEvent) => {
+                              mouseEvent.preventDefault();
+                              selectMentionAgent(agent);
+                            }}
+                          >
+                            <span className="font-medium">{agent.name}</span>
+                            {agent.description && (
+                              <span className="truncate text-xs text-muted-foreground">
+                                {agent.description}
+                              </span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Audio recording / voice compose entry */}
