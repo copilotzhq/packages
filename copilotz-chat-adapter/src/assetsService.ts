@@ -31,7 +31,9 @@ export async function getAssetDataUrl(refOrId: string): Promise<{ dataUrl: strin
     const text = await res.text().catch(() => res.statusText);
     throw new Error(text || `Failed to fetch asset ${refOrId}`);
   }
-  const data = (await res.json()) as FetchAssetResult;
+  const body = (await res.json()) as { data?: FetchAssetResult } | FetchAssetResult;
+  // Unified response envelope: `{ data }`. Tolerate legacy top-level shape.
+  const data = (body as { data?: FetchAssetResult })?.data ?? (body as FetchAssetResult);
   if (!data?.dataUrl) {
     throw new Error(data?.error || `Asset ${refOrId} has no dataUrl`);
   }

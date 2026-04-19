@@ -29,8 +29,6 @@ export const defaultChatConfig: Required<ChatConfig> = {
     stopGenerationTooltip: 'Stop generation',
     attachFiles: 'Attach Files',
     attachFileTooltip: 'Attach file',
-    recordAudio: 'Record Audio',
-    recordAudioTooltip: 'Record audio',
     voiceEnter: 'Voice input',
     voiceExit: 'Use keyboard',
     voiceTitle: 'Voice',
@@ -88,6 +86,8 @@ export const defaultChatConfig: Required<ChatConfig> = {
     inputHelpText: 'Press Enter to send, Shift+Enter to add a new line.',
     thinking: 'Thinking...',
     defaultThreadName: 'Main Thread',
+    loadOlderMessages: 'Load older messages',
+    loadingOlderMessages: 'Loading older messages...',
     showMoreMessage: 'Show more',
     showLessMessage: 'Show less',
   },
@@ -124,7 +124,6 @@ export const defaultChatConfig: Required<ChatConfig> = {
   },
 
   voiceCompose: {
-    enabled: false,
     defaultMode: 'text',
     reviewMode: 'manual',
     autoSendDelayMs: 5000,
@@ -176,4 +175,3 @@ export function mergeConfig(_baseConfig: ChatConfig, userConfig?: Partial<ChatCo
     headerActions: userConfig.headerActions || defaultChatConfig.headerActions,
   };
 }
-

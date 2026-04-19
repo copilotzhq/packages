@@ -3,7 +3,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   runCopilotzStream,
   fetchThreads,
-  fetchThreadMessages,
+  fetchThreadMessagesPage,
   updateThread as updateThreadApi,
   deleteThread as deleteThreadApi,
 } from './copilotzService';
@@ -11,7 +11,7 @@ import { resolveAssetsInMessages } from './assetsService';
 import type { ChatMessage as ChatViewMessage, ChatThread, MediaAttachment, ChatUserContext } from '@copilotz/chat-ui';
 import { useUrlState } from './useUrlState';
 import type { EventInterceptor, RunErrorInterceptor, SpecialChatState } from './specialState';
-import type { RequestHeadersProvider } from './copilotzService';
+import type { RequestHeadersProvider, RestMessagePageInfo } from './copilotzService';
 
 const nowTs = () => Date.now();
 const generateId = () =>
@@ -55,7 +55,7 @@ const messageAgentKey = (message: ChatViewMessage): string | null => {
 };
 
 type ServerThread = Awaited<ReturnType<typeof fetchThreads>>[number];
-type ServerMessage = Awaited<ReturnType<typeof fetchThreadMessages>>[number];
+type ServerMessage = Awaited<ReturnType<typeof fetchThreadMessagesPage>>['data'][number];
 
 type ToolCallStatus = 'pending' | 'running' | 'completed' | 'failed';
 type ParsedToolCall = {
@@ -73,6 +73,14 @@ type ToolResultUpdate = {
   result?: unknown;
   endTime: number;
 };
+
+const THREAD_MESSAGES_PAGE_SIZE = 50;
+
+const createEmptyMessagePageInfo = (): RestMessagePageInfo => ({
+  hasMoreBefore: false,
+  oldestMessageId: null,
+  newestMessageId: null,
+});
 
 const normalizeToolStatus = (status: unknown): ToolCallStatus => {
   if (status === 'pending') return 'pending';
@@ -96,6 +104,110 @@ const parseToolArguments = (value: unknown): Record<string, unknown> => {
     }
   }
   return {};
+};
+
+const matchesToolResultUpdate = (
+  target: { id?: string; name?: string },
+  update: Pick<ToolResultUpdate, 'id' | 'name'>,
+): boolean => {
+  if (update.id && target.id) {
+    return update.id === target.id;
+  }
+
+  return Boolean(update.name && target.name && update.name === target.name);
+};
+
+const findMatchingToolCallIndex = (
+  toolCalls: NonNullable<ChatViewMessage['toolCalls']>,
+  update: ToolResultUpdate,
+): number => toolCalls.findIndex((toolCall) => (
+  matchesToolResultUpdate(
+    { id: toolCall.id, name: toolCall.name },
+    update,
+  ) &&
+  (toolCall.status === 'pending' || toolCall.status === 'running' || typeof toolCall.result === 'undefined')
+));
+
+const applyToolResultUpdateToMessages = (
+  messages: ChatViewMessage[],
+  update: ToolResultUpdate,
+  assistantPatch?: Partial<ChatViewMessage>,
+): { messages: ChatViewMessage[]; matched: boolean } => {
+  const nextMessages = [...messages];
+
+  for (let i = nextMessages.length - 1; i >= 0; i--) {
+    const message = nextMessages[i];
+    if (message.role !== 'assistant' || !Array.isArray(message.toolCalls) || message.toolCalls.length === 0) {
+      continue;
+    }
+
+    const toolCallIndex = findMatchingToolCallIndex(message.toolCalls, update);
+    if (toolCallIndex === -1) continue;
+
+    const updatedToolCalls = [...message.toolCalls];
+    const current = updatedToolCalls[toolCallIndex];
+    updatedToolCalls[toolCallIndex] = {
+      ...current,
+      status: update.status,
+      ...(update.result !== undefined ? { result: update.result } : {}),
+      endTime: update.endTime,
+    };
+
+    nextMessages[i] = {
+      ...message,
+      toolCalls: updatedToolCalls,
+      ...(assistantPatch ?? {}),
+    };
+
+    return { messages: nextMessages, matched: true };
+  }
+
+  return { messages, matched: false };
+};
+
+const extractLiveToolCall = (payload: Record<string, unknown> | undefined): ParsedToolCall | null => {
+  const toolCall = payload?.toolCall as Record<string, unknown> | undefined;
+  if (!toolCall) return null;
+
+  const tool = toolCall.tool as Record<string, unknown> | undefined;
+  const name = typeof tool?.name === 'string'
+    ? tool.name
+    : typeof tool?.id === 'string'
+      ? tool.id
+      : 'tool';
+  const result = toolCall.output !== undefined ? toolCall.output : undefined;
+
+  return {
+    ...(typeof toolCall.id === 'string' ? { id: toolCall.id } : {}),
+    name,
+    arguments: parseToolArguments(toolCall.args),
+    status: normalizeToolStatus(toolCall.status ?? payload?.status ?? 'running'),
+    ...(result !== undefined ? { result } : {}),
+  };
+};
+
+const extractLiveToolResultUpdate = (
+  payload: Record<string, unknown> | undefined,
+): ToolResultUpdate => {
+  const tool = payload?.tool as Record<string, unknown> | undefined;
+  const result =
+    payload?.projectedOutput !== undefined
+      ? payload.projectedOutput
+      : payload?.output !== undefined
+        ? payload.output
+        : payload?.content;
+
+  return {
+    ...(typeof payload?.toolCallId === 'string' ? { id: payload.toolCallId } : {}),
+    ...(typeof tool?.name === 'string'
+      ? { name: tool.name }
+      : typeof tool?.id === 'string'
+        ? { name: tool.id }
+        : {}),
+    status: normalizeToolStatus(payload?.status),
+    ...(result !== undefined ? { result } : {}),
+    endTime: nowTs(),
+  };
 };
 
 const extractToolCallsFromServerMessage = (msg: ServerMessage): ParsedToolCall[] => {
@@ -216,48 +328,31 @@ const mergePersistedToolResults = (
 ): ChatViewMessage[] => {
   if (updates.length === 0) return messages;
 
-  const nextMessages = [...messages];
-
+  let nextMessages = messages;
   for (const update of updates) {
-    for (let i = nextMessages.length - 1; i >= 0; i--) {
-      const message = nextMessages[i];
-      if (message.role !== 'assistant' || !Array.isArray(message.toolCalls) || message.toolCalls.length === 0) {
-        continue;
-      }
-
-      const toolCalls = message.toolCalls;
-
-      let toolCallIndex = update.id
-        ? toolCalls.findIndex((toolCall) => toolCall.id === update.id)
-        : -1;
-
-      if (toolCallIndex === -1 && update.name) {
-        toolCallIndex = toolCalls.findIndex((toolCall) => (
-          toolCall.name === update.name &&
-          (toolCall.status === 'pending' || toolCall.status === 'running' || typeof toolCall.result === 'undefined')
-        ));
-      }
-
-      if (toolCallIndex === -1) continue;
-
-      const updatedToolCalls = [...toolCalls];
-      const current = updatedToolCalls[toolCallIndex];
-      updatedToolCalls[toolCallIndex] = {
-        ...current,
-        status: update.status,
-        ...(update.result !== undefined ? { result: update.result } : {}),
-        endTime: update.endTime,
-      };
-
-      nextMessages[i] = {
-        ...message,
-        toolCalls: updatedToolCalls,
-      };
-      break;
-    }
+    nextMessages = applyToolResultUpdateToMessages(nextMessages, update).messages;
   }
 
   return nextMessages;
+};
+
+const prependUniqueMessages = (
+  olderMessages: ChatViewMessage[],
+  currentMessages: ChatViewMessage[],
+): ChatViewMessage[] => {
+  if (olderMessages.length === 0) return currentMessages;
+  if (currentMessages.length === 0) return olderMessages;
+
+  const seen = new Set<string>();
+  const combined: ChatViewMessage[] = [];
+
+  for (const message of [...olderMessages, ...currentMessages]) {
+    if (seen.has(message.id)) continue;
+    seen.add(message.id);
+    combined.push(message);
+  }
+
+  return combined;
 };
 
 const convertServerMessage = (msg: ServerMessage): ChatViewMessage => {
@@ -393,6 +488,8 @@ export function useCopilotz({
 
   const [messages, setMessages] = useState<ChatViewMessage[]>([]);
   const [isMessagesLoading, setIsMessagesLoading] = useState(false);
+  const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
+  const [messagePageInfo, setMessagePageInfo] = useState<RestMessagePageInfo>(createEmptyMessagePageInfo);
   const [isStreaming, setIsStreaming] = useState(false);
   const [specialState, setSpecialState] = useState<SpecialChatState | null>(null);
 
@@ -409,6 +506,12 @@ export function useCopilotz({
   const currentThreadIdRef = useRef(currentThreadId);
   const currentThreadExternalIdRef = useRef(currentThreadExternalId);
   const userContextSeedRef = useRef(userContextSeed);
+  const messagePageInfoRef = useRef(messagePageInfo);
+  const isLoadingOlderMessagesRef = useRef(isLoadingOlderMessages);
+  const persistedToolUpdatesRef = useRef<ToolResultUpdate[]>([]);
+  // Buffer live TOOL_RESULT updates that arrive before their matching TOOL_CALL
+  // has been rendered. We reconcile them as soon as the TOOL_CALL lands.
+  const liveToolUpdatesRef = useRef<ToolResultUpdate[]>([]);
 
   // Sync refs on every render (more efficient than multiple useEffects)
   threadsRef.current = threads;
@@ -417,6 +520,8 @@ export function useCopilotz({
   currentThreadIdRef.current = currentThreadId;
   currentThreadExternalIdRef.current = currentThreadExternalId;
   userContextSeedRef.current = userContextSeed;
+  messagePageInfoRef.current = messagePageInfo;
+  isLoadingOlderMessagesRef.current = isLoadingOlderMessages;
   preferredAgentRef.current = preferredAgentName ?? null;
   participantsRef.current = participants ?? null;
   targetAgentNameRef.current = targetAgentName ?? null;
@@ -489,99 +594,56 @@ export function useCopilotz({
       return;
     }
     const senderType = getEventSenderType(payload);
+    if (senderType !== 'agent' || typeof payload.content !== 'string') return;
 
-    if (senderType === 'tool') {
-      const metadata = (payload.metadata ?? event.metadata ?? {}) as Record<string, unknown>;
-      const output = (metadata?.output ?? metadata) as Record<string, unknown> | undefined;
-      if (output) processToolOutput(output);
+    // Fallback path for custom/non-contract events that still look like an
+    // assistant artifact message.
+    const agentSenderId = payload.senderId ?? payload.sender?.id ?? payload.sender?.name ?? undefined;
+    const agentSenderName = payload.sender?.name ?? payload.senderId ?? undefined;
+    const incomingAgentKey = agentSenderId ?? agentSenderName ?? null;
 
-      // Attach tool call details to the current assistant bubble (expandable)
-      const toolName = (metadata?.toolName as string) || (metadata?.tool as string) || 'tool';
-      let argsObj: Record<string, unknown> = {};
-      try {
-        const argStr = (metadata?.arguments as string) ?? '{}';
-        argsObj = typeof argStr === 'string' ? JSON.parse(argStr) : (argStr as Record<string, unknown>);
-      } catch (_) { /* ignore parse */ }
-      const resultObj = metadata?.output as unknown;
-      const callId = (payload.toolCallId as string) || generateId();
-
-      setMessages((prev) => {
-        const next = [...prev];
-        for (let i = next.length - 1; i >= 0; i--) {
-          const m = next[i];
-          if (m.role === 'assistant') {
-            const existing = Array.isArray(m.toolCalls) ? m.toolCalls : [];
-            next[i] = {
-              ...m,
-              toolCalls: [
-                ...existing,
-                {
-                  id: callId,
-                  name: toolName,
-                  arguments: argsObj as Record<string, any>,
-                  result: resultObj,
-                  status: 'completed' as const,
-                  endTime: Date.now(),
-                },
-              ],
-            };
-            break;
-          }
-        }
-        return next;
-      });
-      return;
-    }
-
-    if (senderType === 'agent' && typeof payload.content === 'string') {
-      // Extract sender identity from the event payload for multi-agent display
-      const agentSenderId = payload.senderId ?? payload.sender?.id ?? payload.sender?.name ?? undefined;
-      const agentSenderName = payload.sender?.name ?? payload.senderId ?? undefined;
-      const incomingAgentKey = agentSenderId ?? agentSenderName ?? null;
-
-      setMessages((prev) => {
-        const next = [...prev];
-        for (let i = next.length - 1; i >= 0; i--) {
-          const m = next[i];
-          if (
-            m.role === 'assistant' &&
-            m.isStreaming &&
-            (!incomingAgentKey || messageAgentKey(m) === incomingAgentKey)
-          ) {
-            next[i] = {
-              ...m,
-              content: payload.content,
-              isStreaming: false,
-              isComplete: true,
-              ...(agentSenderId ? { senderAgentId: agentSenderId } : {}),
-              ...(agentSenderName ? { senderName: agentSenderName } : {}),
-            };
-            return next;
-          }
-        }
-
-        const trimmedContent = payload.content.trim();
-        if (!trimmedContent) {
-          return prev;
-        }
-
-        return [
-          ...next,
-          {
-            id: generateId(),
-            role: 'assistant',
+    setMessages((prev) => {
+      const next = [...prev];
+      for (let i = next.length - 1; i >= 0; i--) {
+        const m = next[i];
+        if (
+          m.role === 'assistant' &&
+          m.isStreaming &&
+          (!incomingAgentKey || messageAgentKey(m) === incomingAgentKey)
+        ) {
+          next[i] = {
+            ...m,
             content: payload.content,
-            timestamp: nowTs(),
             isStreaming: false,
             isComplete: true,
-            metadata: liveMetadata,
             ...(agentSenderId ? { senderAgentId: agentSenderId } : {}),
             ...(agentSenderName ? { senderName: agentSenderName } : {}),
-          },
-        ];
-      });
-    }
-  }, [processToolOutput]);
+          };
+          return next;
+        }
+      }
+
+      const trimmedContent = payload.content.trim();
+      if (!trimmedContent) {
+        return prev;
+      }
+
+      return [
+        ...next,
+        {
+          id: generateId(),
+          role: 'assistant',
+          content: payload.content,
+          timestamp: nowTs(),
+          isStreaming: false,
+          isComplete: true,
+          metadata: liveMetadata,
+          ...(agentSenderId ? { senderAgentId: agentSenderId } : {}),
+          ...(agentSenderName ? { senderName: agentSenderName } : {}),
+        },
+      ];
+    });
+  }, []);
 
   const updateThreadsState = useCallback((rawThreads: ServerThread[], preferredExternalId?: string | null) => {
     const metadataMap: Record<string, Record<string, unknown> | undefined> = {};
@@ -650,61 +712,123 @@ export function useCopilotz({
     }
   }, [updateThreadsState, getRequestHeaders]);
 
+  const prepareThreadMessages = useCallback(async (rawMessages: ServerMessage[]) => {
+    const resolvedMessages = await resolveAssetsInMessages(rawMessages as unknown as any[]);
+
+    resolvedMessages.forEach((msg: any) => {
+      if (msg.senderType === 'tool') {
+        const metadata = msg.metadata as Record<string, unknown> | undefined;
+        const output = (metadata?.output ?? metadata) as Record<string, unknown> | undefined;
+        if (output) processToolOutput(output);
+      }
+    });
+
+    const toolResultUpdates = resolvedMessages
+      .map((msg) => extractToolResultUpdateFromMessage(msg as unknown as ServerMessage))
+      .filter((update): update is ToolResultUpdate => update !== null);
+
+    const viewMessages = resolvedMessages
+      .filter((msg) => {
+        const meta = (msg.metadata ?? {}) as Record<string, unknown>;
+        if (isInternalMessageMetadata(meta)) {
+          return false;
+        }
+        const text = (typeof msg.content === 'string' ? msg.content : '').trim();
+        const hasText = text.length > 0;
+        const hasToolCalls = extractToolCallsFromServerMessage(msg as unknown as ServerMessage).length > 0;
+        const hasAttachments = Array.isArray(meta.attachments) && (meta.attachments as unknown[]).length > 0;
+        if (msg.senderType === 'tool') {
+          return hasAttachments;
+        }
+        return hasText || hasToolCalls || hasAttachments;
+      })
+      .map(convertServerMessage);
+
+    return {
+      viewMessages,
+      toolResultUpdates,
+    };
+  }, [processToolOutput]);
+
   const loadThreadMessages = useCallback(async (threadId: string) => {
     const requestId = messagesRequestRef.current + 1;
     messagesRequestRef.current = requestId;
     setIsMessagesLoading(true);
+    setIsLoadingOlderMessages(false);
+    setMessagePageInfo(createEmptyMessagePageInfo());
+    persistedToolUpdatesRef.current = [];
+    liveToolUpdatesRef.current = [];
     try {
-      const rawMessages = await fetchThreadMessages(threadId, getRequestHeaders);
-      const resolvedMessages = await resolveAssetsInMessages(rawMessages as unknown as any[]);
+      const page = await fetchThreadMessagesPage(
+        threadId,
+        { limit: THREAD_MESSAGES_PAGE_SIZE },
+        getRequestHeaders,
+      );
+      const { viewMessages, toolResultUpdates } = await prepareThreadMessages(page.data);
       if (messagesRequestRef.current !== requestId) return;
 
-      resolvedMessages.forEach((msg: any) => {
-        if (msg.senderType === 'tool') {
-          const metadata = msg.metadata as Record<string, unknown> | undefined;
-          const output = (metadata?.output ?? metadata) as Record<string, unknown> | undefined;
-          if (output) processToolOutput(output);
-        }
-      });
-
-      const toolResultUpdates = resolvedMessages
-        .map((msg) => extractToolResultUpdateFromMessage(msg as unknown as ServerMessage))
-        .filter((update): update is ToolResultUpdate => update !== null);
-
-      const viewMessages = resolvedMessages
-        .filter((msg) => {
-          const meta = (msg.metadata ?? {}) as Record<string, unknown>;
-          if (isInternalMessageMetadata(meta)) {
-            return false;
-          }
-          const text = (typeof msg.content === 'string' ? msg.content : '').trim();
-          const hasText = text.length > 0;
-          const hasToolCalls = extractToolCallsFromServerMessage(msg as unknown as ServerMessage).length > 0;
-          const hasAttachments = Array.isArray(meta.attachments) && (meta.attachments as unknown[]).length > 0;
-          // Keep tool messages only if they carry attachments (e.g., generated media)
-          if (msg.senderType === 'tool') {
-            return hasAttachments;
-          }
-          // For agent/user/system, keep if there is text, tool calls, or attachments
-          return hasText || hasToolCalls || hasAttachments;
-        })
-        .map(convertServerMessage);
-
-      const hydratedMessages = mergePersistedToolResults(viewMessages, toolResultUpdates);
+      persistedToolUpdatesRef.current = toolResultUpdates;
+      const hydratedMessages = mergePersistedToolResults(viewMessages, persistedToolUpdatesRef.current);
       setMessages(hydratedMessages);
+      setMessagePageInfo(page.pageInfo);
     } catch (error) {
       if (isAbortError(error)) return;
       console.error(`Error loading messages for thread ${threadId}`, error);
+      persistedToolUpdatesRef.current = [];
+      setMessagePageInfo(createEmptyMessagePageInfo());
     } finally {
       if (messagesRequestRef.current === requestId) {
         setIsMessagesLoading(false);
       }
     }
-  }, [processToolOutput, getRequestHeaders]);
+  }, [getRequestHeaders, prepareThreadMessages]);
+
+  const loadOlderMessages = useCallback(async () => {
+    const threadId = currentThreadIdRef.current;
+    const pageInfo = messagePageInfoRef.current;
+    const before = pageInfo.oldestMessageId;
+
+    if (!threadId || !before || !pageInfo.hasMoreBefore || isLoadingOlderMessagesRef.current) {
+      return;
+    }
+
+    const requestId = messagesRequestRef.current;
+    setIsLoadingOlderMessages(true);
+
+    try {
+      const page = await fetchThreadMessagesPage(
+        threadId,
+        { limit: THREAD_MESSAGES_PAGE_SIZE, before },
+        getRequestHeaders,
+      );
+      const { viewMessages, toolResultUpdates } = await prepareThreadMessages(page.data);
+      if (messagesRequestRef.current !== requestId) return;
+
+      persistedToolUpdatesRef.current = [
+        ...toolResultUpdates,
+        ...persistedToolUpdatesRef.current,
+      ];
+
+      setMessages((prev) => mergePersistedToolResults(
+        prependUniqueMessages(viewMessages, prev),
+        persistedToolUpdatesRef.current,
+      ));
+      setMessagePageInfo(page.pageInfo);
+    } catch (error) {
+      if (isAbortError(error)) return;
+      console.error(`Error loading older messages for thread ${threadId}`, error);
+    } finally {
+      if (messagesRequestRef.current === requestId) {
+        setIsLoadingOlderMessages(false);
+      }
+    }
+  }, [getRequestHeaders, prepareThreadMessages]);
 
   const handleSelectThread = useCallback(async (threadId: string) => {
     setCurrentThreadId(threadId);
     setMessages([]);
+    setMessagePageInfo(createEmptyMessagePageInfo());
+    persistedToolUpdatesRef.current = [];
     // Use ref for external map to avoid re-creation
     const extMap = threadExternalIdMapRef.current;
     setCurrentThreadExternalId(extMap[threadId] ?? null);
@@ -714,6 +838,7 @@ export function useCopilotz({
   const handleCreateThread = useCallback((title?: string) => {
     messagesRequestRef.current += 1;
     setIsMessagesLoading(false);
+    setIsLoadingOlderMessages(false);
     const id = generateId();
     const now = nowTs();
     const newThread: ChatThread = {
@@ -731,6 +856,8 @@ export function useCopilotz({
     setCurrentThreadId(id);
     setCurrentThreadExternalId(id);
     setMessages([]);
+    setMessagePageInfo(createEmptyMessagePageInfo());
+    persistedToolUpdatesRef.current = [];
   }, []);
 
   const handleRenameThread = useCallback(async (threadId: string, newTitle: string) => {
@@ -824,6 +951,8 @@ export function useCopilotz({
         setCurrentThreadId(null);
         setCurrentThreadExternalId(null);
         setMessages([]);
+        setMessagePageInfo(createEmptyMessagePageInfo());
+        persistedToolUpdatesRef.current = [];
       }
     }
 
@@ -1030,7 +1159,69 @@ export function useCopilotz({
     // Using Refs for accessing current state inside callback
     const curThreadId = currentThreadIdRef.current;
 
-    // Build a ServerMessage-like object from various streaming event payloads
+    const applyLiveToolResultUpdate = (update: ToolResultUpdate) => {
+      let matched = false;
+      setMessages((prev) => {
+        const next = applyToolResultUpdateToMessages(prev, update, {
+          isStreaming: true,
+          isComplete: false,
+        });
+        matched = next.matched;
+        return next.matched ? next.messages : prev;
+      });
+
+      if (!matched) {
+        liveToolUpdatesRef.current.push(update);
+      }
+    };
+
+    const finalizeActiveAssistantTurn = (finalAnswer?: string) => {
+      setMessages((prev) => {
+        const currentIdx = prev.findIndex((message) => (
+          message.id === currentAssistantId &&
+          message.role === 'assistant'
+        ));
+        const fallbackIdx = currentIdx >= 0
+          ? currentIdx
+          : (() => {
+            for (let i = prev.length - 1; i >= 0; i--) {
+              if (prev[i].role === 'assistant' && prev[i].isStreaming) {
+                return i;
+              }
+            }
+            return -1;
+          })();
+
+        if (fallbackIdx < 0) return prev;
+
+        const message = prev[fallbackIdx];
+        const nextMessage: ChatViewMessage = {
+          ...message,
+          ...(typeof finalAnswer === 'string' && finalAnswer.length > 0
+            ? { content: finalAnswer }
+            : {}),
+          isStreaming: false,
+          isComplete: true,
+          ...(message.reasoning ? { isReasoningStreaming: false } : {}),
+        };
+
+        if (
+          message.content === nextMessage.content &&
+          message.isStreaming === nextMessage.isStreaming &&
+          message.isComplete === nextMessage.isComplete &&
+          message.isReasoningStreaming === nextMessage.isReasoningStreaming
+        ) {
+          return prev;
+        }
+
+        const updated = [...prev];
+        updated[fallbackIdx] = nextMessage;
+        currentAssistantId = nextMessage.id;
+        return updated;
+      });
+    };
+
+    // Build a ServerMessage-like object from selected streaming artifact events.
     const toServerMessageFromEvent = async (event: any): Promise<ServerMessage | null> => {
       if (!event) return null;
       const type = (event?.type as string) || '';
@@ -1038,63 +1229,8 @@ export function useCopilotz({
 
       // TOOL_CALL bubble
       if (type === 'TOOL_CALL') {
-        const metadata = (payload?.metadata ?? {}) as Record<string, unknown>;
-        // New copilotz lib structure: payload.toolCall.tool.name / .id / .args
-        const tc = (payload?.toolCall ?? undefined) as Record<string, unknown> | undefined;
-        const tcTool = (tc?.tool ?? undefined) as Record<string, unknown> | undefined;
-        // Legacy structures
-        const call = (payload?.call ?? (metadata as any)?.call) as Record<string, unknown> | undefined;
-        const func = (call?.function ?? (payload as any)?.function) as Record<string, unknown> | undefined;
-
-        const toolName =
-          (tcTool?.name as string) ||
-          (func?.name as string) ||
-          (payload?.name as string) ||
-          (call?.name as string) ||
-          (metadata.toolName as string) ||
-          (metadata.tool as string) ||
-          'tool';
-
-        let argsObj: Record<string, unknown> = {};
-        const possibleArgs = [
-          tc?.args,
-          func?.arguments,
-          payload?.args,
-          call?.arguments,
-          (metadata as any)?.args,
-          (metadata as any)?.arguments,
-        ];
-        for (const candidate of possibleArgs) {
-          if (candidate === undefined || candidate === null) continue;
-          try {
-            if (typeof candidate === 'string') {
-              argsObj = JSON.parse(candidate);
-              break;
-            }
-            if (typeof candidate === 'object') {
-              argsObj = candidate as Record<string, unknown>;
-              break;
-            }
-          } catch { /* ignore */ }
-        }
-
-        const output =
-          (tc?.output !== undefined ? tc.output : undefined) ??
-          ((metadata as any)?.output !== undefined ? (metadata as any).output : undefined) ??
-          (payload?.output !== undefined ? payload.output : undefined);
-
-        const callId =
-          (tc?.id as string) ||
-          (call?.id as string) ||
-          (func?.id as string) ||
-          (payload?.id as string) ||
-          generateId();
-
-        const statusVal =
-          (tc?.status as string) ||
-          (payload?.status as string) ||
-          ((event as any)?.status as string) ||
-          'pending';
+        const parsedToolCall = extractLiveToolCall(payload);
+        if (!parsedToolCall) return null;
 
         return {
           id: generateId(),
@@ -1102,41 +1238,12 @@ export function useCopilotz({
           senderType: 'tool',
           content: '',
           toolCalls: [{
-            id: callId,
-            name: toolName,
-            args: argsObj as Record<string, unknown>,
-            output,
-            status: statusVal,
+            id: parsedToolCall.id ?? generateId(),
+            name: parsedToolCall.name,
+            args: parsedToolCall.arguments,
+            ...(parsedToolCall.result !== undefined ? { output: parsedToolCall.result } : {}),
+            status: parsedToolCall.status,
           }] as Array<Record<string, unknown>>,
-        } as unknown as ServerMessage;
-      }
-
-      // MESSAGE bubble (agent text only - ignore system/tool messages and empty content)
-      if (type === 'MESSAGE' || type === 'NEW_MESSAGE') {
-        const senderType = payload?.senderType || payload?.sender?.type;
-        const liveMetadata = (
-          event?.metadata && typeof event.metadata === 'object'
-            ? event.metadata
-            : payload?.metadata
-        ) as Record<string, unknown> | undefined;
-        if (isInternalMessageMetadata(liveMetadata)) {
-          return null;
-        }
-        // Only process agent messages, skip system/tool/user messages
-        if (senderType !== 'agent') {
-          return null;
-        }
-        const content = typeof payload?.content === 'string' ? payload.content : '';
-        // Skip messages with empty content (especially NEW_MESSAGE events that only have toolCalls)
-        if (!content.trim()) {
-          return null;
-        }
-        return {
-          id: generateId(),
-          threadId: curThreadId ?? '',
-          senderType: 'agent',
-          content,
-          metadata: (liveMetadata ?? {}) as Record<string, unknown>,
         } as unknown as ServerMessage;
       }
 
@@ -1171,6 +1278,9 @@ export function useCopilotz({
     abortControllerRef.current?.abort();
     abortControllerRef.current = abortController;
     setIsStreaming(true);
+    // Reset the live tool-result buffer at the start of every stream so
+    // stale updates from a previous run can't leak into this one.
+    liveToolUpdatesRef.current = [];
 
     try {
       const normalizedUserMetadata = params.userMetadata
@@ -1229,96 +1339,52 @@ export function useCopilotz({
           const type = (event?.type as string) || '';
           const payload = getEventPayload(event);
 
-          // Handle MESSAGE/NEW_MESSAGE events for tool responses
-          if (type === 'MESSAGE' || type === 'NEW_MESSAGE') {
-            const senderType = getEventSenderType(payload);
-            
-            // Handle tool responses: update the matching tool call status
-            if (senderType === 'tool') {
-              const metadata = (payload?.metadata ?? {}) as Record<string, unknown>;
-              
-              // Extract tool call information from metadata.toolCalls array
-              const toolCallsArray = metadata?.toolCalls as Array<Record<string, unknown>> | undefined;
-              const toolCallData = toolCallsArray && toolCallsArray.length > 0 ? toolCallsArray[0] : undefined;
-              
-              if (!toolCallData) {
-                return; // No tool call data found
-              }
-              
-              // Notify onToolOutput callback with the full metadata (includes toolCalls array)
-              // This allows consumers to react to tool completions in real-time
-              processToolOutput(metadata);
-              
-              // Extract tool call ID and name
-              const toolCallId = toolCallData.id as string | undefined;
-              const toolCallName = toolCallData.name as string | undefined;
-              
-              // Extract the tool result/output
-              const toolResult = toolCallData.output || payload?.content;
-              
-              // Check if the tool execution failed
-              const toolStatus = (toolCallData.status as string) || 'completed';
-              const isFailed = toolStatus === 'failed' || toolCallData?.error;
-              
-              // Update the tool call status in the assistant message
-              setMessages((prev) => {
-                const updated = [...prev];
-                // Find the assistant message with the matching tool call
-                for (let i = updated.length - 1; i >= 0; i--) {
-                  if (updated[i].role === 'assistant' && updated[i].toolCalls) {
-                    const toolCalls = updated[i].toolCalls;
-                    if (toolCalls) {
-                      // Try to find by ID first, then by name for pending/running tools
-                      let toolCallIndex = toolCallId 
-                        ? toolCalls.findIndex(tc => tc.id === toolCallId)
-                        : -1;
-                      
-                      // If not found by ID, try to find a pending/running tool with the same name
-                      if (toolCallIndex === -1 && toolCallName) {
-                        toolCallIndex = toolCalls.findIndex(
-                          tc => tc.name === toolCallName && 
-                               (tc.status === 'pending' || tc.status === 'running')
-                        );
-                      }
-                      
-                      if (toolCallIndex !== -1) {
-                        const updatedToolCalls = [...toolCalls];
-                        updatedToolCalls[toolCallIndex] = {
-                          ...updatedToolCalls[toolCallIndex],
-                          status: isFailed ? 'failed' : 'completed',
-                          result: toolResult,
-                          endTime: Date.now(),
-                        };
-                        updated[i] = {
-                          ...updated[i],
-                          toolCalls: updatedToolCalls,
-                          isStreaming: true,
-                          isComplete: false,
-                        };
-                        break;
-                      }
-                    }
-                  }
-                }
-                return updated;
-              });
-              return; // Don't create a separate bubble for tool responses
-            }
-            
-            handleStreamMessageEvent(event);
-            if (senderType === 'agent') {
-              currentAssistantId = generateId();
-              pendingStartNewAssistantBubble = true;
-            }
+          if (type === 'TOOL_RESULT') {
+            processToolOutput((payload ?? {}) as Record<string, unknown>);
+            applyLiveToolResultUpdate(extractLiveToolResultUpdate(
+              (payload ?? {}) as Record<string, unknown>,
+            ));
             return;
           }
 
-          // TOOL_CALL events: render inside current assistant bubble
+          if (type === 'LLM_RESULT') {
+            const finalAnswer = typeof payload?.answer === 'string' ? payload.answer : undefined;
+            finalizeActiveAssistantTurn(finalAnswer);
+            pendingStartNewAssistantBubble = true;
+            return;
+          }
+
+          if (type === 'MESSAGE' || type === 'NEW_MESSAGE') {
+            return;
+          }
+
+          // TOOL_CALL events: render inside current assistant bubble.
+          // NOTE: This branch stays synchronous so any immediately following
+          // TOOL_RESULT can reconcile against the rendered tool call.
           if (type === 'TOOL_CALL') {
-            const sm = await toServerMessageFromEvent(event);
-            const toolCalls = sm?.toolCalls as Array<Record<string, unknown>> | undefined;
-            const toolCall = toolCalls && toolCalls[0];
-            if (!toolCall) return;
+            const parsedToolCall = extractLiveToolCall(
+              (payload ?? {}) as Record<string, unknown>,
+            );
+            if (!parsedToolCall) return;
+            const callId = parsedToolCall.id ?? generateId();
+            const toolName = parsedToolCall.name;
+
+            // Drain any tool-result updates that arrived before this TOOL_CALL.
+            const bufferedUpdates = liveToolUpdatesRef.current;
+            const matchingUpdateIndex = bufferedUpdates.findIndex((upd) => (
+              matchesToolResultUpdate({ id: callId, name: toolName }, upd)
+            ));
+            const bufferedUpdate = matchingUpdateIndex >= 0 ? bufferedUpdates[matchingUpdateIndex] : undefined;
+            if (matchingUpdateIndex >= 0) {
+              bufferedUpdates.splice(matchingUpdateIndex, 1);
+            }
+
+            const initialStatus: 'pending' | 'running' | 'completed' | 'failed' =
+              bufferedUpdate ? bufferedUpdate.status : parsedToolCall.status;
+            const initialResult = bufferedUpdate && bufferedUpdate.result !== undefined
+              ? bufferedUpdate.result
+              : parsedToolCall.result;
+            const endTime = bufferedUpdate?.endTime;
 
             setMessages((prev) =>
               (() => {
@@ -1327,17 +1393,13 @@ export function useCopilotz({
                   toolCalls: [
                     ...(Array.isArray(msg.toolCalls) ? msg.toolCalls : []),
                     {
-                      id: (toolCall.id as string) ?? generateId(),
-                      name: (toolCall.name as string) ?? 'tool',
-                      arguments:
-                        (toolCall.args as Record<string, unknown>) ??
-                        (toolCall.arguments as Record<string, unknown>) ??
-                        {},
-                      result: toolCall.output,
-                      status:
-                        (toolCall.status as 'pending' | 'running' | 'completed' | 'failed') ??
-                        'running',
+                      id: callId,
+                      name: toolName,
+                      arguments: parsedToolCall.arguments,
+                      ...(initialResult !== undefined ? { result: initialResult } : {}),
+                      status: initialStatus,
                       startTime: Date.now(),
+                      ...(endTime !== undefined ? { endTime } : {}),
                     },
                   ],
                 });
@@ -1591,6 +1653,8 @@ export function useCopilotz({
     setThreadMetadataMap((prev) => ({ ...prev, [bootstrapThreadExternalId]: {} }));
     // Clear messages; let streaming create bubbles as needed
     setMessages([]);
+    setMessagePageInfo(createEmptyMessagePageInfo());
+    persistedToolUpdatesRef.current = [];
     setSpecialState(null);
 
     try {
@@ -1643,7 +1707,10 @@ export function useCopilotz({
     setMessages([]);
     setUserContextSeed({});
     setIsMessagesLoading(false);
+    setIsLoadingOlderMessages(false);
     setIsStreaming(false);
+    setMessagePageInfo(createEmptyMessagePageInfo());
+    persistedToolUpdatesRef.current = [];
     setSpecialState(null);
     abortControllerRef.current?.abort();
   }, []);
@@ -1701,6 +1768,8 @@ export function useCopilotz({
   return {
     messages,
     isMessagesLoading,
+    isLoadingOlderMessages,
+    messagePageInfo,
     threads,
     currentThreadId,
     isStreaming,
@@ -1716,6 +1785,7 @@ export function useCopilotz({
     stopGeneration: handleStop,
     fetchAndSetThreadsState,
     loadThreadMessages,
+    loadOlderMessages,
     reset,
   };
 }

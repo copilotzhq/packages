@@ -75,6 +75,25 @@ type RestMessage = {
   updatedAt?: string;
 };
 
+export type RestMessagePageInfo = {
+  hasMoreBefore: boolean;
+  oldestMessageId: string | null;
+  newestMessageId: string | null;
+};
+
+export type RestMessagePage = {
+  data: RestMessage[];
+  pageInfo: RestMessagePageInfo;
+};
+
+const buildFallbackPageInfo = (
+  data: RestMessage[],
+): RestMessagePageInfo => ({
+  hasMoreBefore: false,
+  oldestMessageId: data[0]?.id ?? null,
+  newestMessageId: data[data.length - 1]?.id ?? null,
+});
+
 type MessageSenderType = "agent" | "user" | "tool" | "system";
 
 type MessageContent =
@@ -447,6 +466,10 @@ export async function runCopilotzStream(
       ? participants
       : [selectedAgent || "assistant"];
 
+  const resolvedTarget = targetAgent?.trim() || null;
+  const toolCallSenderId = selectedAgent ||
+    resolvedParticipants[0] || "assistant";
+
   const threadPayload: MessageThread | undefined =
     (threadId || threadExternalId || threadName ||
         Object.keys(restThreadMetadata).length > 0)
@@ -525,16 +548,13 @@ export async function runCopilotzStream(
     return parts;
   })();
 
-  // Resolve target: explicit targetAgent for this message
-  const resolvedTarget = targetAgent?.trim() || null;
-
   const payload: MessagePayload = {
     content: contentParts,
     sender: {
       type: normalizedToolCalls.length > 0 ? "agent" : "user",
-      externalId: user.externalId,
-      id: normalizedToolCalls.length > 0 ? "assistant" : undefined,
-      name: normalizedToolCalls.length > 0 ? "assistant" : (user.name ?? null),
+      externalId: normalizedToolCalls.length > 0 ? toolCallSenderId : user.externalId,
+      id: normalizedToolCalls.length > 0 ? toolCallSenderId : undefined,
+      name: normalizedToolCalls.length > 0 ? toolCallSenderId : (user.name ?? null),
       metadata: Object.keys(senderMetadata).length > 0 ? senderMetadata : null,
     },
     metadata: messageMetadata ?? null,
@@ -641,23 +661,21 @@ export async function runCopilotzStream(
         }
         break;
       }
-      case "MESSAGE": {
+      case "NEW_MESSAGE": {
         hadNonReasoningContent = true;
         lastTokenWasReasoning = false;
         collectedMessages.push(payload);
         onMessageEvent?.(payload);
-        const senderType = payload?.payload?.senderType ??
-          payload?.payload?.sender?.type;
-
-        if (
-          senderType === "agent" &&
-          typeof payload?.payload?.content === "string"
-        ) {
-          aggregatedText = payload.payload.content;
-        }
         break;
       }
       case "TOOL_CALL": {
+        hadNonReasoningContent = true;
+        lastTokenWasReasoning = false;
+        onMessageEvent?.(payload);
+        break;
+      }
+      case "TOOL_RESULT":
+      case "LLM_RESULT": {
         hadNonReasoningContent = true;
         lastTokenWasReasoning = false;
         onMessageEvent?.(payload);
@@ -680,9 +698,18 @@ export async function runCopilotzStream(
       }
       case "ERROR":
         throw new Error(payload?.error || "Copilotz stream error");
-      default:
-        // For other event types, wrap in a structure with type and payload
-        onMessageEvent?.({ type: eventType, payload });
+      default: {
+        // Forward non-contract/custom events without turning them into
+        // lifecycle primitives implicitly.
+        const hasEnvelope =
+          payload && typeof payload === "object" && "type" in payload;
+        if (hasEnvelope) {
+          onMessageEvent?.(payload);
+        } else {
+          onMessageEvent?.({ type: eventType, payload });
+        }
+        break;
+      }
     }
   };
 
@@ -747,8 +774,23 @@ export async function fetchThreadMessages(
   threadId: string,
   getRequestHeaders?: RequestHeadersProvider,
 ) {
+  const page = await fetchThreadMessagesPage(threadId, undefined, getRequestHeaders);
+  return page.data;
+}
+
+export async function fetchThreadMessagesPage(
+  threadId: string,
+  options?: {
+    limit?: number;
+    before?: string | null;
+  },
+  getRequestHeaders?: RequestHeadersProvider,
+): Promise<RestMessagePage> {
   const params = new URLSearchParams();
-  params.set("limit", "500");
+  params.set("limit", String(options?.limit ?? 50));
+  if (options?.before) {
+    params.set("before", options.before);
+  }
 
   const res = await fetch(
     apiUrl(`/v1/threads/${threadId}/messages?${params.toString()}`),
@@ -767,14 +809,37 @@ export async function fetchThreadMessages(
     );
   }
 
-  const data = await res.json();
-  if (Array.isArray(data)) {
-    return data as RestMessage[];
+  const payload = await res.json();
+  if (Array.isArray(payload)) {
+    return {
+      data: payload as RestMessage[],
+      pageInfo: buildFallbackPageInfo(payload as RestMessage[]),
+    };
   }
-  if (Array.isArray(data?.data)) {
-    return data.data as RestMessage[];
+  if (Array.isArray(payload?.data)) {
+    const data = payload.data as RestMessage[];
+    const rawPageInfo = payload?.pageInfo;
+    return {
+      data,
+      pageInfo: {
+        hasMoreBefore: rawPageInfo?.hasMoreBefore === true,
+        oldestMessageId: typeof rawPageInfo?.oldestMessageId === "string"
+          ? rawPageInfo.oldestMessageId
+          : data[0]?.id ?? null,
+        newestMessageId: typeof rawPageInfo?.newestMessageId === "string"
+          ? rawPageInfo.newestMessageId
+          : data[data.length - 1]?.id ?? null,
+      },
+    };
   }
-  return [];
+  return {
+    data: [],
+    pageInfo: {
+      hasMoreBefore: false,
+      oldestMessageId: null,
+      newestMessageId: null,
+    },
+  };
 }
 
 export async function updateThread(

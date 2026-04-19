@@ -160,8 +160,6 @@ export interface ChatConfig {
     stopGenerationTooltip?: string;
     attachFiles?: string;
     attachFileTooltip?: string;
-    recordAudio?: string;
-    recordAudioTooltip?: string;
     voiceEnter?: string;
     voiceExit?: string;
     voiceTitle?: string;
@@ -219,6 +217,8 @@ export interface ChatConfig {
     inputHelpText?: string;
     thinking?: string;
     defaultThreadName?: string;
+    loadOlderMessages?: string;
+    loadingOlderMessages?: string;
     showMoreMessage?: string;
     showLessMessage?: string;
   };
@@ -247,7 +247,6 @@ export interface ChatConfig {
   };
   markdown?: ChatMarkdownConfig;
   voiceCompose?: {
-    enabled?: boolean;
     defaultMode?: 'text' | 'voice';
     reviewMode?: VoiceReviewMode;
     autoSendDelayMs?: number;
@@ -309,9 +308,12 @@ export interface ChatV2Props {
   // State Management
   isGenerating?: boolean;
   isMessagesLoading?: boolean;
+  isLoadingOlderMessages?: boolean;
+  hasMoreMessagesBefore?: boolean;
   
   // Callbacks
   callbacks?: ChatCallbacks;
+  onLoadOlderMessages?: () => void;
   
   // User Info
   user?: {

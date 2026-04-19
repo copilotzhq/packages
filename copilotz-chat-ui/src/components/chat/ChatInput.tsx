@@ -308,76 +308,6 @@ const AttachmentPreview: React.FC<{
   );
 });
 
-// Audio recording component - memoized
-const AudioRecorder: React.FC<{
-  isRecording: boolean;
-  onStartRecording: () => void;
-  onStopRecording: () => void;
-  onCancel: () => void;
-  recordingDuration: number;
-  config?: ChatConfig;
-}> = memo(function AudioRecorder({ isRecording, onStartRecording, onStopRecording, onCancel, recordingDuration, config }) {
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  if (!isRecording) {
-    return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="outline"
-            size="icon"
-            onClick={onStartRecording}
-            className="h-10 w-10"
-          >
-            <Mic className="h-4 w-4" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent>{config?.labels?.recordAudioTooltip}</TooltipContent>
-      </Tooltip>
-    );
-  }
-
-  return (
-    <Card className="border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950">
-      <CardContent className="p-3">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <div className="h-3 w-3 bg-red-500 rounded-full animate-pulse" />
-            <span className="text-sm font-medium text-red-700 dark:text-red-300">
-              {config?.labels?.voiceListening || 'Recording'}
-            </span>
-          </div>
-          <Badge variant="outline" className="text-xs">
-            {formatTime(recordingDuration)}
-          </Badge>
-          <div className="flex gap-1 ml-auto">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onCancel}
-            >
-              <X className="h-3 w-3 mr-1" />
-              {config?.labels?.cancel || 'Cancel'}
-            </Button>
-            <Button
-              variant="default"
-              size="sm"
-              onClick={onStopRecording}
-            >
-              <Square className="h-3 w-3 mr-1" />
-              {config?.labels?.voiceStop || 'Stop'}
-            </Button>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-});
-
 const resolveVoiceErrorMessage = (error: unknown, config?: ChatConfig): string => {
   if (error instanceof DOMException && error.name === 'NotAllowedError') {
     return config?.labels?.voicePermissionDenied || 'Microphone access was denied.';
@@ -413,7 +343,6 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   mentionAgents = [],
   onTargetAgentChange,
 }: ChatInputProps) {
-  const voiceComposeEnabled = config?.voiceCompose?.enabled === true;
   const voiceDefaultMode = config?.voiceCompose?.defaultMode ?? 'text';
   const voiceReviewMode = config?.voiceCompose?.reviewMode ?? 'manual';
   const voiceAutoSendDelayMs = config?.voiceCompose?.autoSendDelayMs ?? 5000;
@@ -422,12 +351,10 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   const voiceTranscriptMode = config?.voiceCompose?.transcriptMode ?? 'final-only';
   const voiceMaxRecordingMs = config?.voiceCompose?.maxRecordingMs;
 
-  const [isRecording, setIsRecording] = useState(false);
   const { setContext } = useChatUserContext();
-  const [recordingDuration, setRecordingDuration] = useState(0);
   const [uploadProgress, setUploadProgress] = useState<Map<string, FileUploadProgress>>(new Map());
   const [isVoiceComposerOpen, setIsVoiceComposerOpen] = useState(
-    () => voiceComposeEnabled && voiceDefaultMode === 'voice',
+    () => enableAudioRecording && voiceDefaultMode === 'voice',
   );
   const [voiceState, setVoiceState] = useState<VoiceComposerState>('idle');
   const [voiceDraft, setVoiceDraft] = useState<VoiceSegment | null>(null);
@@ -442,10 +369,6 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const recordingStartTime = useRef<number>(0);
-  const recordingInterval = useRef<ReturnType<typeof setInterval> | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
   const voiceProviderRef = useRef<VoiceProvider | null>(null);
   const voiceDraftRef = useRef<VoiceSegment | null>(null);
   const voiceAppendBaseRef = useRef<VoiceSegment | null>(null);
@@ -497,12 +420,6 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   // Cleanup recording on unmount
   useEffect(() => {
     return () => {
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach(track => track.stop());
-      }
-      if (recordingInterval.current) {
-        clearInterval(recordingInterval.current);
-      }
       if (voiceProviderRef.current) {
         void voiceProviderRef.current.destroy();
         voiceProviderRef.current = null;
@@ -713,87 +630,6 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
   }, []);
-
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaStreamRef.current = stream;
-
-      const mediaRecorder = new MediaRecorder(stream);
-      mediaRecorderRef.current = mediaRecorder;
-
-      const chunks: BlobPart[] = [];
-      mediaRecorder.ondataavailable = (e) => {
-        chunks.push(e.data);
-      };
-
-      mediaRecorder.onstop = async () => {
-        const blob = new Blob(chunks, { type: 'audio/webm' });
-        const dataUrl = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(blob);
-        });
-
-        const attachment: MediaAttachment = {
-          kind: 'audio',
-          dataUrl,
-          mimeType: blob.type,
-          durationMs: recordingDuration * 1000,
-          fileName: `audio_${new Date().toISOString().slice(0, 19)}.webm`,
-          size: blob.size,
-        };
-
-        onAttachmentsChange([...attachments, attachment]);
-
-        // Cleanup
-        if (mediaStreamRef.current) {
-          mediaStreamRef.current.getTracks().forEach(track => track.stop());
-          mediaStreamRef.current = null;
-        }
-      };
-
-      recordingStartTime.current = Date.now();
-      setRecordingDuration(0);
-      setIsRecording(true);
-      mediaRecorder.start();
-
-      recordingInterval.current = setInterval(() => {
-        const duration = Math.floor((Date.now() - recordingStartTime.current) / 1000);
-        setRecordingDuration(duration);
-      }, 1000);
-
-    } catch (error) {
-      console.error('Error starting recording:', error);
-      alert(config?.labels?.voicePermissionDenied || 'Microphone access was denied.');
-    }
-  };
-
-  const stopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      if (recordingInterval.current) {
-        clearInterval(recordingInterval.current);
-      }
-    }
-  };
-
-  const cancelRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      if (recordingInterval.current) {
-        clearInterval(recordingInterval.current);
-      }
-      // Don't process the recording
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach(track => track.stop());
-        mediaStreamRef.current = null;
-      }
-    }
-  };
 
   const resetVoiceComposerState = useCallback((nextState: VoiceComposerState = 'idle') => {
     setVoiceState(nextState);
@@ -1151,7 +987,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   };
 
   const canAddMoreAttachments = attachments.length < maxAttachments;
-  const showVoiceComposer = voiceComposeEnabled && isVoiceComposerOpen;
+  const showVoiceComposer = enableAudioRecording && isVoiceComposerOpen;
 
   return (
     <TooltipProvider>
@@ -1177,18 +1013,6 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                 />
               ))}
             </div>
-          )}
-
-          {/* Audio recording */}
-          {isRecording && (
-            <AudioRecorder
-              isRecording={isRecording}
-              onStartRecording={startRecording}
-              onStopRecording={stopRecording}
-              onCancel={cancelRecording}
-              recordingDuration={recordingDuration}
-              config={config}
-            />
           )}
 
           {/* Attachments preview */}
@@ -1337,36 +1161,25 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                   )}
                 </div>
 
-                {/* Audio recording / voice compose entry */}
-                {enableAudioRecording && !isRecording && canAddMoreAttachments && !value.trim() && (
-                  voiceComposeEnabled ? (
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon"
-                          className="h-10 w-10"
-                          onClick={() => {
-                            void startVoiceCapture();
-                          }}
-                          disabled={disabled || isGenerating}
-                        >
-                          <Mic className="h-4 w-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>{config?.labels?.voiceEnter || config?.labels?.recordAudioTooltip}</TooltipContent>
-                    </Tooltip>
-                  ) : (
-                    <AudioRecorder
-                      isRecording={isRecording}
-                      onStartRecording={startRecording}
-                      onStopRecording={stopRecording}
-                      onCancel={cancelRecording}
-                      recordingDuration={recordingDuration}
-                      config={config}
-                    />
-                  )
+                {/* Voice compose entry */}
+                {enableAudioRecording && canAddMoreAttachments && !value.trim() && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon"
+                        className="h-10 w-10"
+                        onClick={() => {
+                          void startVoiceCapture();
+                        }}
+                        disabled={disabled || isGenerating}
+                      >
+                        <Mic className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>{config?.labels?.voiceEnter}</TooltipContent>
+                  </Tooltip>
                 )}
 
                 {/* Submit/Stop button */}

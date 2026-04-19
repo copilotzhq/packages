@@ -107,6 +107,19 @@ Messages stream token-by-token with a thinking indicator while waiting for the f
 <CopilotzChat userId="user-123" />
 ```
 
+### Live Stream Contract
+
+From `0.4.0` onward, the adapter treats the Copilotz live stream as a lifecycle-native contract:
+
+- `TOKEN` streams partial assistant text and reasoning
+- `TOOL_CALL` starts or updates the tool execution UI
+- `TOOL_RESULT` completes the tool execution UI
+- `LLM_RESULT` finalizes the active assistant turn
+- `ASSET_CREATED` remains an optional live artifact event
+- `NEW_MESSAGE` is treated as a history/artifact event, not the primary live completion signal
+
+If you stream Copilotz events through a custom bridge, keep those event names intact.
+
 ### Tool Calls with Live Status
 
 When your agent calls tools, the UI shows real-time status updates:

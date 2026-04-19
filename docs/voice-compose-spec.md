@@ -37,8 +37,7 @@ Add an opt-in voice composer to `@copilotz/chat-ui` that can replace the bottom 
 
 ### Entry
 
-- If `voiceCompose.enabled` is `false`, the current inline recorder behavior remains unchanged.
-- If `voiceCompose.enabled` is `true`, the mic button opens the voice composer and immediately attempts to start the provider.
+- The mic button opens the voice composer and immediately attempts to start the provider.
 - `voiceCompose.defaultMode` controls whether the composer initially opens in text or voice state.
 
 ### Voice Composer Behavior
@@ -250,14 +249,14 @@ Optional future work:
 After publishing a new package version:
 
 1. update `clients/mobizap/web/package.json` to the new `@copilotz/chat-ui` / `@copilotz/chat-adapter`
-2. enable `voiceCompose.enabled` in the Mobizap chat config
+2. configure `voiceCompose` in the Mobizap chat config
 3. test with the built-in manual provider first
 4. switch Mobizap to a local VAD-only provider with `reviewMode: "armed"`
 5. keep Moonshine in an optional shared package for future English-friendly clients
 
 ## Success Criteria
 
-- Existing consumers remain unchanged unless `voiceCompose.enabled` is set
+- Existing consumers keep the current text-first flow unless they customize `voiceCompose`
 - Shared packages do not gain VAD/STT runtime dependencies
 - The default voice composer works end-to-end with manual recording
 - Custom providers can drive richer listening/transcript states without changing the shared UI

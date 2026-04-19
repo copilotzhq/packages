@@ -43,7 +43,10 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   sidebar: _sidebar,
   isGenerating = false,
   isMessagesLoading = false,
+  isLoadingOlderMessages = false,
+  hasMoreMessagesBefore = false,
   callbacks = {},
+  onLoadOlderMessages,
   user,
   assistant,
   suggestions = [],
@@ -129,6 +132,12 @@ export const ChatUI: React.FC<ChatV2Props> = ({
 
   // Refs
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const prependSnapshotRef = useRef<{
+    scrollHeight: number;
+    scrollTop: number;
+    firstMessageId: string | null;
+    messageCount: number;
+  } | null>(null);
 
   // Refs for state to avoid recreating callbacks on every state change
   const stateRef = useRef(state);
@@ -199,6 +208,11 @@ export const ChatUI: React.FC<ChatV2Props> = ({
       return;
     }
 
+    if (prependSnapshotRef.current) {
+      prevMessageCountRef.current = messages.length;
+      return;
+    }
+
     const wasEmpty = prevMessageCountRef.current === 0;
     prevMessageCountRef.current = messages.length;
 
@@ -231,6 +245,56 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   }, [expandedMessageIds, virtualizer]);
 
   useEffect(() => {
+    prependSnapshotRef.current = null;
+  }, [currentThreadId]);
+
+  useEffect(() => {
+    const snapshot = prependSnapshotRef.current;
+    if (!snapshot) return;
+
+    if (messages.length <= snapshot.messageCount) {
+      if (!isLoadingOlderMessages) {
+        prependSnapshotRef.current = null;
+      }
+      return;
+    }
+
+    if ((messages[0]?.id ?? null) === snapshot.firstMessageId) {
+      if (!isLoadingOlderMessages) {
+        prependSnapshotRef.current = null;
+      }
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      virtualizer.measure();
+      requestAnimationFrame(() => {
+        const viewport = scrollAreaRef.current;
+        if (!viewport) return;
+        const heightDelta = viewport.scrollHeight - snapshot.scrollHeight;
+        viewport.scrollTop = snapshot.scrollTop + heightDelta;
+        prependSnapshotRef.current = null;
+      });
+    });
+  }, [messages, isLoadingOlderMessages, virtualizer]);
+
+  const requestOlderMessages = useCallback(() => {
+    if (!onLoadOlderMessages || !hasMoreMessagesBefore || isLoadingOlderMessages) return;
+
+    const viewport = scrollAreaRef.current;
+    prependSnapshotRef.current = viewport
+      ? {
+          scrollHeight: viewport.scrollHeight,
+          scrollTop: viewport.scrollTop,
+          firstMessageId: messages[0]?.id ?? null,
+          messageCount: messages.length,
+        }
+      : null;
+
+    onLoadOlderMessages();
+  }, [hasMoreMessagesBefore, isLoadingOlderMessages, messages, onLoadOlderMessages]);
+
+  useEffect(() => {
     const validMessageIds = new Set(messages.map((message) => message.id));
 
     setExpandedMessageIds((prev) => {
@@ -253,11 +317,17 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
     const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
+    const isNearTop = scrollTop < 120;
+
+    if (isNearTop && hasMoreMessagesBefore && !isLoadingOlderMessages) {
+      requestOlderMessages();
+    }
+
     setState(prev => {
       if (prev.isAtBottom === isAtBottom) return prev;
       return { ...prev, isAtBottom };
     });
-  }, []);
+  }, [hasMoreMessagesBefore, isLoadingOlderMessages, requestOlderMessages]);
 
   // Message handling
   const handleSendMessage = useCallback((
@@ -585,6 +655,23 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                     style={{ contain: 'strict' }}
                   >
                     <div className="max-w-4xl mx-auto pb-4">
+                      {messages.length > 0 && (
+                        <div className="flex justify-center py-2">
+                          {isLoadingOlderMessages ? (
+                            <span className="text-xs text-muted-foreground">
+                              {config.labels.loadingOlderMessages}
+                            </span>
+                          ) : hasMoreMessagesBefore ? (
+                            <button
+                              type="button"
+                              onClick={requestOlderMessages}
+                              className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+                            >
+                              {config.labels.loadOlderMessages}
+                            </button>
+                          ) : null}
+                        </div>
+                      )}
                       {isMessagesLoading ? (
                         renderMessageLoadingSkeleton()
                       ) : messages.length === 0 ? (

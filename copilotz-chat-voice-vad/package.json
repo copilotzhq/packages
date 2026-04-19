@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/chat-voice-vad",
-  "version": "0.1.35",
+  "version": "0.4.0",
   "description": "Optional VAD-powered voice provider for Copilotz chat voice compose",
   "type": "module",
   "main": "./dist/index.cjs",

@@ -109,6 +109,8 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
   const {
     messages,
     isMessagesLoading,
+    isLoadingOlderMessages,
+    messagePageInfo,
     threads,
     currentThreadId,
     isStreaming,
@@ -122,6 +124,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     archiveThread,
     deleteThread,
     stopGeneration,
+    loadOlderMessages,
   } = useCopilotz({
     userId,
     initialContext,
@@ -226,6 +229,9 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
         <ChatUI
           messages={messages}
           isMessagesLoading={isMessagesLoading}
+          isLoadingOlderMessages={isLoadingOlderMessages}
+          hasMoreMessagesBefore={messagePageInfo.hasMoreBefore}
+          onLoadOlderMessages={loadOlderMessages}
           threads={threads}
           currentThreadId={currentThreadId}
           config={mergedConfig}
