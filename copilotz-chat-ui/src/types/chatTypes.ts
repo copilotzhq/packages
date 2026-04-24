@@ -91,6 +91,28 @@ export interface ToolCall {
   endTime?: number;
 }
 
+export type ActivityDisplayMode = 'full' | 'summary' | 'hidden';
+
+export type AssistantActivitySummaryKind =
+  | 'thinking'
+  | 'working'
+  | 'using_tools'
+  | 'preparing_answer';
+
+export interface AssistantActivitySummary {
+  kind: AssistantActivitySummaryKind;
+  toolName?: string;
+  toolCount?: number;
+}
+
+export interface AssistantActivityState {
+  isActive: boolean;
+  isComplete?: boolean;
+  summary: AssistantActivitySummary;
+  reasoning?: string;
+  toolCalls?: ToolCall[];
+}
+
 // Enhanced Chat Message
 export interface ChatMessage {
   id: string;
@@ -103,12 +125,9 @@ export interface ChatMessage {
   isEdited?: boolean;
   originalContent?: string;
   editedAt?: number;
-  toolCalls?: ToolCall[];
   metadata?: Record<string, any>;
-  /** Model reasoning/thinking content (displayed in a collapsible block) */
-  reasoning?: string;
-  /** Whether reasoning tokens are still being streamed */
-  isReasoningStreaming?: boolean;
+  /** Unified assistant activity state for live rendering and history hydration */
+  activity?: AssistantActivityState;
   /** Agent/sender identity for multi-agent conversations */
   senderName?: string;
   /** Agent ID of the sender (for multi-agent conversations) */
@@ -212,10 +231,16 @@ export interface ChatConfig {
     cancel?: string;
     create?: string;
     footerLabel?: string;
-    toolUsed?: string;
     daysAgo?: string;
     inputHelpText?: string;
-    thinking?: string;
+    activityThinking?: string;
+    activityWorking?: string;
+    activityUsingTools?: string;
+    activityPreparingAnswer?: string;
+    activityToolRunning?: string;
+    activityMultipleTools?: string;
+    activityShowDetails?: string;
+    activityHideDetails?: string;
     defaultThreadName?: string;
     loadOlderMessages?: string;
     loadingOlderMessages?: string;
@@ -229,7 +254,7 @@ export interface ChatConfig {
     enableMessageEditing?: boolean;
     enableMessageCopy?: boolean;
     enableRegeneration?: boolean;
-    enableToolCallsDisplay?: boolean;
+    activityDisplay?: ActivityDisplayMode;
     maxAttachments?: number;
     maxFileSize?: number; // in bytes
   };

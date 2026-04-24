@@ -2,7 +2,7 @@
 
 **The chat interface your AI agent deserves.**
 
-Chat UI libraries give you message bubbles. Your AI agent has tool calls, streaming responses, file uploads, audio recording, persistent threads, and user memories. This gives you everything else.
+Chat UI libraries give you message bubbles. Your AI agent has live activity, streaming responses, file uploads, audio recording, persistent threads, and user memories. This gives you everything else.
 
 [![npm](https://img.shields.io/npm/v/@copilotz/chat-ui)](https://www.npmjs.com/package/@copilotz/chat-ui)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178c6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
@@ -15,7 +15,7 @@ Chat UI libraries give you message bubbles. Your AI agent has tool calls, stream
 
 You're building a frontend for your AI agent. You grab a chat UI library. It renders messages. Great.
 
-Then you need to show tool calls — the library doesn't support that. Streaming with a thinking indicator — you'll build it yourself. File uploads with previews — more custom code. Audio recording — even more. Thread management with search and archive — at this point you're maintaining your own chat UI.
+Then you need to show assistant activity — the library doesn't support that. Streaming with a native-feeling activity state — you'll build it yourself. File uploads with previews — more custom code. Audio recording — even more. Thread management with search and archive — at this point you're maintaining your own chat UI.
 
 **There's no shadcn for agentic chat. Just parts.**
 
@@ -25,8 +25,8 @@ Then you need to show tool calls — the library doesn't support that. Streaming
 
 | What You Need | What This Gives You |
 |---------------|---------------------|
-| Messages | Markdown with syntax highlighting, streaming with thinking indicator |
-| Tool Calls | Expandable cards with args, results, status, and execution time |
+| Messages | Markdown with syntax highlighting, streaming, and unified assistant activity |
+| Assistant Activity | Compact summary, optional details, hidden loader mode |
 | Media | Image/audio/video attachments with native playback controls |
 | Input | File upload (drag & drop), audio recording, attachment previews |
 | Threads | Sidebar with search, archive, date grouping, rename, delete |
@@ -80,7 +80,7 @@ That's it. You have a full-featured chat interface.
 
 ### Messages That Do More
 
-Real-time streaming with a thinking indicator while waiting for the first token. Markdown rendering with syntax highlighting. Tool calls displayed as expandable cards showing name, arguments, result, and execution time.
+Real-time streaming with a unified assistant activity model. Markdown rendering with syntax highlighting. Activity can render in `full`, `summary`, or `hidden` modes, with detailed reasoning and tool execution folded into one activity surface.
 
 ```tsx
 const message = {
@@ -89,15 +89,20 @@ const message = {
   content: 'Here is the chart you requested.',
   timestamp: Date.now(),
   isStreaming: false,
-  toolCalls: [{
-    id: 'tc-1',
-    name: 'generate_chart',
-    arguments: { type: 'bar', data: [1, 2, 3] },
-    result: { url: 'https://...' },
-    status: 'completed',
-    startTime: 1234567890,
-    endTime: 1234567891,
-  }],
+  activity: {
+    isActive: false,
+    isComplete: true,
+    summary: { kind: 'using_tools', toolName: 'generate_chart' },
+    toolCalls: [{
+      id: 'tc-1',
+      name: 'generate_chart',
+      arguments: { type: 'bar', data: [1, 2, 3] },
+      result: { url: 'https://...' },
+      status: 'completed',
+      startTime: 1234567890,
+      endTime: 1234567891,
+    }],
+  },
   attachments: [{
     kind: 'image',
     dataUrl: 'data:image/png;base64,...',
@@ -157,9 +162,10 @@ The configuration system lets you customize everything without touching the comp
       inputPlaceholder: 'Ask me anything...',
       sendButton: 'Send',
       newChat: 'New Conversation',
-      thinking: 'Thinking...',
-      toolUsed: 'Tool Used',
-      // ... 50+ customizable labels for full i18n
+      activityThinking: 'Thinking...',
+      activityUsingTools: 'Using tools...',
+      activityShowDetails: 'Show details',
+      activityHideDetails: 'Hide details',
     },
     features: {
       enableThreads: true,
@@ -168,7 +174,7 @@ The configuration system lets you customize everything without touching the comp
       enableMessageEditing: true,
       enableMessageCopy: true,
       enableRegeneration: true,
-      enableToolCallsDisplay: true,
+      activityDisplay: 'full',
       maxAttachments: 4,
       maxFileSize: 10 * 1024 * 1024, // 10MB
     },
@@ -361,8 +367,22 @@ interface ChatMessage {
   isStreaming?: boolean;
   isComplete?: boolean;
   isEdited?: boolean;
-  toolCalls?: ToolCall[];
+  activity?: AssistantActivityState;
   metadata?: Record<string, any>;
+}
+```
+
+```typescript
+interface AssistantActivityState {
+  isActive: boolean;
+  isComplete?: boolean;
+  summary: {
+    kind: 'thinking' | 'working' | 'using_tools' | 'preparing_answer';
+    toolName?: string;
+    toolCount?: number;
+  };
+  reasoning?: string;
+  toolCalls?: ToolCall[];
 }
 ```
 
@@ -405,26 +425,16 @@ interface AgentOption {
 ## Exports
 
 ```tsx
-// Components
+// Primary components
 export { ChatUI } from './components/chat/ChatUI';
-export { ChatHeader } from './components/chat/ChatHeader';
-export { ChatInput } from './components/chat/ChatInput';
-export { Message } from './components/chat/Message';
-export { Sidebar } from './components/chat/Sidebar';
-export { ThreadManager } from './components/chat/ThreadManager';
-export { UserProfile } from './components/chat/UserProfile';
-export { UserMenu } from './components/chat/UserMenu';
+export { AssistantActivity } from './components/chat/AssistantActivity';
 export { ChatUserContextProvider, useChatUserContext } from './components/chat/UserContext';
 
 // Configuration
 export { defaultChatConfig, mergeConfig } from './config/chatConfig';
 
 // Types
-export type { ChatMessage, ChatThread, ChatConfig, ChatCallbacks } from './types/chatTypes';
-export type { MediaAttachment, ToolCall, ChatState, ChatUserContext, MemoryItem } from './types/chatTypes';
-
-// Utilities
-export { cn } from './lib/utils';
+export type * from './types/chatTypes';
 ```
 
 ---

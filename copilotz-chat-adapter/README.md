@@ -101,7 +101,7 @@ VITE_COPILOTZ_API_KEY=your-api-key
 
 ### Real-Time Streaming
 
-Messages stream token-by-token with a thinking indicator while waiting for the first token. No configuration needed — it just works.
+Messages stream token-by-token with a unified assistant activity model. No extra configuration is needed for live lifecycle parsing — it just works.
 
 ```tsx
 <CopilotzChat userId="user-123" />
@@ -111,30 +111,24 @@ Messages stream token-by-token with a thinking indicator while waiting for the f
 
 From `0.4.0` onward, the adapter treats the Copilotz live stream as a lifecycle-native contract:
 
-- `TOKEN` streams partial assistant text and reasoning
-- `TOOL_CALL` starts or updates the tool execution UI
-- `TOOL_RESULT` completes the tool execution UI
+- `TOKEN` streams partial assistant text and internal reasoning state
+- `TOOL_CALL` starts or updates assistant activity
+- `TOOL_RESULT` completes tool activity state
 - `LLM_RESULT` finalizes the active assistant turn
 - `ASSET_CREATED` remains an optional live artifact event
 - `NEW_MESSAGE` is treated as a history/artifact event, not the primary live completion signal
 
 If you stream Copilotz events through a custom bridge, keep those event names intact.
 
-### Tool Calls with Live Status
+### Assistant Activity Modes
 
-When your agent calls tools, the UI shows real-time status updates:
-
-1. **Pending** — Tool call received
-2. **Running** — Tool is executing
-3. **Completed/Failed** — Result displayed with execution time
-
-All automatic. Just enable tool display in config:
+When your agent thinks or calls tools, the adapter normalizes those lifecycle events into one activity model for the UI. Configure the surface with `activityDisplay`:
 
 ```tsx
 <CopilotzChat
   userId="user-123"
   config={{
-    features: { enableToolCallsDisplay: true },
+    features: { activityDisplay: 'summary' },
   }}
 />
 ```
@@ -371,7 +365,7 @@ function CustomChat() {
 
 ## Services
 
-### copilotzService
+### Direct API Helpers
 
 Low-level API client for direct backend communication:
 
@@ -401,7 +395,7 @@ const threads = await fetchThreads('user-123');
 const messages = await fetchThreadMessages('thread-456');
 ```
 
-### assetsService
+### Asset Helpers
 
 Resolve asset references to data URLs:
 
@@ -425,16 +419,15 @@ export { CopilotzChat } from './CopilotzChat';
 
 // Hooks
 export { useCopilotz } from './useCopilotzChat';
-export { useUrlState } from './useUrlState';
 
 // Services
 export { 
+  CopilotzRequestError,
   runCopilotzStream, 
   fetchThreads, 
   fetchThreadMessages, 
   updateThread, 
   deleteThread,
-  copilotzService,
 } from './copilotzService';
 
 export { 
@@ -452,14 +445,6 @@ export type {
   MediaAttachment, 
   MemoryItem,
 } from '@copilotz/chat-ui';
-
-// URL state types
-export type { 
-  UrlSyncConfig, 
-  UrlParamsConfig, 
-  UrlState, 
-  UseUrlStateReturn,
-} from './useUrlState';
 ```
 
 ---
@@ -501,7 +486,7 @@ function App() {
           subtitle: 'We typically reply in a few seconds',
         },
         features: {
-          enableToolCallsDisplay: true,
+          activityDisplay: 'full',
           enableFileUpload: true,
           enableAudioRecording: true,
         },

@@ -1,8 +1,19 @@
 export { CopilotzChat } from './CopilotzChat';
 export { useCopilotz } from './useCopilotzChat';
-export { useUrlState } from './useUrlState';
-export * from './copilotzService';
-export * from './assetsService';
+export {
+  CopilotzRequestError,
+  apiUrl,
+  apiUrlObject,
+  deleteThread,
+  fetchAgents,
+  fetchThreadMessages,
+  fetchThreads,
+  runCopilotzStream,
+  withAuthHeaders,
+  updateThread,
+} from './copilotzService';
+export type { RequestHeadersProvider } from './copilotzService';
+export { getAssetDataUrl, resolveAssetsInMessages } from './assetsService';
 export type {
   EventInterceptor,
   EventInterceptorResult,
@@ -30,4 +41,3 @@ export type {
   VoiceTranscriptMode,
   CreateVoiceProvider,
 } from '@copilotz/chat-ui';
-export type { UrlParamsConfig, UrlState, UseUrlStateReturn } from './useUrlState';

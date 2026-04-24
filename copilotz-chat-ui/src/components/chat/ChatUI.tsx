@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   ChatV2Props,
+  AssistantActivityState,
   ChatMessage,
   MediaAttachment,
   MessageActionEvent,
@@ -23,6 +24,12 @@ import { TooltipProvider } from '../ui/tooltip';
 import { SidebarProvider, SidebarInset } from '../ui/sidebar';
 import { Sparkles, ArrowRight, MessageSquare, Lightbulb, Zap, HelpCircle } from 'lucide-react';
 
+type MessageGroup = {
+  id: string;
+  message: ChatMessage;
+  suggestionMessageId: string;
+};
+
 function getMessageSpeakerKey(message: ChatMessage | null | undefined): string | null {
   if (!message) return null;
   if (message.role === 'assistant') {
@@ -33,6 +40,142 @@ function getMessageSpeakerKey(message: ChatMessage | null | undefined): string |
   }
   return message.role;
 }
+
+function getAssistantSpeakerTokens(message: ChatMessage | null | undefined): string[] {
+  if (!message || message.role !== 'assistant') return [];
+
+  const rawTokens = [message.senderAgentId, message.senderName]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .map((value) => value.trim().toLowerCase());
+
+  if (rawTokens.length > 0) {
+    return Array.from(new Set(rawTokens));
+  }
+
+  return ['assistant'];
+}
+
+function canGroupMessages(previous: ChatMessage, next: ChatMessage): boolean {
+  if (previous.role !== next.role) {
+    return false;
+  }
+
+  if (previous.role !== 'assistant') {
+    return getMessageSpeakerKey(previous) === getMessageSpeakerKey(next);
+  }
+
+  const previousTokens = getAssistantSpeakerTokens(previous);
+  const nextTokens = getAssistantSpeakerTokens(next);
+
+  return previousTokens.some((token) => nextTokens.includes(token));
+}
+
+const mergeToolCalls = (
+  activities: AssistantActivityState[],
+): AssistantActivityState['toolCalls'] | undefined => {
+  const merged = new Map<string, NonNullable<AssistantActivityState['toolCalls']>[number]>();
+
+  for (const activity of activities) {
+    if (!Array.isArray(activity.toolCalls)) continue;
+    for (const toolCall of activity.toolCalls) {
+      const key = toolCall.id || `${toolCall.name}:${JSON.stringify(toolCall.arguments ?? {})}`;
+      merged.set(key, toolCall);
+    }
+  }
+
+  return merged.size > 0 ? Array.from(merged.values()) : undefined;
+};
+
+const mergeReasoning = (
+  activities: AssistantActivityState[],
+): string | undefined => {
+  const segments = activities
+    .map((activity) => activity.reasoning?.trim())
+    .filter((value): value is string => Boolean(value));
+
+  if (segments.length === 0) return undefined;
+
+  return segments
+    .filter((segment, index) => index === 0 || segment !== segments[index - 1])
+    .join('\n\n');
+};
+
+const mergeGroupActivity = (messages: ChatMessage[]): ChatMessage['activity'] => {
+  const activities = messages
+    .map((message) => message.activity)
+    .filter((activity): activity is AssistantActivityState => Boolean(activity));
+
+  if (activities.length === 0) return undefined;
+
+  const lastActivity = activities[activities.length - 1];
+  const mergedReasoning = mergeReasoning(activities);
+  const mergedToolCalls = mergeToolCalls(activities);
+
+  return {
+    ...lastActivity,
+    ...(mergedReasoning ? { reasoning: mergedReasoning } : {}),
+    ...(mergedToolCalls ? { toolCalls: mergedToolCalls } : {}),
+  };
+};
+
+const mergeMessageGroup = (messages: ChatMessage[]): ChatMessage => {
+  const firstMessage = messages[0];
+  const lastMessage = messages[messages.length - 1];
+  const content = messages
+    .map((message) => message.content.trim())
+    .filter((value) => value.length > 0)
+    .join('\n\n');
+  const attachments = messages.flatMap((message) => message.attachments ?? []);
+
+  return {
+    ...lastMessage,
+    id: lastMessage.id,
+    content,
+    timestamp: firstMessage.timestamp,
+    attachments: attachments.length > 0 ? attachments : undefined,
+    isStreaming: lastMessage.isStreaming,
+    isComplete: lastMessage.isComplete,
+    isEdited: messages.some((message) => message.isEdited),
+    originalContent: undefined,
+    editedAt: lastMessage.editedAt,
+    activity: mergeGroupActivity(messages),
+    senderName: lastMessage.senderName ?? firstMessage.senderName,
+    senderAgentId: lastMessage.senderAgentId ?? firstMessage.senderAgentId,
+    metadata: lastMessage.metadata,
+  };
+};
+
+const groupMessagesForRender = (messages: ChatMessage[]): MessageGroup[] => {
+  if (messages.length === 0) return [];
+
+  const groups: MessageGroup[] = [];
+  let currentGroup: ChatMessage[] = [messages[0]];
+
+  const flushGroup = () => {
+    const mergedMessage = mergeMessageGroup(currentGroup);
+    groups.push({
+      id: mergedMessage.id,
+      message: mergedMessage,
+      suggestionMessageId: currentGroup[currentGroup.length - 1].id,
+    });
+  };
+
+  for (let index = 1; index < messages.length; index++) {
+    const previous = currentGroup[currentGroup.length - 1];
+    const next = messages[index];
+
+    if (canGroupMessages(previous, next)) {
+      currentGroup.push(next);
+      continue;
+    }
+
+    flushGroup();
+    currentGroup = [next];
+  }
+
+  flushGroup();
+  return groups;
+};
 
 // ChatUI is a purely presentational component
 export const ChatUI: React.FC<ChatV2Props> = ({
@@ -152,10 +295,11 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   // Mobile custom overlay mount/unmount for smooth transitions
   const [isCustomMounted, setIsCustomMounted] = useState(false);
   const [isCustomVisible, setIsCustomVisible] = useState(false);
+  const groupedMessages = useMemo(() => groupMessagesForRender(messages), [messages]);
 
   // Virtualizer — only renders messages visible in the viewport + overscan buffer
   const virtualizer = useVirtualizer({
-    count: messages.length,
+    count: groupedMessages.length,
     getScrollElement: () => scrollAreaRef.current,
     estimateSize: () => 100,
     overscan: 5,
@@ -203,25 +347,25 @@ export const ChatUI: React.FC<ChatV2Props> = ({
 
   // Auto-scroll to bottom on message changes
   useEffect(() => {
-    if (messages.length === 0) {
+    if (groupedMessages.length === 0) {
       prevMessageCountRef.current = 0;
       return;
     }
 
     if (prependSnapshotRef.current) {
-      prevMessageCountRef.current = messages.length;
+      prevMessageCountRef.current = groupedMessages.length;
       return;
     }
 
     const wasEmpty = prevMessageCountRef.current === 0;
-    prevMessageCountRef.current = messages.length;
+    prevMessageCountRef.current = groupedMessages.length;
 
     if (wasEmpty) {
       // Initial load (thread switch) — jump instantly to the bottom
       // Double RAF ensures the virtualizer has committed its layout
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
-          virtualizer.scrollToIndex(messages.length - 1, { align: 'end' });
+          virtualizer.scrollToIndex(groupedMessages.length - 1, { align: 'end' });
         });
       });
       return;
@@ -238,7 +382,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
         viewport.scrollTop = viewport.scrollHeight;
       }
     });
-  }, [messages, state.isAtBottom, virtualizer]);
+  }, [groupedMessages, state.isAtBottom, virtualizer]);
 
   useEffect(() => {
     virtualizer.measure();
@@ -252,14 +396,14 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     const snapshot = prependSnapshotRef.current;
     if (!snapshot) return;
 
-    if (messages.length <= snapshot.messageCount) {
+    if (groupedMessages.length <= snapshot.messageCount) {
       if (!isLoadingOlderMessages) {
         prependSnapshotRef.current = null;
       }
       return;
     }
 
-    if ((messages[0]?.id ?? null) === snapshot.firstMessageId) {
+    if ((groupedMessages[0]?.id ?? null) === snapshot.firstMessageId) {
       if (!isLoadingOlderMessages) {
         prependSnapshotRef.current = null;
       }
@@ -276,7 +420,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
         prependSnapshotRef.current = null;
       });
     });
-  }, [messages, isLoadingOlderMessages, virtualizer]);
+  }, [groupedMessages, isLoadingOlderMessages, virtualizer]);
 
   const requestOlderMessages = useCallback(() => {
     if (!onLoadOlderMessages || !hasMoreMessagesBefore || isLoadingOlderMessages) return;
@@ -286,16 +430,16 @@ export const ChatUI: React.FC<ChatV2Props> = ({
       ? {
           scrollHeight: viewport.scrollHeight,
           scrollTop: viewport.scrollTop,
-          firstMessageId: messages[0]?.id ?? null,
-          messageCount: messages.length,
+          firstMessageId: groupedMessages[0]?.id ?? null,
+          messageCount: groupedMessages.length,
         }
       : null;
 
     onLoadOlderMessages();
-  }, [hasMoreMessagesBefore, isLoadingOlderMessages, messages, onLoadOlderMessages]);
+  }, [groupedMessages, hasMoreMessagesBefore, isLoadingOlderMessages, onLoadOlderMessages]);
 
   useEffect(() => {
-    const validMessageIds = new Set(messages.map((message) => message.id));
+    const validMessageIds = new Set(groupedMessages.map((group) => group.id));
 
     setExpandedMessageIds((prev) => {
       const activeIds = Object.keys(prev);
@@ -311,7 +455,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
       });
       return next;
     });
-  }, [messages]);
+  }, [groupedMessages]);
 
   // Handle scroll position — only update state when the value actually changes
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
@@ -451,7 +595,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
 
   // Render suggestions
   const renderSuggestions = () => {
-    if (messages.length > 0 || !suggestions.length) return null;
+    if (groupedMessages.length > 0 || !suggestions.length) return null;
 
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] py-8 px-4">
@@ -552,11 +696,10 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     enableCopy: config.features.enableMessageCopy,
     enableEdit: config.features.enableMessageEditing,
     enableRegenerate: config.features.enableRegeneration,
-    enableToolCallsDisplay: config.features.enableToolCallsDisplay,
+    activityDisplay: config.features.activityDisplay,
     compactMode: config.ui.compactMode,
     onAction: handleMessageAction,
-    toolUsedLabel: config.labels.toolUsed,
-    thinkingLabel: config.labels.thinking,
+    labels: config.labels,
     showMoreLabel: config.labels.showMoreMessage,
     showLessLabel: config.labels.showLessMessage,
     collapseLongMessages: config.ui.collapseLongMessages,
@@ -580,9 +723,8 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     config.features.enableMessageCopy,
     config.features.enableMessageEditing,
     config.features.enableRegeneration,
-    config.features.enableToolCallsDisplay,
-    config.labels.toolUsed,
-    config.labels.thinking,
+    config.features.activityDisplay,
+    config.labels,
     config.labels.showMoreMessage,
     config.labels.showLessMessage,
     config.ui.collapseLongMessages,
@@ -655,7 +797,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                     style={{ contain: 'strict' }}
                   >
                     <div className="max-w-4xl mx-auto pb-4">
-                      {messages.length > 0 && (
+                      {groupedMessages.length > 0 && (
                         <div className="flex justify-center py-2">
                           {isLoadingOlderMessages ? (
                             <span className="text-xs text-muted-foreground">
@@ -674,7 +816,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                       )}
                       {isMessagesLoading ? (
                         renderMessageLoadingSkeleton()
-                      ) : messages.length === 0 ? (
+                      ) : groupedMessages.length === 0 ? (
                         renderSuggestions()
                       ) : (
                         <div
@@ -685,15 +827,12 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                           }}
                         >
                           {virtualizer.getVirtualItems().map((virtualRow) => {
-                            const message = messages[virtualRow.index];
-                            const prevMessage = virtualRow.index > 0 ? messages[virtualRow.index - 1] : null;
-                            const isGrouped = prevMessage !== null &&
-                              prevMessage.role === message.role &&
-                              getMessageSpeakerKey(prevMessage) === getMessageSpeakerKey(message);
+                            const group = groupedMessages[virtualRow.index];
+                            const message = group.message;
 
                             return (
                               <div
-                                key={message.id}
+                                key={group.id}
                                 data-index={virtualRow.index}
                                 ref={virtualizer.measureElement}
                                 style={{
@@ -704,14 +843,13 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                                   transform: `translateY(${virtualRow.start}px)`,
                                 }}
                               >
-                                <div className={virtualRow.index === 0 ? '' : isGrouped ? 'pt-2' : 'pt-4'}>
+                                <div className={virtualRow.index === 0 ? '' : 'pt-4'}>
                                   <Message
                                     message={message}
                                     {...messageProps}
-                                    isGrouped={isGrouped}
                                     isExpanded={Boolean(expandedMessageIds[message.id])}
                                   />
-                                  {message.role === 'assistant' && renderInlineSuggestions(message.id)}
+                                  {message.role === 'assistant' && renderInlineSuggestions(group.suggestionMessageId)}
                                 </div>
                               </div>
                             );

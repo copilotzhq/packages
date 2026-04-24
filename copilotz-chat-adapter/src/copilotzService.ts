@@ -1,4 +1,4 @@
-import type { MediaAttachment } from "@copilotz/chat-ui";
+import type { AgentOption, MediaAttachment } from "@copilotz/chat-ui";
 
 const rawBaseValue = import.meta.env?.VITE_API_URL;
 const rawBase = typeof rawBaseValue === "string" && rawBaseValue.length > 0
@@ -10,7 +10,8 @@ const API_BASE =
     ? normalizedBase
     : `/${normalizedBase}`;
 
-const apiUrl = (path: string) => `${API_BASE}${path}`;
+export const apiUrl = (path: string) => `${API_BASE}${path}`;
+export const apiUrlObject = (path: string) => new URL(apiUrl(path), window.location.origin);
 
 const runtimeProcess: typeof process | undefined =
   typeof process !== "undefined" ? process : undefined;
@@ -33,7 +34,7 @@ export type RequestHeadersProvider = () =>
   | Record<string, string>
   | Promise<Record<string, string>>;
 
-const withAuthHeaders = async (
+export const withAuthHeaders = async (
   headers: Record<string, string> = {},
   getRequestHeaders?: RequestHeadersProvider,
 ): Promise<Record<string, string>> => {
@@ -59,6 +60,12 @@ type RestThread = {
   metadata?: Record<string, unknown> | null;
   createdAt?: string;
   updatedAt?: string;
+};
+
+type AgentApiItem = {
+  id: string;
+  name: string;
+  description?: string | null;
 };
 
 type RestMessage = {
@@ -770,6 +777,34 @@ export async function fetchThreads(
   return data as RestThread[];
 }
 
+export async function fetchAgents(
+  getRequestHeaders?: RequestHeadersProvider,
+): Promise<AgentOption[]> {
+  const response = await fetch(apiUrl("/v1/agents"), {
+    method: "GET",
+    headers: await withAuthHeaders(
+      { Accept: "application/json" },
+      getRequestHeaders,
+    ),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(
+      errorText || `Failed to fetch agents (${response.status})`,
+    );
+  }
+
+  const payload = await response.json() as { data?: AgentApiItem[] };
+  const data = Array.isArray(payload?.data) ? payload.data : [];
+
+  return data.map((agent) => ({
+    id: agent.id,
+    name: agent.name,
+    description: agent.description ?? undefined,
+  }));
+}
+
 export async function fetchThreadMessages(
   threadId: string,
   getRequestHeaders?: RequestHeadersProvider,
@@ -886,6 +921,10 @@ export async function deleteThread(
 }
 
 export const copilotzService = {
+  apiUrl,
+  apiUrlObject,
+  withAuthHeaders,
+  fetchAgents,
   runCopilotzStream,
   fetchThreads,
   fetchThreadMessages,

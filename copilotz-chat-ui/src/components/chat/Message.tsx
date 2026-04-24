@@ -2,26 +2,21 @@ import React, { useState, useMemo, useEffect, memo } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import { ChatMarkdownConfig, ChatMessage, AgentOption, MediaAttachment, ToolCall, MessageActionEvent } from '../../types/chatTypes';
+import { ActivityDisplayMode, ChatConfig, ChatMarkdownConfig, ChatMessage, AgentOption, MediaAttachment, MessageActionEvent } from '../../types/chatTypes';
 import { getAgentColor, getAgentInitials } from '../../lib/chatUtils';
 import { Button } from '../ui/button';
 import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import { Badge } from '../ui/badge';
-import { Card, CardContent } from '../ui/card';
 import { Textarea } from '../ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { createObjectUrlFromDataUrl } from '../../lib/utils';
+import { AssistantActivity } from './AssistantActivity';
 import {
   Copy,
   Edit,
   RotateCcw,
   Check,
   X,
-  Wrench,
-  Clock,
-  ChevronRight,
-  ChevronDown,
-  Brain
 } from 'lucide-react';
 
 
@@ -37,12 +32,11 @@ interface MessageProps {
   enableCopy?: boolean;
   enableEdit?: boolean;
   enableRegenerate?: boolean;
-  enableToolCallsDisplay?: boolean;
+  activityDisplay?: ActivityDisplayMode;
   compactMode?: boolean;
   onAction?: (event: MessageActionEvent) => void;
   className?: string;
-  toolUsedLabel?: string;
-  thinkingLabel?: string;
+  labels?: ChatConfig['labels'];
   showMoreLabel?: string;
   showLessLabel?: string;
   collapseLongMessages?: boolean;
@@ -53,80 +47,16 @@ interface MessageProps {
   markdown?: ChatMarkdownConfig;
   isExpanded?: boolean;
   onToggleExpanded?: (messageId: string) => void;
-  /** When true, hides the avatar and name (for grouped consecutive messages from same sender) */
-  isGrouped?: boolean;
   /** Available agents for resolving multi-agent display (colors, avatars) */
   agentOptions?: AgentOption[];
 }
 
-// Thinking indicator component - memoized since it's rendered during streaming
-const ThinkingIndicator: React.FC<{ label?: string }> = memo(function ThinkingIndicator({ label = 'Thinking...' }: { label?: string }) {
-  return (
-    <div className="flex items-center gap-2 py-2">
-      <div className="flex gap-1">
-        <span 
-          className="inline-block w-2 h-2 bg-primary rounded-full animate-bounce" 
-          style={{ animationDelay: '0ms' }} 
-        />
-        <span 
-          className="inline-block w-2 h-2 bg-primary rounded-full animate-bounce" 
-          style={{ animationDelay: '150ms' }} 
-        />
-        <span 
-          className="inline-block w-2 h-2 bg-primary rounded-full animate-bounce" 
-          style={{ animationDelay: '300ms' }} 
-        />
-      </div>
-      <span className="text-sm text-muted-foreground animate-pulse">{label}</span>
-    </div>
-  );
-});
-
-// Claude-like collapsible reasoning/thinking block
-const ThinkingBlock: React.FC<{
-  reasoning: string;
-  isStreaming?: boolean;
-  label?: string;
-}> = memo(function ThinkingBlock({ reasoning, isStreaming = false, label = 'Thinking...' }) {
-  const [isOpen, setIsOpen] = useState(isStreaming);
-
-  useEffect(() => {
-    if (isStreaming) setIsOpen(true);
-  }, [isStreaming]);
-
-  const finishedLabel = label.replace(/\.{3}$/, '');
-
-  return (
-    <div className={`mb-3 rounded-lg border ${isStreaming ? 'border-primary/40 bg-primary/5' : 'border-border/60 bg-muted/30'} overflow-hidden transition-colors duration-300`}>
-      <button
-        type="button"
-        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-        onClick={() => setIsOpen(!isOpen)}
-      >
-        <Brain className={`h-4 w-4 flex-shrink-0 ${isStreaming ? 'text-primary animate-pulse' : 'text-muted-foreground'}`} />
-        <span className="flex-1">
-          {isStreaming ? label : finishedLabel}
-        </span>
-        {isStreaming && (
-          <div className="flex gap-0.5 mr-1">
-            <span className="inline-block w-1 h-1 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-            <span className="inline-block w-1 h-1 bg-primary rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-            <span className="inline-block w-1 h-1 bg-primary rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-          </div>
-        )}
-        {isOpen ? <ChevronDown className="h-3 w-3 flex-shrink-0" /> : <ChevronRight className="h-3 w-3 flex-shrink-0" />}
-      </button>
-      {isOpen && (
-        <div className="px-3 pb-3 text-sm text-muted-foreground leading-relaxed whitespace-pre-wrap break-words border-t border-border/40">
-          <div className="pt-2">
-            {reasoning}
-            {isStreaming && <span className="inline-block w-1.5 h-3.5 bg-primary/60 animate-pulse ml-0.5" />}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-});
+const hasRenderableAssistantBody = (message: ChatMessage): boolean => {
+  if (message.role !== 'assistant') return true;
+  if (typeof message.content === 'string' && message.content.trim().length > 0) return true;
+  if (Array.isArray(message.attachments) && message.attachments.length > 0) return true;
+  return Boolean(message.activity);
+};
 
 // Memoized markdown components configuration to prevent recreation on every render
 const defaultMarkdownComponents: Components = {
@@ -233,33 +163,27 @@ const PlainTextContent: React.FC<{
 const StreamingText: React.FC<{
   content: string;
   isStreaming?: boolean;
-  thinkingLabel?: string;
   className?: string;
   renderMarkdown?: boolean;
   markdown?: ChatMarkdownConfig;
   plainTextChunkChars?: number;
   contentStyle?: React.CSSProperties;
-  hideThinkingIndicator?: boolean;
 }> = memo(function StreamingText({
   content,
   isStreaming = false,
-  thinkingLabel = 'Thinking...',
   className = '',
   renderMarkdown = true,
   markdown,
   plainTextChunkChars = 12000,
   contentStyle,
-  hideThinkingIndicator = false,
 }: {
   content: string;
   isStreaming?: boolean;
-  thinkingLabel?: string;
   className?: string;
   renderMarkdown?: boolean;
   markdown?: ChatMarkdownConfig;
   plainTextChunkChars?: number;
   contentStyle?: React.CSSProperties;
-  hideThinkingIndicator?: boolean;
 }) {
   const hasContent = content.trim().length > 0;
   const enableSyntaxHighlight = renderMarkdown && !isStreaming && hasCodeBlocks(content);
@@ -309,8 +233,6 @@ const StreamingText: React.FC<{
             style={contentStyle}
           />
         )
-      ) : isStreaming && !hideThinkingIndicator ? (
-        <ThinkingIndicator label={thinkingLabel} />
       ) : null}
       {isStreaming && hasContent && (
         <span className="inline-block w-2 h-4 bg-primary animate-pulse ml-1" />
@@ -402,92 +324,6 @@ const MediaRenderer: React.FC<{ attachment: MediaAttachment }> = memo(function M
   }
 });
 
-// Tool calls display component - memoized to prevent unnecessary re-renders
-const ToolCallsDisplay: React.FC<{ toolCalls: ToolCall[]; label?: string }> = memo(function ToolCallsDisplay({ toolCalls, label }) {
-  const [expandedCall, setExpandedCall] = useState<string | null>(null);
-
-  const getStatusIcon = (status: ToolCall['status']) => {
-    switch (status) {
-      case 'pending':
-        return <Clock className="h-3 w-3 text-muted-foreground" />;
-      case 'running':
-        return <div className="h-3 w-3 border-2 border-primary border-t-transparent rounded-full animate-spin" />;
-      case 'completed':
-        return <Check className="h-3 w-3 text-green-500" />;
-      case 'failed':
-        return <X className="h-3 w-3 text-destructive" />;
-    }
-  };
-
-  const getStatusBadgeClasses = (status: ToolCall['status']) => {
-    switch (status) {
-      case 'pending':
-        return 'bg-muted text-muted-foreground';
-      case 'running':
-        return 'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300';
-      case 'completed':
-        return 'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300';
-      case 'failed':
-        return 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300';
-    }
-  };
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-muted-foreground font-semibold">
-        <Wrench className="h-3 w-3" />
-        {label || 'Ferramenta utilizada'}
-      </div>
-      {toolCalls.map((call) => {
-        const isExpanded = expandedCall === call.id;
-        const ToggleIcon = isExpanded ? ChevronDown : ChevronRight;
-
-        return (
-          <Card key={call.id} className="border border-dashed border-primary/40 bg-card/60">
-            <button
-              type="button"
-              className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left"
-              onClick={() => setExpandedCall(isExpanded ? null : call.id)}
-            >
-              <div className="flex items-center gap-2">
-                {getStatusIcon(call.status)}
-                <span className="font-medium text-sm">{call.name}</span>
-                <Badge variant="secondary" className={getStatusBadgeClasses(call.status)}>
-                  {call.status}
-                </Badge>
-              </div>
-              <ToggleIcon className="h-4 w-4 text-muted-foreground" />
-            </button>
-            {isExpanded && (
-              <CardContent className="pt-0 pb-3 px-3 text-xs space-y-2">
-                <div>
-                  <div className="font-medium text-muted-foreground mb-1">Args</div>
-                  <pre className="rounded bg-muted p-2 overflow-x-auto text-xs">
-                    {JSON.stringify(call.arguments, null, 2)}
-                  </pre>
-                </div>
-                {typeof call.result !== 'undefined' && (
-                  <div>
-                    <div className="font-medium text-muted-foreground mb-1">Result</div>
-                    <pre className="rounded bg-muted p-2 overflow-x-auto text-xs">
-                      {JSON.stringify(call.result, null, 2)}
-                    </pre>
-                  </div>
-                )}
-                {call.startTime && call.endTime && (
-                  <div className="text-muted-foreground">
-                    Executed in {call.endTime - call.startTime}ms
-                  </div>
-                )}
-              </CardContent>
-            )}
-          </Card>
-        );
-      })}
-    </div>
-  );
-});
-
 // Keep memo comparison lightweight. Message objects are treated immutably by the
 // chat state, so reference equality is enough to detect actual message changes.
 const arePropsEqual = (prevProps: MessageProps, nextProps: MessageProps): boolean => {
@@ -503,11 +339,10 @@ const arePropsEqual = (prevProps: MessageProps, nextProps: MessageProps): boolea
   if (prevProps.enableCopy !== nextProps.enableCopy) return false;
   if (prevProps.enableEdit !== nextProps.enableEdit) return false;
   if (prevProps.enableRegenerate !== nextProps.enableRegenerate) return false;
-  if (prevProps.enableToolCallsDisplay !== nextProps.enableToolCallsDisplay) return false;
+  if (prevProps.activityDisplay !== nextProps.activityDisplay) return false;
   if (prevProps.compactMode !== nextProps.compactMode) return false;
   if (prevProps.className !== nextProps.className) return false;
-  if (prevProps.toolUsedLabel !== nextProps.toolUsedLabel) return false;
-  if (prevProps.thinkingLabel !== nextProps.thinkingLabel) return false;
+  if (prevProps.labels !== nextProps.labels) return false;
   if (prevProps.showMoreLabel !== nextProps.showMoreLabel) return false;
   if (prevProps.showLessLabel !== nextProps.showLessLabel) return false;
   if (prevProps.collapseLongMessages !== nextProps.collapseLongMessages) return false;
@@ -518,7 +353,6 @@ const arePropsEqual = (prevProps: MessageProps, nextProps: MessageProps): boolea
   if (prevProps.markdown !== nextProps.markdown) return false;
   if (prevProps.isExpanded !== nextProps.isExpanded) return false;
   if (prevProps.onToggleExpanded !== nextProps.onToggleExpanded) return false;
-  if (prevProps.isGrouped !== nextProps.isGrouped) return false;
   if (prevProps.assistantAvatar !== nextProps.assistantAvatar) return false;
   
   return true;
@@ -536,12 +370,11 @@ export const Message: React.FC<MessageProps> = memo(({
   enableCopy = true,
   enableEdit = true,
   enableRegenerate = true,
-  enableToolCallsDisplay = false,
+  activityDisplay = 'full',
   compactMode = false,
   onAction,
   className = '',
-  toolUsedLabel,
-  thinkingLabel = 'Thinking...',
+  labels,
   showMoreLabel = 'Show more',
   showLessLabel = 'Show less',
   collapseLongMessages = false,
@@ -552,7 +385,6 @@ export const Message: React.FC<MessageProps> = memo(({
   markdown,
   isExpanded = false,
   onToggleExpanded,
-  isGrouped = false,
   agentOptions = [],
 }) => {
   const [isEditing, setIsEditing] = useState(false);
@@ -561,6 +393,9 @@ export const Message: React.FC<MessageProps> = memo(({
   const [copied, setCopied] = useState(false);
 
   const messageIsUser = isUser ?? message.role === 'user';
+  if (!hasRenderableAssistantBody(message)) {
+    return null;
+  }
 
   // Resolve multi-agent sender display
   const agentSender = !messageIsUser && message.senderAgentId
@@ -652,74 +487,69 @@ export const Message: React.FC<MessageProps> = memo(({
         onMouseLeave={() => setShowActions(false)}
       >
 
-        {/* Header row with avatar and name - hidden when grouped */}
-        {!isGrouped && (
-          <div className={`flex gap-3 ${messageIsUser ? 'flex-row-reverse' : 'flex-row'} w-full mb-1`}>
-            {/* Avatar */}
-            {showAvatar && (
-              <div className={`flex-shrink-0 ${compactMode ? 'mt-1' : 'mt-0'}`}>
-                <Avatar className={compactMode ? 'h-6 w-6' : 'h-8 w-8'}>
-                  {messageIsUser ? (
-                    <>
-                      <AvatarImage src={userAvatar} alt={userName} />
-                      <AvatarFallback className="bg-primary text-primary-foreground">
-                        {userName.charAt(0).toUpperCase()}
+        <div className={`flex gap-3 ${messageIsUser ? 'flex-row-reverse' : 'flex-row'} w-full mb-1`}>
+          {showAvatar && (
+            <div className={`flex-shrink-0 ${compactMode ? 'mt-1' : 'mt-0'}`}>
+              <Avatar className={compactMode ? 'h-6 w-6' : 'h-8 w-8'}>
+                {messageIsUser ? (
+                  <>
+                    <AvatarImage src={userAvatar} alt={userName} />
+                    <AvatarFallback className="bg-primary text-primary-foreground">
+                      {userName.charAt(0).toUpperCase()}
+                    </AvatarFallback>
+                  </>
+                ) : agentSender ? (
+                  <>
+                    {agentSender.avatarUrl ? (
+                      <AvatarImage src={agentSender.avatarUrl} alt={agentSender.name} />
+                    ) : null}
+                    <AvatarFallback
+                      style={agentColor ? { backgroundColor: agentColor, color: 'white' } : undefined}
+                      className={agentColor ? 'text-[10px]' : 'bg-secondary text-secondary-foreground'}
+                    >
+                      {getAgentInitials(agentSender.name)}
+                    </AvatarFallback>
+                  </>
+                ) : (
+                  <>
+                    {assistantAvatar || (
+                      <AvatarFallback className="bg-secondary text-secondary-foreground">
+                        AI
                       </AvatarFallback>
-                    </>
-                  ) : agentSender ? (
-                    <>
-                      {agentSender.avatarUrl ? (
-                        <AvatarImage src={agentSender.avatarUrl} alt={agentSender.name} />
-                      ) : null}
-                      <AvatarFallback
-                        style={agentColor ? { backgroundColor: agentColor, color: 'white' } : undefined}
-                        className={agentColor ? 'text-[10px]' : 'bg-secondary text-secondary-foreground'}
-                      >
-                        {getAgentInitials(agentSender.name)}
-                      </AvatarFallback>
-                    </>
-                  ) : (
-                    <>
-                      {assistantAvatar || (
-                        <AvatarFallback className="bg-secondary text-secondary-foreground">
-                          AI
-                        </AvatarFallback>
-                      )}
-                    </>
-                  )}
-                </Avatar>
-              </div>
-            )}
-
-            {/* Header */}
-            <div className={`flex items-center gap-2 mb-1 ${messageIsUser ? 'flex-row-reverse' : 'flex-row'}`}>
-              <span
-                className={`font-medium ${compactMode ? 'text-sm' : 'text-base'}`}
-                style={!messageIsUser && agentColor ? { color: agentColor } : undefined}
-              >
-                {messageIsUser ? userName : resolvedAssistantName}
-              </span>
-              {showTimestamp && (
-                <span className="text-xs text-muted-foreground">
-                  {formatTime(message.timestamp)}
-                </span>
-              )}
-              {message.isEdited && (
-                <Badge variant="outline" className="text-xs">
-                  editado
-                </Badge>
-              )}
+                    )}
+                  </>
+                )}
+              </Avatar>
             </div>
+          )}
+
+          <div className={`flex items-center gap-2 mb-1 ${messageIsUser ? 'flex-row-reverse' : 'flex-row'}`}>
+            <span
+              className={`font-medium ${compactMode ? 'text-sm' : 'text-base'}`}
+              style={!messageIsUser && agentColor ? { color: agentColor } : undefined}
+            >
+              {messageIsUser ? userName : resolvedAssistantName}
+            </span>
+            {showTimestamp && (
+              <span className="text-xs text-muted-foreground">
+                {formatTime(message.timestamp)}
+              </span>
+            )}
+            {message.isEdited && (
+              <Badge variant="outline" className="text-xs">
+                editado
+              </Badge>
+            )}
           </div>
-        )}
+        </div>
 
         {/* Keep body alignment consistent across grouped and ungrouped messages */}
         <div className={`flex-1 min-w-0 ${messageIsUser ? 'text-right' : 'text-left'} ${horizontalOffsetClass}`}>
 
           {/* Message Body */}
-          <div className={`relative inline-flex flex-col overflow-hidden text-left ${messageIsUser
-            ? 'rounded-lg p-3 bg-primary text-primary-foreground ml-auto max-w-[85%]'
-            : 'max-w-full'
+          <div className={`relative overflow-hidden text-left ${messageIsUser
+            ? 'ml-auto inline-flex max-w-[85%] flex-col rounded-lg bg-primary p-3 text-primary-foreground'
+            : 'flex w-full max-w-full flex-col'
             }`}>
             {isEditing ? (
               <div className="space-y-2">
@@ -742,31 +572,21 @@ export const Message: React.FC<MessageProps> = memo(({
               </div>
             ) : (
               <>
-                {/* Reasoning/Thinking Block */}
-                {!messageIsUser && message.reasoning && (
-                  <ThinkingBlock
-                    reasoning={message.reasoning}
-                    isStreaming={message.isReasoningStreaming}
-                    label={thinkingLabel}
+                {!messageIsUser && (
+                  <AssistantActivity
+                    activity={message.activity}
+                    displayMode={activityDisplay}
+                    labels={labels}
                   />
-                )}
-
-                {/* Tool Calls */}
-                {enableToolCallsDisplay && message.toolCalls && message.toolCalls.length > 0 && (
-                  <div className="mb-3">
-                    <ToolCallsDisplay toolCalls={message.toolCalls} label={toolUsedLabel} />
-                  </div>
                 )}
 
                 <StreamingText
                   content={contentToRender}
                   isStreaming={message.isStreaming}
-                  thinkingLabel={thinkingLabel}
                   renderMarkdown={shouldRenderMarkdown}
                   markdown={markdown}
                   plainTextChunkChars={normalizedChunkChars}
                   contentStyle={contentStyle}
-                  hideThinkingIndicator={!!message.reasoning}
                 />
 
                 {canCollapseMessage && (
