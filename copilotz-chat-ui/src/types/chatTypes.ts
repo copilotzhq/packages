@@ -1,48 +1,51 @@
-import { ReactNode } from 'react';
-import type { Components, Options as ReactMarkdownOptions } from 'react-markdown';
+import { ReactNode } from "react";
+import type {
+  Components,
+  Options as ReactMarkdownOptions,
+} from "react-markdown";
 
 // Enhanced Media Attachments
 export type MediaAttachment =
   | {
-      kind: 'image';
-      dataUrl: string;
-      mimeType: string;
-      fileName?: string;
-      size?: number;
-    }
+    kind: "image";
+    dataUrl: string;
+    mimeType: string;
+    fileName?: string;
+    size?: number;
+  }
   | {
-      kind: 'audio';
-      dataUrl: string;
-      mimeType: string;
-      durationMs?: number;
-      fileName?: string;
-      size?: number;
-    }
+    kind: "audio";
+    dataUrl: string;
+    mimeType: string;
+    durationMs?: number;
+    fileName?: string;
+    size?: number;
+  }
   | {
-      kind: 'video';
-      dataUrl: string;
-      mimeType: string;
-      durationMs?: number;
-      fileName?: string;
-      size?: number;
-      poster?: string;
-    };
+    kind: "video";
+    dataUrl: string;
+    mimeType: string;
+    durationMs?: number;
+    fileName?: string;
+    size?: number;
+    poster?: string;
+  };
 
-export type AudioAttachment = Extract<MediaAttachment, { kind: 'audio' }>;
+export type AudioAttachment = Extract<MediaAttachment, { kind: "audio" }>;
 
 export type VoiceComposerState =
-  | 'idle'
-  | 'preparing'
-  | 'waiting_for_speech'
-  | 'listening'
-  | 'finishing'
-  | 'review'
-  | 'sending'
-  | 'error';
+  | "idle"
+  | "preparing"
+  | "waiting_for_speech"
+  | "listening"
+  | "finishing"
+  | "review"
+  | "sending"
+  | "error";
 
-export type VoiceReviewMode = 'manual' | 'armed';
+export type VoiceReviewMode = "manual" | "armed";
 
-export type VoiceTranscriptMode = 'none' | 'final-only' | 'partial-and-final';
+export type VoiceTranscriptMode = "none" | "final-only" | "partial-and-final";
 
 export interface VoiceTranscript {
   partial?: string;
@@ -86,18 +89,18 @@ export interface ToolCall {
   name: string;
   arguments: Record<string, any>;
   result?: any;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: "pending" | "running" | "completed" | "failed";
   startTime?: number;
   endTime?: number;
 }
 
-export type ActivityDisplayMode = 'full' | 'summary' | 'hidden';
+export type ActivityDisplayMode = "full" | "summary" | "hidden";
 
 export type AssistantActivitySummaryKind =
-  | 'thinking'
-  | 'working'
-  | 'using_tools'
-  | 'preparing_answer';
+  | "thinking"
+  | "working"
+  | "using_tools"
+  | "preparing_answer";
 
 export interface AssistantActivitySummary {
   kind: AssistantActivitySummaryKind;
@@ -116,7 +119,7 @@ export interface AssistantActivityState {
 // Enhanced Chat Message
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant' | 'system';
+  role: "user" | "assistant" | "system";
   content: string;
   timestamp: number;
   attachments?: MediaAttachment[];
@@ -146,8 +149,8 @@ export interface ChatThread {
 }
 
 export interface ChatMarkdownConfig {
-  remarkPlugins?: ReactMarkdownOptions['remarkPlugins'];
-  rehypePlugins?: ReactMarkdownOptions['rehypePlugins'];
+  remarkPlugins?: ReactMarkdownOptions["remarkPlugins"];
+  rehypePlugins?: ReactMarkdownOptions["rehypePlugins"];
   components?: Components;
 }
 
@@ -164,7 +167,7 @@ export interface ChatConfig {
     label?: string;
     hideIfSingle?: boolean;
     /** 'single' = classic single-agent dropdown (default). 'multi' = participants + target selectors. */
-    mode?: 'single' | 'multi';
+    mode?: "single" | "multi";
   };
   labels?: {
     inputPlaceholder?: string;
@@ -259,7 +262,7 @@ export interface ChatConfig {
     maxFileSize?: number; // in bytes
   };
   ui?: {
-    theme?: 'light' | 'dark' | 'auto';
+    theme?: "light" | "dark" | "auto";
     showTimestamps?: boolean;
     showAvatars?: boolean;
     compactMode?: boolean;
@@ -272,7 +275,7 @@ export interface ChatConfig {
   };
   markdown?: ChatMarkdownConfig;
   voiceCompose?: {
-    defaultMode?: 'text' | 'voice';
+    defaultMode?: "text" | "voice";
     reviewMode?: VoiceReviewMode;
     autoSendDelayMs?: number;
     persistComposer?: boolean;
@@ -285,12 +288,30 @@ export interface ChatConfig {
     label?: string;
     icon?: ReactNode;
     /** Static component or render function receiving panel props */
-    component?: ReactNode | ((props: { onClose: () => void; isMobile: boolean }) => ReactNode);
+    component?:
+      | ReactNode
+      | ((props: { onClose: () => void; isMobile: boolean }) => ReactNode);
     /** Desktop panel width in pixels (default: 320) */
     panelWidth?: number;
   };
   /** Additional actions to render in the header */
   headerActions?: ReactNode;
+}
+
+export interface ChatUserMenuItem {
+  id: string;
+  label: string;
+  icon?: ReactNode;
+  onSelect?: () => void;
+  variant?: "default" | "destructive";
+  checked?: boolean;
+  disabled?: boolean;
+}
+
+export interface ChatUserMenuSection {
+  id: string;
+  label?: string;
+  items: ChatUserMenuItem[];
 }
 
 // Callback Types with State Setters
@@ -300,22 +321,59 @@ export interface StateCallback<T = unknown> {
 }
 
 export interface ChatCallbacks {
-  onSendMessage?: (content: string, attachments?: MediaAttachment[], callback?: StateCallback<ChatState>) => void;
-  onEditMessage?: (messageId: string, newContent: string, callback?: StateCallback<ChatState>) => void;
-  onDeleteMessage?: (messageId: string, callback?: StateCallback<ChatState>) => void;
-  onRegenerateMessage?: (messageId: string, callback?: StateCallback<ChatState>) => void;
+  onSendMessage?: (
+    content: string,
+    attachments?: MediaAttachment[],
+    callback?: StateCallback<ChatState>,
+  ) => void;
+  onEditMessage?: (
+    messageId: string,
+    newContent: string,
+    callback?: StateCallback<ChatState>,
+  ) => void;
+  onDeleteMessage?: (
+    messageId: string,
+    callback?: StateCallback<ChatState>,
+  ) => void;
+  onRegenerateMessage?: (
+    messageId: string,
+    callback?: StateCallback<ChatState>,
+  ) => void;
   onStopGeneration?: (callback?: StateCallback<ChatState>) => void;
-  onCreateThread?: (title?: string, callback?: StateCallback<ChatState>) => void;
-  onSelectThread?: (threadId: string, callback?: StateCallback<ChatState>) => void;
-  onRenameThread?: (threadId: string, newTitle: string, callback?: StateCallback<ChatState>) => void;
-  onDeleteThread?: (threadId: string, callback?: StateCallback<ChatState>) => void;
-  onArchiveThread?: (threadId: string, callback?: StateCallback<ChatState>) => void;
-  onCopyMessage?: (messageId: string, content: string, callback?: StateCallback<ChatState>) => void;
-  onAttachmentRemove?: (attachmentIndex: number, callback?: StateCallback<ChatState>) => void;
+  onCreateThread?: (
+    title?: string,
+    callback?: StateCallback<ChatState>,
+  ) => void;
+  onSelectThread?: (
+    threadId: string,
+    callback?: StateCallback<ChatState>,
+  ) => void;
+  onRenameThread?: (
+    threadId: string,
+    newTitle: string,
+    callback?: StateCallback<ChatState>,
+  ) => void;
+  onDeleteThread?: (
+    threadId: string,
+    callback?: StateCallback<ChatState>,
+  ) => void;
+  onArchiveThread?: (
+    threadId: string,
+    callback?: StateCallback<ChatState>,
+  ) => void;
+  onCopyMessage?: (
+    messageId: string,
+    content: string,
+    callback?: StateCallback<ChatState>,
+  ) => void;
+  onAttachmentRemove?: (
+    attachmentIndex: number,
+    callback?: StateCallback<ChatState>,
+  ) => void;
   // User menu callbacks
   onViewProfile?: () => void;
   onOpenSettings?: () => void;
-  onThemeChange?: (theme: 'light' | 'dark' | 'system') => void;
+  onThemeChange?: (theme: "light" | "dark" | "system") => void;
   onLogout?: () => void;
 }
 
@@ -325,21 +383,24 @@ export interface ChatV2Props {
   messages?: ChatMessage[];
   threads?: ChatThread[];
   currentThreadId?: string | null;
-  
+
   // Customization
   config?: ChatConfig;
   sidebar?: ReactNode;
-  
+  userMenuSections?: ChatUserMenuSection[];
+  /** @deprecated Prefer userMenuSections for native menu composition */
+  userMenuAdditionalItems?: ReactNode;
+
   // State Management
   isGenerating?: boolean;
   isMessagesLoading?: boolean;
   isLoadingOlderMessages?: boolean;
   hasMoreMessagesBefore?: boolean;
-  
+
   // Callbacks
   callbacks?: ChatCallbacks;
   onLoadOlderMessages?: () => void;
-  
+
   // User Info
   user?: {
     id: string;
@@ -347,7 +408,7 @@ export interface ChatV2Props {
     avatar?: string;
     email?: string;
   };
-  
+
   // Assistant Info
   assistant?: {
     name?: string;
@@ -373,9 +434,9 @@ export interface ChatV2Props {
   messageSuggestions?: Record<string, string[]>;
   enabledFeatures?: string[];
   className?: string;
-  
+
   // Memory callbacks (for UserProfile)
-  onAddMemory?: (content: string, category?: MemoryItem['category']) => void;
+  onAddMemory?: (content: string, category?: MemoryItem["category"]) => void;
   onUpdateMemory?: (memoryId: string, content: string) => void;
   onDeleteMemory?: (memoryId: string) => void;
 
@@ -416,12 +477,12 @@ export interface AgentOption {
 }
 
 // Message Actions
-export type MessageAction = 
-  | 'copy'
-  | 'edit' 
-  | 'delete'
-  | 'regenerate'
-  | 'retry';
+export type MessageAction =
+  | "copy"
+  | "edit"
+  | "delete"
+  | "regenerate"
+  | "retry";
 
 export interface MessageActionEvent {
   action: MessageAction;
@@ -433,7 +494,7 @@ export interface MessageActionEvent {
 export interface FileUploadProgress {
   fileName: string;
   progress: number;
-  status: 'uploading' | 'completed' | 'failed';
+  status: "uploading" | "completed" | "failed";
 }
 
 // Streaming Types
@@ -448,7 +509,7 @@ export interface UserCustomField {
   key: string;
   label: string;
   value: string | number | boolean | null | undefined;
-  type?: 'text' | 'email' | 'phone' | 'url' | 'date' | 'number' | 'boolean';
+  type?: "text" | "email" | "phone" | "url" | "date" | "number" | "boolean";
   icon?: ReactNode;
 }
 
@@ -456,8 +517,8 @@ export interface UserCustomField {
 export interface MemoryItem {
   id: string;
   content: string;
-  category?: 'preference' | 'fact' | 'goal' | 'context' | 'other';
-  source: 'agent' | 'user';
+  category?: "preference" | "fact" | "goal" | "context" | "other";
+  source: "agent" | "user";
   createdAt: string;
   updatedAt?: string;
 }

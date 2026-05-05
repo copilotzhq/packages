@@ -467,11 +467,16 @@ export async function runCopilotzStream(
   // Remove name from metadata since it's a top-level field
   const { name: _threadName, ...restThreadMetadata } = mergedThreadMetadata;
 
-  // Resolve thread participants: explicit participants list > selectedAgent fallback > "assistant"
-  const resolvedParticipants: string[] =
+  // Always include the user as a thread participant so the thread is
+  // discoverable via participantId queries after page refresh.
+  const baseParticipants: string[] =
     Array.isArray(participants) && participants.length > 0
       ? participants
       : [selectedAgent || "assistant"];
+  const resolvedParticipants: string[] = user.externalId &&
+      !baseParticipants.includes(user.externalId)
+    ? [...baseParticipants, user.externalId]
+    : baseParticipants;
 
   const resolvedTarget = targetAgent?.trim() || null;
   const toolCallSenderId = selectedAgent ||

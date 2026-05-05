@@ -1,10 +1,21 @@
-import React, { useMemo, useState, useCallback } from 'react';
-import { ChatUI, ChatUserContextProvider } from '@copilotz/chat-ui';
-import type { AgentOption, ChatConfig, ChatCallbacks, ChatUserContext, MemoryItem } from '@copilotz/chat-ui';
-import { User } from 'lucide-react';
-import { useCopilotz } from './useCopilotzChat';
-import type { EventInterceptor, RenderSpecialState, RunErrorInterceptor } from './specialState';
-import type { RequestHeadersProvider } from './copilotzService';
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { ChatUI, ChatUserContextProvider } from "@copilotz/chat-ui";
+import type {
+  AgentOption,
+  ChatCallbacks,
+  ChatConfig,
+  ChatUserContext,
+  ChatUserMenuSection,
+  MemoryItem,
+} from "@copilotz/chat-ui";
+import { User } from "lucide-react";
+import { useCopilotz } from "./useCopilotzChat";
+import type {
+  EventInterceptor,
+  RenderSpecialState,
+  RunErrorInterceptor,
+} from "./specialState";
+import type { RequestHeadersProvider } from "./copilotzService";
 
 export interface CopilotzChatProps {
   userId: string;
@@ -26,21 +37,31 @@ export interface CopilotzChatProps {
    * - A render function receiving panel props: `(props: { onClose, isMobile }) => ReactNode`
    * Toggle visibility via the header button.
    */
-  customComponent?: 
-    | React.ReactNode 
+  customComponent?:
+    | React.ReactNode
     | ((context: ChatUserContext) => React.ReactNode)
     | ((props: { onClose: () => void; isMobile: boolean }) => React.ReactNode);
   onToolOutput?: (output: Record<string, unknown>) => void;
+  /**
+   * Fired whenever the adapter’s selected thread id changes (initial load,
+   * thread list refresh, create/select/delete, etc.). Use to keep side panels
+   * in sync; user-driven `onSelectThread` alone does not cover bootstrap paths.
+   */
+  onCurrentThreadIdChange?: (threadId: string | null) => void;
   /** Called when user clicks logout in the user menu */
   onLogout?: () => void;
   /** Called when user clicks "View Profile" in the user menu */
   onViewProfile?: () => void;
   /** Called when user adds a memory */
-  onAddMemory?: (content: string, category?: MemoryItem['category']) => void;
+  onAddMemory?: (content: string, category?: MemoryItem["category"]) => void;
   /** Called when user updates a memory */
   onUpdateMemory?: (memoryId: string, content: string) => void;
   /** Called when user deletes a memory */
   onDeleteMemory?: (memoryId: string) => void;
+  /** Structured custom menu sections rendered natively by the sidebar user menu */
+  userMenuSections?: ChatUserMenuSection[];
+  /** Additional native items to render inside the sidebar user menu */
+  userMenuAdditionalItems?: React.ReactNode;
   /** Empty-state suggestions */
   suggestions?: string[];
   /** Agent selector data (built-in ChatUI) */
@@ -71,11 +92,14 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
   callbacks: userCallbacks,
   customComponent,
   onToolOutput,
+  onCurrentThreadIdChange,
   onLogout,
   onViewProfile,
   onAddMemory,
   onUpdateMemory,
   onDeleteMemory,
+  userMenuSections,
+  userMenuAdditionalItems,
   suggestions,
   agentOptions = [],
   selectedAgentId = null,
@@ -90,21 +114,23 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
   runErrorInterceptor,
   renderSpecialState,
 }) => {
-  const selectedAgent = agentOptions.find((agent) => agent.id === selectedAgentId) || null;
+  const selectedAgent =
+    agentOptions.find((agent) => agent.id === selectedAgentId) || null;
 
-  // Resolve participant names from IDs for the adapter layer
-  const participantNames = useMemo(() => {
+  // Keep backend routing identities stable. Display names are for UI only;
+  // thread participants and targets must use agent IDs so server-side history
+  // lookup can match the target agent.
+  const participantAgentIds = useMemo(() => {
     if (!participantIds || participantIds.length === 0) return null;
-    return participantIds
-      .map(id => agentOptions.find(a => a.id === id)?.name)
-      .filter((name): name is string => Boolean(name));
-  }, [participantIds, agentOptions]);
+    return participantIds.filter((id) => typeof id === "string" && id.length > 0);
+  }, [participantIds]);
 
-  // Resolve target agent name from ID
-  const targetAgentName = useMemo(() => {
+  const selectedAgentRunId = selectedAgent?.id ?? selectedAgentId ?? null;
+
+  const targetAgentRunId = useMemo(() => {
     if (!targetAgentId) return null;
-    return agentOptions.find(a => a.id === targetAgentId)?.name ?? null;
-  }, [targetAgentId, agentOptions]);
+    return targetAgentId;
+  }, [targetAgentId]);
 
   const {
     messages,
@@ -131,19 +157,28 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     bootstrap,
     defaultThreadName: userConfig?.labels?.defaultThreadName,
     onToolOutput,
-    preferredAgentName: selectedAgent?.name ?? null,
-    participants: participantNames,
-    targetAgentName,
+    preferredAgentName: selectedAgentRunId,
+    participants: participantAgentIds,
+    targetAgentName: targetAgentRunId,
     getRequestHeaders,
     eventInterceptor,
     runErrorInterceptor,
   });
 
+  useEffect(() => {
+    onCurrentThreadIdChange?.(currentThreadId);
+  }, [currentThreadId, onCurrentThreadIdChange]);
+
   const chatCallbacks: ChatCallbacks = useMemo(() => {
     const {
-      onSendMessage: _1, onStopGeneration: _2, onCreateThread: _3,
-      onSelectThread: _4, onRenameThread: _5, onArchiveThread: _6,
-      onDeleteThread: _7, onCopyMessage: _8,
+      onSendMessage: _1,
+      onStopGeneration: _2,
+      onCreateThread: _3,
+      onSelectThread: _4,
+      onRenameThread: _5,
+      onArchiveThread: _6,
+      onDeleteThread: _7,
+      onCopyMessage: _8,
       ...restUserCallbacks
     } = userCallbacks || {};
 
@@ -182,13 +217,24 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
           await navigator.clipboard.writeText(content);
           userCallbacks?.onCopyMessage?.(messageId, content);
         } catch (error) {
-          console.error('Failed to copy message', error);
+          console.error("Failed to copy message", error);
         }
       },
       onLogout,
       onViewProfile,
     };
-  }, [sendMessage, stopGeneration, createThread, selectThread, renameThread, archiveThread, deleteThread, userCallbacks, onLogout, onViewProfile]);
+  }, [
+    sendMessage,
+    stopGeneration,
+    createThread,
+    selectThread,
+    renameThread,
+    archiveThread,
+    deleteThread,
+    userCallbacks,
+    onLogout,
+    onViewProfile,
+  ]);
 
   const mergedConfig: ChatConfig = useMemo(() => {
     const base = userConfig || {};
@@ -219,9 +265,15 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     name: userConfig?.branding?.title,
     avatar: userConfig?.branding?.avatar,
     description: userConfig?.branding?.subtitle,
-  }), [userConfig?.branding?.title, userConfig?.branding?.avatar, userConfig?.branding?.subtitle]);
+  }), [
+    userConfig?.branding?.title,
+    userConfig?.branding?.avatar,
+    userConfig?.branding?.subtitle,
+  ]);
 
-  const specialStateContent = specialState ? renderSpecialState?.(specialState, { clear: clearSpecialState }) : null;
+  const specialStateContent = specialState
+    ? renderSpecialState?.(specialState, { clear: clearSpecialState })
+    : null;
 
   return (
     <ChatUserContextProvider initial={userContextSeed}>
@@ -250,6 +302,8 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
           onAddMemory={onAddMemory}
           onUpdateMemory={onUpdateMemory}
           onDeleteMemory={onDeleteMemory}
+          userMenuSections={userMenuSections}
+          userMenuAdditionalItems={userMenuAdditionalItems}
           className={className}
         />
       )}

@@ -167,7 +167,6 @@ const StreamingText: React.FC<{
   renderMarkdown?: boolean;
   markdown?: ChatMarkdownConfig;
   plainTextChunkChars?: number;
-  contentStyle?: React.CSSProperties;
 }> = memo(function StreamingText({
   content,
   isStreaming = false,
@@ -175,7 +174,6 @@ const StreamingText: React.FC<{
   renderMarkdown = true,
   markdown,
   plainTextChunkChars = 12000,
-  contentStyle,
 }: {
   content: string;
   isStreaming?: boolean;
@@ -183,7 +181,6 @@ const StreamingText: React.FC<{
   renderMarkdown?: boolean;
   markdown?: ChatMarkdownConfig;
   plainTextChunkChars?: number;
-  contentStyle?: React.CSSProperties;
 }) {
   const hasContent = content.trim().length > 0;
   const enableSyntaxHighlight = renderMarkdown && !isStreaming && hasCodeBlocks(content);
@@ -215,7 +212,6 @@ const StreamingText: React.FC<{
         renderMarkdown ? (
           <LongContentShell
             className={`prose prose-sm max-w-none dark:prose-invert break-words ${className}`.trim()}
-            style={contentStyle}
           >
             <ReactMarkdown
               remarkPlugins={mergedRemarkPlugins}
@@ -230,7 +226,6 @@ const StreamingText: React.FC<{
             content={content}
             className={className}
             chunkSize={plainTextChunkChars}
-            style={contentStyle}
           />
         )
       ) : null}
@@ -424,13 +419,7 @@ export const Message: React.FC<MessageProps> = memo(({
     ? getCollapsedPreview(message.content, normalizedPreviewChars, previewOverride)
     : message.content;
   const shouldRenderMarkdown = !isCollapsed && (!messageIsUser || renderUserMarkdown);
-  const shouldApplyLargeContentContainment = !isCollapsed && message.content.length > normalizedChunkChars;
-  const contentStyle: React.CSSProperties | undefined = shouldApplyLargeContentContainment
-    ? {
-        contentVisibility: 'auto',
-        containIntrinsicSize: '1px 400px',
-      }
-    : undefined;
+
   const horizontalOffsetClass = showAvatar
     ? messageIsUser
       ? (compactMode ? 'mr-9' : 'mr-11')
@@ -586,7 +575,6 @@ export const Message: React.FC<MessageProps> = memo(({
                   renderMarkdown={shouldRenderMarkdown}
                   markdown={markdown}
                   plainTextChunkChars={normalizedChunkChars}
-                  contentStyle={contentStyle}
                 />
 
                 {canCollapseMessage && (
