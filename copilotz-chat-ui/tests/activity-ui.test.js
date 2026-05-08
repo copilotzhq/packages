@@ -2,59 +2,65 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { AssistantActivity, defaultChatConfig, mergeConfig } from '../dist/index.js';
+import { AssistantActivity, defaultChatConfig, mergeConfig, resolveMessageSenderDisplay } from '../dist/index.js';
 
-test('mergeConfig keeps activityDisplay full by default', () => {
+test('mergeConfig enables activity timeline by default', () => {
   const config = mergeConfig(defaultChatConfig, undefined);
-  assert.equal(config.features.activityDisplay, 'full');
+  assert.equal(config.features.showActivity, true);
+  assert.equal(config.features.showActivityDetails, true);
 });
 
-test('AssistantActivity renders compact summary in summary mode', () => {
+test('AssistantActivity renders generic timeline labels', () => {
   const html = renderToStaticMarkup(
     React.createElement(AssistantActivity, {
-      displayMode: 'summary',
       labels: {
-        activityThinking: 'Thinking now...',
+        activityThinkingActive: 'Pensando',
       },
       activity: {
-        isActive: true,
-        summary: { kind: 'thinking' },
-        reasoning: 'Internal reasoning',
+        items: [{
+          id: 'thinking',
+          kind: 'thinking',
+          status: 'active',
+          details: { reasoning: 'Internal reasoning' },
+        }],
       },
     }),
   );
 
-  assert.match(html, /Thinking now\.\.\./);
-  assert.match(html, /w-full/);
+  assert.match(html, /Pensando/);
   assert.doesNotMatch(html, /Internal reasoning/);
 });
 
-test('AssistantActivity hides completed historical activity in summary mode', () => {
+test('AssistantActivity interpolates customized tool labels', () => {
   const html = renderToStaticMarkup(
     React.createElement(AssistantActivity, {
-      displayMode: 'summary',
       labels: {
-        activityThinking: 'Co-criando...',
+        activityToolComplete: 'Usou {{tool}}',
       },
       activity: {
-        isActive: false,
-        isComplete: true,
-        summary: { kind: 'thinking' },
-        reasoning: 'Persisted reasoning',
+        items: [{
+          id: 'tool-1',
+          kind: 'tool',
+          status: 'complete',
+          toolName: 'kanban',
+        }],
       },
     }),
   );
 
-  assert.equal(html, '');
+  assert.match(html, /Usou kanban/);
 });
 
-test('AssistantActivity renders loader only in hidden mode', () => {
+test('AssistantActivity renders skeleton when activity is disabled during active work', () => {
   const html = renderToStaticMarkup(
     React.createElement(AssistantActivity, {
-      displayMode: 'hidden',
+      showActivity: false,
       activity: {
-        isActive: true,
-        summary: { kind: 'working' },
+        items: [{
+          id: 'answering',
+          kind: 'answering',
+          status: 'active',
+        }],
       },
     }),
   );
@@ -62,42 +68,35 @@ test('AssistantActivity renders loader only in hidden mode', () => {
   assert.match(html, /animate-pulse/);
 });
 
-test('AssistantActivity renders collapsed details affordance in full mode', () => {
+test('AssistantActivity hides inactive activity when activity is disabled', () => {
   const html = renderToStaticMarkup(
     React.createElement(AssistantActivity, {
-      displayMode: 'full',
+      showActivity: false,
       activity: {
-        isActive: false,
-        isComplete: true,
-        summary: { kind: 'using_tools', toolName: 'instagramProfile' },
-        reasoning: 'Reasoning trace',
-        toolCalls: [{
-          id: 'tool-1',
-          name: 'instagramProfile',
-          arguments: { username: 'gil' },
-          result: { ok: true },
-          status: 'completed',
+        items: [{
+          id: 'thinking',
+          kind: 'thinking',
+          status: 'complete',
         }],
       },
     }),
   );
 
-  assert.match(html, /instagramProfile/);
-  assert.match(html, /Show details/);
+  assert.equal(html, '');
 });
 
-test('AssistantActivity keeps the same header grid when no details are available', () => {
-  const html = renderToStaticMarkup(
-    React.createElement(AssistantActivity, {
-      displayMode: 'full',
-      activity: {
-        isActive: false,
-        isComplete: true,
-        summary: { kind: 'thinking' },
-      },
-    }),
-  );
+test('resolveMessageSenderDisplay never exposes participant ids as display names', () => {
+  const display = resolveMessageSenderDisplay({
+    fallbackName: 'Assistant',
+    sender: {
+      type: 'agent',
+      id: 'east',
+      name: 'East',
+      participantId: '01KQVCMZZE8W5Z99E94VP3EYWN',
+      color: '#84cc16',
+    },
+  });
 
-  assert.match(html, /grid-cols-\[minmax\(0,1fr\)_auto\]/);
-  assert.match(html, /invisible/);
+  assert.equal(display.name, 'East');
+  assert.equal(display.color, '#84cc16');
 });

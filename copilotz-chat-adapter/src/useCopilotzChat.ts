@@ -7,22 +7,42 @@ import {
   updateThread as updateThreadApi,
   deleteThread as deleteThreadApi,
 } from './copilotzService';
-import { resolveAssetsInMessages } from './assetsService';
-import type { ChatMessage as ChatViewMessage, ChatThread, MediaAttachment, ChatUserContext } from '@copilotz/chat-ui';
+import type { AgentOption, ChatMessage as ChatViewMessage, ChatSender, ChatThread, MediaAttachment, ChatUserContext } from '@copilotz/chat-ui';
 import { useUrlState } from './useUrlState';
 import type { EventInterceptor, RunErrorInterceptor, SpecialChatState } from './specialState';
-import type { RequestHeadersProvider, RestMessagePageInfo } from './copilotzService';
+import type { RequestHeadersProvider, RestMessage, RestMessagePageInfo } from './copilotzService';
 import {
   appendAssistantToolCall,
-  applyAssistantToolResult,
   closeAssistantMessage,
   finalizeAssistantMessage,
   hasVisibleAssistantOutput,
   type InternalChatMessage,
   updateAssistantMessageToken,
-  syncAssistantActivity,
   toPublicChatMessage,
 } from './activity';
+import {
+  resolveAgentSender,
+  resolveAssistantFallbackSender,
+  resolveLiveEventSender,
+  resolveUserSender,
+  type SenderResolutionOptions,
+} from './senders';
+import {
+  convertServerMessage,
+  isInternalMessageMetadata,
+  prepareHydratedMessages,
+} from './messageContract';
+import {
+  applyToolResultUpdateToMessages,
+  canAttachToStreamingAssistant,
+  extractLiveToolCall,
+  extractLiveToolResultUpdate,
+  mergePersistedToolResults,
+  messageAgentKey,
+  matchesToolResultUpdate,
+  prependUniqueMessages,
+  type ToolResultUpdate,
+} from './toolActivity';
 
 const nowTs = () => Date.now();
 const generateId = () =>
@@ -33,97 +53,8 @@ const isAbortError = (error: unknown) => (
 const getEventPayload = (event: any) => event?.payload ?? event;
 const getEventSenderType = (payload: any): string | undefined => payload?.senderType || payload?.sender?.type;
 
-const isInternalMessageMetadata = (
-  metadata?: Record<string, unknown> | null,
-): boolean => metadata?.visibility === 'internal';
-
-const normalizeAgentIdentity = (
-  agent?: { id?: string | null; name?: string | null } | null,
-): { senderAgentId?: string; senderName?: string } => {
-  const senderAgentId = typeof agent?.id === 'string' && agent.id.length > 0
-    ? agent.id
-    : undefined;
-  const senderName = typeof agent?.name === 'string' && agent.name.length > 0
-    ? agent.name
-    : senderAgentId;
-
-  return {
-    ...(senderAgentId ? { senderAgentId } : {}),
-    ...(senderName ? { senderName } : {}),
-  };
-};
-
-const messageAgentKey = (message: ChatViewMessage): string | null => {
-  if (message.role !== 'assistant') return null;
-  return message.senderAgentId ?? message.senderName ?? null;
-};
-
 type ServerThread = Awaited<ReturnType<typeof fetchThreads>>[number];
-type ServerMessage = Awaited<ReturnType<typeof fetchThreadMessagesPage>>['data'][number];
-type AgentIdentity = { senderAgentId?: string; senderName?: string };
-
-const resolveLiveAgentIdentity = (event: any): AgentIdentity => {
-  const payload = getEventPayload(event);
-  const agent = (
-    payload?.agent && typeof payload.agent === 'object'
-      ? payload.agent
-      : event?.agent && typeof event.agent === 'object'
-        ? event.agent
-        : null
-  ) as { id?: string | null; name?: string | null } | null;
-
-  if (agent) {
-    return normalizeAgentIdentity(agent);
-  }
-
-  const sender = (
-    payload?.sender && typeof payload.sender === 'object'
-      ? payload.sender
-      : event?.sender && typeof event.sender === 'object'
-        ? event.sender
-        : null
-  ) as { id?: string | null; name?: string | null } | null;
-
-  return normalizeAgentIdentity({
-    id:
-      typeof payload?.senderId === 'string' ? payload.senderId
-      : typeof sender?.id === 'string' ? sender.id
-      : null,
-    name:
-      typeof payload?.senderName === 'string' ? payload.senderName
-      : typeof sender?.name === 'string' ? sender.name
-      : null,
-  });
-};
-
-const canAttachToStreamingAssistant = (
-  message: ChatViewMessage | undefined,
-  incomingAgentKey: string | null,
-): boolean => {
-  if (!message || message.role !== 'assistant' || !message.isStreaming) {
-    return false;
-  }
-
-  const currentAgentKey = messageAgentKey(message);
-  return !incomingAgentKey || !currentAgentKey || currentAgentKey === incomingAgentKey;
-};
-
-type ToolCallStatus = 'pending' | 'running' | 'completed' | 'failed';
-type ParsedToolCall = {
-  id?: string;
-  name: string;
-  arguments: Record<string, unknown>;
-  status: ToolCallStatus;
-  result?: unknown;
-};
-
-type ToolResultUpdate = {
-  id?: string;
-  name?: string;
-  status: ToolCallStatus;
-  result?: unknown;
-  endTime: number;
-};
+type ServerMessage = RestMessage;
 
 const THREAD_MESSAGES_PAGE_SIZE = 50;
 
@@ -133,362 +64,12 @@ const createEmptyMessagePageInfo = (): RestMessagePageInfo => ({
   newestMessageId: null,
 });
 
-const normalizeToolStatus = (status: unknown): ToolCallStatus => {
-  if (status === 'pending') return 'pending';
-  if (status === 'running' || status === 'processing') return 'running';
-  if (status === 'failed') return 'failed';
-  return 'completed';
-};
-
-const parseToolArguments = (value: unknown): Record<string, unknown> => {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  if (typeof value === 'string') {
-    try {
-      const parsed = JSON.parse(value);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
-      }
-    } catch {
-      // Ignore invalid JSON and fall through to empty args.
-    }
-  }
-  return {};
-};
-
-const matchesToolResultUpdate = (
-  target: { id?: string; name?: string },
-  update: Pick<ToolResultUpdate, 'id' | 'name'>,
-): boolean => {
-  if (update.id && target.id) {
-    return update.id === target.id;
-  }
-
-  return Boolean(update.name && target.name && update.name === target.name);
-};
-
-const findMatchingToolCallIndex = (
-  toolCalls: NonNullable<InternalChatMessage['_activityToolCalls']>,
-  update: ToolResultUpdate,
-): number => toolCalls.findIndex((toolCall) => (
-  matchesToolResultUpdate(
-    { id: toolCall.id, name: toolCall.name },
-    update,
-  ) &&
-  (toolCall.status === 'pending' || toolCall.status === 'running' || typeof toolCall.result === 'undefined')
-));
-
-const applyToolResultUpdateToMessages = (
-  messages: InternalChatMessage[],
-  update: ToolResultUpdate,
-  assistantPatch?: Partial<InternalChatMessage>,
-): { messages: InternalChatMessage[]; matched: boolean } => {
-  const nextMessages = [...messages];
-
-  for (let i = nextMessages.length - 1; i >= 0; i--) {
-    const message = nextMessages[i];
-    if (message.role !== 'assistant' || !Array.isArray(message._activityToolCalls) || message._activityToolCalls.length === 0) {
-      continue;
-    }
-
-    const toolCallIndex = findMatchingToolCallIndex(message._activityToolCalls, update);
-    if (toolCallIndex === -1) continue;
-
-    nextMessages[i] = syncAssistantActivity({
-      ...applyAssistantToolResult(message, {
-        ...(update.id ? { id: update.id } : {}),
-        name: update.name ?? message._activityToolCalls[toolCallIndex].name,
-        status: update.status,
-        ...(update.result !== undefined ? { result: update.result } : {}),
-        endTime: update.endTime,
-      }),
-      ...(assistantPatch ?? {}),
-    });
-
-    return { messages: nextMessages, matched: true };
-  }
-
-  return { messages, matched: false };
-};
-
-const extractLiveToolCall = (payload: Record<string, unknown> | undefined): ParsedToolCall | null => {
-  const toolCall = payload?.toolCall as Record<string, unknown> | undefined;
-  if (!toolCall) return null;
-
-  const tool = toolCall.tool as Record<string, unknown> | undefined;
-  const name = typeof tool?.name === 'string'
-    ? tool.name
-    : typeof tool?.id === 'string'
-      ? tool.id
-      : 'tool';
-  const result = toolCall.output !== undefined ? toolCall.output : undefined;
-
-  return {
-    ...(typeof toolCall.id === 'string' ? { id: toolCall.id } : {}),
-    name,
-    arguments: parseToolArguments(toolCall.args),
-    status: normalizeToolStatus(toolCall.status ?? payload?.status ?? 'running'),
-    ...(result !== undefined ? { result } : {}),
-  };
-};
-
-const extractLiveToolResultUpdate = (
-  payload: Record<string, unknown> | undefined,
-): ToolResultUpdate => {
-  const tool = payload?.tool as Record<string, unknown> | undefined;
-  const result =
-    payload?.projectedOutput !== undefined
-      ? payload.projectedOutput
-      : payload?.output !== undefined
-        ? payload.output
-        : payload?.content;
-
-  return {
-    ...(typeof payload?.toolCallId === 'string' ? { id: payload.toolCallId } : {}),
-    ...(typeof tool?.name === 'string'
-      ? { name: tool.name }
-      : typeof tool?.id === 'string'
-        ? { name: tool.id }
-        : {}),
-    status: normalizeToolStatus(payload?.status),
-    ...(result !== undefined ? { result } : {}),
-    endTime: nowTs(),
-  };
-};
-
-const extractToolCallsFromServerMessage = (msg: ServerMessage): ParsedToolCall[] => {
-  const metadata = (msg.metadata ?? undefined) as Record<string, unknown> | undefined;
-  const topLevelToolCalls = Array.isArray((msg as unknown as { toolCalls?: Array<Record<string, unknown>> }).toolCalls)
-    ? ((msg as unknown as { toolCalls?: Array<Record<string, unknown>> }).toolCalls || [])
-    : [];
-  const metadataToolCalls = Array.isArray(metadata?.toolCalls)
-    ? (metadata.toolCalls as Array<Record<string, unknown>>)
-    : [];
-
-  const usedMetadataIndexes = new Set<number>();
-  const parsed: ParsedToolCall[] = [];
-
-  const extractToolName = (obj: Record<string, unknown>): string | undefined => {
-    if (typeof obj.name === 'string') return obj.name;
-    const t = obj.tool as Record<string, unknown> | undefined;
-    if (typeof t?.name === 'string') return t.name;
-    if (typeof t?.id === 'string') return t.id;
-    return undefined;
-  };
-
-  const findMatchingMetadataIndex = (toolCall: Record<string, unknown>): number => {
-    const id = typeof toolCall.id === 'string' ? toolCall.id : undefined;
-    const name = extractToolName(toolCall);
-
-    const byId = id
-      ? metadataToolCalls.findIndex((candidate, idx) => !usedMetadataIndexes.has(idx) && candidate?.id === id)
-      : -1;
-    if (byId >= 0) return byId;
-
-    return name
-      ? metadataToolCalls.findIndex((candidate, idx) => !usedMetadataIndexes.has(idx) && extractToolName(candidate) === name)
-      : -1;
-  };
-
-  const parseToolCall = (
-    primary: Record<string, unknown>,
-    secondary?: Record<string, unknown>,
-  ): ParsedToolCall => {
-    const id = typeof primary.id === 'string'
-      ? primary.id
-      : (typeof secondary?.id === 'string' ? secondary.id : undefined);
-    const toolObj = primary.tool as Record<string, unknown> | undefined;
-    const secondaryToolObj = secondary?.tool as Record<string, unknown> | undefined;
-    const name = typeof primary.name === 'string'
-      ? primary.name
-      : typeof toolObj?.name === 'string'
-        ? toolObj.name
-        : typeof toolObj?.id === 'string'
-          ? toolObj.id
-          : typeof secondary?.name === 'string'
-            ? secondary.name
-            : typeof secondaryToolObj?.name === 'string'
-              ? secondaryToolObj.name
-              : typeof secondaryToolObj?.id === 'string'
-                ? secondaryToolObj.id
-                : 'tool';
-    const argsRaw =
-      primary.args ?? primary.arguments ?? secondary?.args ?? secondary?.arguments;
-    const result =
-      primary.output !== undefined
-        ? primary.output
-        : primary.result !== undefined
-          ? primary.result
-          : secondary?.output !== undefined
-            ? secondary.output
-            : secondary?.result;
-    const status = normalizeToolStatus(primary.status ?? secondary?.status);
-
-    return {
-      ...(id ? { id } : {}),
-      name,
-      arguments: parseToolArguments(argsRaw),
-      ...(result !== undefined ? { result } : {}),
-      status,
-    };
-  };
-
-  topLevelToolCalls.forEach((toolCall) => {
-    const metadataIndex = findMatchingMetadataIndex(toolCall);
-    const metadataCall = metadataIndex >= 0 ? metadataToolCalls[metadataIndex] : undefined;
-    if (metadataIndex >= 0) usedMetadataIndexes.add(metadataIndex);
-    parsed.push(parseToolCall(toolCall, metadataCall));
-  });
-
-  metadataToolCalls.forEach((toolCall, index) => {
-    if (usedMetadataIndexes.has(index)) return;
-    parsed.push(parseToolCall(toolCall));
-  });
-
-  return parsed;
-};
-
-const extractToolResultUpdateFromMessage = (msg: ServerMessage): ToolResultUpdate | null => {
-  if (msg.senderType !== 'tool') return null;
-
-  const toolCalls = extractToolCallsFromServerMessage(msg);
-  if (!Array.isArray(toolCalls) || toolCalls.length === 0) return null;
-
-  const firstToolCall = toolCalls[0];
-  const metadata = (msg.metadata ?? undefined) as Record<string, unknown> | undefined;
-  const fallbackResult = metadata?.output;
-  const result = firstToolCall.result !== undefined ? firstToolCall.result : fallbackResult;
-
-  return {
-    ...(firstToolCall.id ? { id: firstToolCall.id } : {}),
-    ...(firstToolCall.name ? { name: firstToolCall.name } : {}),
-    ...(result !== undefined ? { result } : {}),
-    status: firstToolCall.status,
-    endTime: msg.createdAt ? new Date(msg.createdAt).getTime() : nowTs(),
-  };
-};
-
-const mergePersistedToolResults = (
-  messages: InternalChatMessage[],
-  updates: ToolResultUpdate[],
-): InternalChatMessage[] => {
-  if (updates.length === 0) return messages;
-
-  let nextMessages = messages;
-  for (const update of updates) {
-    nextMessages = applyToolResultUpdateToMessages(nextMessages, update).messages;
-  }
-
-  return nextMessages;
-};
-
-const prependUniqueMessages = (
-  olderMessages: InternalChatMessage[],
-  currentMessages: InternalChatMessage[],
-): InternalChatMessage[] => {
-  if (olderMessages.length === 0) return currentMessages;
-  if (currentMessages.length === 0) return olderMessages;
-
-  const seen = new Set<string>();
-  const combined: InternalChatMessage[] = [];
-
-  for (const message of [...olderMessages, ...currentMessages]) {
-    if (seen.has(message.id)) continue;
-    seen.add(message.id);
-    combined.push(message);
-  }
-
-  return combined;
-};
-
-const convertServerMessage = (msg: ServerMessage): InternalChatMessage => {
-  const timestamp = msg.createdAt ? new Date(msg.createdAt).getTime() : nowTs();
-  const metadata = (msg.metadata ?? undefined) as Record<string, unknown> | undefined;
-  const attachmentsMeta = Array.isArray(metadata?.attachments)
-    ? (metadata!.attachments as Array<Record<string, unknown>>)
-    : [];
-
-  const attachments: MediaAttachment[] = attachmentsMeta.flatMap((att) => {
-    const kind = typeof att.kind === 'string' ? att.kind : undefined;
-    const dataUrl = typeof att.dataUrl === 'string' ? att.dataUrl : undefined;
-    const mimeType = typeof att.mimeType === 'string' ? att.mimeType : undefined;
-    if (!dataUrl) return [];
-
-    if (kind === 'image') {
-      return [{ kind: 'image', dataUrl, mimeType: mimeType ?? 'image/jpeg' }] as MediaAttachment[];
-    }
-    if (kind === 'audio') {
-      return [{
-        kind: 'audio',
-        dataUrl,
-        mimeType: mimeType ?? 'audio/webm',
-        durationMs: typeof att.durationMs === 'number' ? att.durationMs : undefined,
-      }] as MediaAttachment[];
-    }
-    if (kind === 'video') {
-      return [{
-        kind: 'video',
-        dataUrl,
-        mimeType: mimeType ?? 'video/mp4',
-        durationMs: typeof att.durationMs === 'number' ? att.durationMs : undefined,
-        poster: typeof att.poster === 'string' ? att.poster : undefined,
-      }] as MediaAttachment[];
-    }
-    return [] as MediaAttachment[];
-  });
-
-  const role = msg.senderType === 'agent'
-    ? 'assistant'
-    : msg.senderType === 'user'
-      ? 'user'
-      : 'assistant';
-
-  const parsedToolCalls = extractToolCallsFromServerMessage(msg);
-  const shouldRenderToolCalls = msg.senderType !== 'tool';
-  const mappedToolCalls = parsedToolCalls.map((toolCall) => ({
-    id: toolCall.id ?? generateId(),
-    name: toolCall.name,
-    arguments: toolCall.arguments,
-    status: toolCall.status,
-    ...(toolCall.result !== undefined ? { result: toolCall.result } : {}),
-  }));
-
-  const hasToolCalls = shouldRenderToolCalls && mappedToolCalls.length > 0;
-  const isToolSender = msg.senderType === 'tool';
-  const content =
-    isToolSender
-      ? '' // Do not render textual content for tool messages; attachments only
-      : ((msg.content ?? '') || (hasToolCalls ? '' : ''));
-
-  const reasoning = typeof (msg as any).reasoning === 'string' && (msg as any).reasoning.length > 0
-    ? (msg as any).reasoning as string
-    : undefined;
-
-  // Extract sender identity for multi-agent display
-  const senderAgentId = msg.senderType === 'agent' ? (msg.senderId ?? undefined) : undefined;
-  const senderName = msg.senderType === 'agent'
-    ? (typeof (msg as any).senderName === 'string' ? (msg as any).senderName : (msg.senderId ?? undefined))
-    : undefined;
-
-  return syncAssistantActivity({
-    id: msg.id,
-    role,
-    content,
-    timestamp,
-    attachments: attachments.length > 0 ? attachments : undefined,
-    isStreaming: false,
-    isComplete: true,
-    metadata,
-    _activityToolCalls: hasToolCalls ? mappedToolCalls : undefined,
-    ...(reasoning ? { _activityReasoning: reasoning } : {}),
-    ...(senderAgentId ? { senderAgentId } : {}),
-    ...(senderName ? { senderName } : {}),
-  });
-};
-
 export interface UseCopilotzOptions {
   userId: string | null;
+  userName?: string;
+  userAvatar?: string;
+  assistantName?: string;
+  agentOptions?: AgentOption[];
   initialContext?: ChatUserContext;
   bootstrap?: {
     initialMessage?: string;
@@ -508,6 +89,10 @@ export interface UseCopilotzOptions {
 
 export function useCopilotz({
   userId,
+  userName,
+  userAvatar,
+  assistantName,
+  agentOptions = [],
   initialContext,
   bootstrap,
   defaultThreadName,
@@ -555,6 +140,11 @@ export function useCopilotz({
   const userContextSeedRef = useRef(userContextSeed);
   const messagePageInfoRef = useRef(messagePageInfo);
   const isLoadingOlderMessagesRef = useRef(isLoadingOlderMessages);
+  const senderOptionsRef = useRef<SenderResolutionOptions>({
+    agents: agentOptions,
+    user: userId ? { id: userId, name: userName, avatarUrl: userAvatar } : null,
+    assistantName,
+  });
   const persistedToolUpdatesRef = useRef<ToolResultUpdate[]>([]);
   // Buffer live TOOL_RESULT updates that arrive before their matching TOOL_CALL
   // has been rendered. We reconcile them as soon as the TOOL_CALL lands.
@@ -569,6 +159,11 @@ export function useCopilotz({
   userContextSeedRef.current = userContextSeed;
   messagePageInfoRef.current = messagePageInfo;
   isLoadingOlderMessagesRef.current = isLoadingOlderMessages;
+  senderOptionsRef.current = {
+    agents: agentOptions,
+    user: userId ? { id: userId, name: userName, avatarUrl: userAvatar } : null,
+    assistantName,
+  };
   preferredAgentRef.current = preferredAgentName ?? null;
   participantsRef.current = participants ?? null;
   targetAgentNameRef.current = targetAgentName ?? null;
@@ -645,21 +240,21 @@ export function useCopilotz({
 
     // Fallback path for custom/non-contract events that still look like an
     // assistant artifact message.
-    const agentIdentity = resolveLiveAgentIdentity(event);
-    const incomingAgentKey = agentIdentity.senderAgentId ?? agentIdentity.senderName ?? null;
+    const sender = resolveLiveEventSender(event, senderOptionsRef.current);
+    const incomingAgentKey = sender.agentId ?? sender.id;
 
     setMessages((prev) => {
       const next = [...prev];
       for (let i = next.length - 1; i >= 0; i--) {
         const m = next[i];
         if (canAttachToStreamingAssistant(m, incomingAgentKey)) {
-          next[i] = syncAssistantActivity({
+          next[i] = {
             ...m,
             content: payload.content,
             isStreaming: false,
             isComplete: true,
-            ...agentIdentity,
-          });
+            sender,
+          };
           return next;
         }
       }
@@ -671,7 +266,7 @@ export function useCopilotz({
 
       return [
         ...next,
-        syncAssistantActivity({
+        {
           id: generateId(),
           role: 'assistant',
           content: payload.content,
@@ -679,8 +274,8 @@ export function useCopilotz({
           isStreaming: false,
           isComplete: true,
           metadata: liveMetadata,
-          ...agentIdentity,
-        } as InternalChatMessage),
+          sender,
+        } as InternalChatMessage,
       ];
     });
   }, []);
@@ -753,41 +348,12 @@ export function useCopilotz({
   }, [updateThreadsState, getRequestHeaders]);
 
   const prepareThreadMessages = useCallback(async (rawMessages: ServerMessage[]) => {
-    const resolvedMessages = await resolveAssetsInMessages(rawMessages as unknown as any[]);
-
-    resolvedMessages.forEach((msg: any) => {
-      if (msg.senderType === 'tool') {
-        const metadata = msg.metadata as Record<string, unknown> | undefined;
-        const output = (metadata?.output ?? metadata) as Record<string, unknown> | undefined;
-        if (output) processToolOutput(output);
-      }
+    return prepareHydratedMessages(rawMessages, {
+      senderOptions: senderOptionsRef.current,
+      createId: generateId,
+      now: nowTs,
+      onToolOutput: processToolOutput,
     });
-
-    const toolResultUpdates = resolvedMessages
-      .map((msg) => extractToolResultUpdateFromMessage(msg as unknown as ServerMessage))
-      .filter((update): update is ToolResultUpdate => update !== null);
-
-    const viewMessages = resolvedMessages
-      .filter((msg) => {
-        const meta = (msg.metadata ?? {}) as Record<string, unknown>;
-        if (isInternalMessageMetadata(meta)) {
-          return false;
-        }
-        const text = (typeof msg.content === 'string' ? msg.content : '').trim();
-        const hasText = text.length > 0;
-        const hasToolCalls = extractToolCallsFromServerMessage(msg as unknown as ServerMessage).length > 0;
-        const hasAttachments = Array.isArray(meta.attachments) && (meta.attachments as unknown[]).length > 0;
-        if (msg.senderType === 'tool') {
-          return hasAttachments;
-        }
-        return hasText || hasToolCalls || hasAttachments;
-      })
-      .map(convertServerMessage);
-
-    return {
-      viewMessages,
-      toolResultUpdates,
-    };
   }, [processToolOutput]);
 
   const loadThreadMessages = useCallback(async (threadId: string) => {
@@ -1043,10 +609,10 @@ export function useCopilotz({
     };
 
     setMessages((prev) => prev.map((msg) => (msg.id === assistantMessageId
-      ? syncAssistantActivity({
+      ? {
         ...msg,
         attachments: [...(msg.attachments || []), mediaAttachment],
-      })
+      }
       : msg)));
   }, []);
 
@@ -1063,12 +629,14 @@ export function useCopilotz({
       userName?: string;
       userMetadata?: Record<string, unknown>;
       agentName?: string | null;
+      assistantMessageId?: string;
+      assistantSender?: ChatSender;
       onBeforeStart?: (assistantMessageId: string) => void;
     },
   ) => {
     // Track the current live assistant message so one sender streak stays in one bubble.
-    let currentAssistantId = generateId();
-    let currentAssistantIdentity: AgentIdentity = {};
+    let currentAssistantId = params.assistantMessageId ?? generateId();
+    let currentAssistantSender: ChatSender | undefined = params.assistantSender;
     params.onBeforeStart?.(currentAssistantId);
 
     let hasStreamProgress = false;
@@ -1086,22 +654,22 @@ export function useCopilotz({
       }
 
       const isReasoning = opts?.isReasoning ?? false;
-      const nextIdentity = normalizeAgentIdentity(opts?.agent ?? null);
-      if (nextIdentity.senderAgentId || nextIdentity.senderName) {
-        currentAssistantIdentity = {
-          ...currentAssistantIdentity,
-          ...nextIdentity,
-        };
+      const nextSender = opts?.agent
+        ? resolveAgentSender(opts.agent, senderOptionsRef.current)
+        : currentAssistantSender;
+      if (nextSender) {
+        currentAssistantSender = nextSender;
       }
-      const agentIdentity = currentAssistantIdentity;
-      const nextAgentKey = agentIdentity.senderAgentId ?? agentIdentity.senderName ?? null;
+      const nextAgentKey = currentAssistantSender?.agentId ?? currentAssistantSender?.id ?? null;
 
       const applyUpdate = (msg: InternalChatMessage): InternalChatMessage => {
-        return updateAssistantMessageToken(msg, {
-          partial,
-          isReasoning,
-          agentIdentity,
-        });
+        return {
+          ...updateAssistantMessageToken(msg, {
+            partial,
+            isReasoning,
+          }),
+          ...(currentAssistantSender ? { sender: currentAssistantSender } : {}),
+        };
       };
       
       setMessages((prev) => {
@@ -1109,7 +677,7 @@ export function useCopilotz({
         if (idx >= 0 && canAttachToStreamingAssistant(prev[idx], nextAgentKey)) {
           const msg = prev[idx];
           const next = applyUpdate(msg);
-          if (msg.content === next.content && msg._activityReasoning === next._activityReasoning && msg._activityReasoningStreaming === next._activityReasoningStreaming && msg.isStreaming === next.isStreaming && msg.isComplete === next.isComplete) {
+          if (msg.content === next.content && msg.activity === next.activity && msg.isStreaming === next.isStreaming && msg.isComplete === next.isComplete) {
             return prev;
           }
           const updated = [...prev];
@@ -1121,7 +689,7 @@ export function useCopilotz({
         if (canAttachToStreamingAssistant(last, nextAgentKey)) {
           currentAssistantId = last.id;
           const next = applyUpdate(last);
-          if (last.content === next.content && last._activityReasoning === next._activityReasoning && last._activityReasoningStreaming === next._activityReasoningStreaming && last.isStreaming === next.isStreaming && last.isComplete === next.isComplete) {
+          if (last.content === next.content && last.activity === next.activity && last.isStreaming === next.isStreaming && last.isComplete === next.isComplete) {
             return prev;
           }
           const updated = [...prev];
@@ -1150,7 +718,7 @@ export function useCopilotz({
             timestamp: nowTs(),
             isStreaming: true,
             isComplete: false,
-            ...currentAssistantIdentity,
+            ...(currentAssistantSender ? { sender: currentAssistantSender } : {}),
           };
           return [...prev, applyUpdate(base)];
         }
@@ -1217,7 +785,7 @@ export function useCopilotz({
           message.content === nextMessage.content &&
           message.isStreaming === nextMessage.isStreaming &&
           message.isComplete === nextMessage.isComplete &&
-          message._activityReasoningStreaming === nextMessage._activityReasoningStreaming
+          message.activity === nextMessage.activity
         ) {
           return prev;
         }
@@ -1238,7 +806,6 @@ export function useCopilotz({
       // TOOL_CALL bubble
       if (type === 'TOOL_CALL') {
         const parsedToolCall = extractLiveToolCall(payload);
-        if (!parsedToolCall) return null;
 
         return {
           id: generateId(),
@@ -1348,14 +915,9 @@ export function useCopilotz({
             const parsedToolCall = extractLiveToolCall(
               (payload ?? {}) as Record<string, unknown>,
             );
-            if (!parsedToolCall) return;
-            const eventAgentIdentity = resolveLiveAgentIdentity(event);
-            if (eventAgentIdentity.senderAgentId || eventAgentIdentity.senderName) {
-              currentAssistantIdentity = {
-                ...currentAssistantIdentity,
-                ...eventAgentIdentity,
-              };
-            }
+            const eventSender = resolveLiveEventSender(event, senderOptionsRef.current);
+            currentAssistantSender = eventSender;
+            const eventAgentKey = currentAssistantSender.agentId ?? currentAssistantSender.id;
             const callId = parsedToolCall.id ?? generateId();
             const toolName = parsedToolCall.name;
 
@@ -1378,6 +940,13 @@ export function useCopilotz({
 
             setMessages((prev) =>
               (() => {
+                const canHostActivity = (message: ChatViewMessage | undefined) => {
+                  if (!message) return false;
+                  return message.role === 'assistant' &&
+                    message.isStreaming &&
+                    message.content.trim().length === 0 &&
+                    !message.attachments?.length;
+                };
                 const appendToolCall = (msg: ChatViewMessage) => ({
                   ...appendAssistantToolCall(msg, {
                     id: callId,
@@ -1393,7 +962,8 @@ export function useCopilotz({
                 const currentIdx = prev.findIndex((message) => (
                   message.id === currentAssistantId &&
                   message.role === 'assistant' &&
-                  message.isStreaming
+                  message.isStreaming &&
+                  canHostActivity(message)
                 ));
                 if (currentIdx >= 0) {
                   const next = [...prev];
@@ -1401,15 +971,15 @@ export function useCopilotz({
                     ...next[currentIdx],
                     isStreaming: true,
                     isComplete: false,
-                    ...currentAssistantIdentity,
+                    ...(currentAssistantSender ? { sender: currentAssistantSender } : {}),
                   });
                   return next;
                 }
 
                 const last = prev[prev.length - 1];
-                if (canAttachToStreamingAssistant(
+                if (canHostActivity(last) && canAttachToStreamingAssistant(
                   last,
-                  currentAssistantIdentity.senderAgentId ?? currentAssistantIdentity.senderName ?? null,
+                  eventAgentKey,
                 )) {
                   currentAssistantId = last.id;
                   const next = [...prev];
@@ -1417,7 +987,7 @@ export function useCopilotz({
                     ...last,
                     isStreaming: true,
                     isComplete: false,
-                    ...currentAssistantIdentity,
+                    ...(currentAssistantSender ? { sender: currentAssistantSender } : {}),
                   });
                   return next;
                 }
@@ -1434,7 +1004,7 @@ export function useCopilotz({
                     timestamp: nowTs(),
                     isStreaming: true,
                     isComplete: false,
-                    ...currentAssistantIdentity,
+                    ...(currentAssistantSender ? { sender: currentAssistantSender } : {}),
                   }),
                 ];
               })(),
@@ -1446,7 +1016,11 @@ export function useCopilotz({
           // Other event types (ASSET_CREATED, etc.) should render as their own bubbles
           const sm = await toServerMessageFromEvent(event);
           if (sm) {
-            const viewMsg = convertServerMessage(sm as unknown as ServerMessage);
+            const viewMsg = convertServerMessage(sm, {
+              senderOptions: senderOptionsRef.current,
+              createId: generateId,
+              now: nowTs,
+            });
             finalizeCurrentAssistantBubble();
             setMessages((prev) => [...prev, viewMsg]);
             return;
@@ -1525,7 +1099,23 @@ export function useCopilotz({
       timestamp,
       attachments: attachments.length > 0 ? attachments : undefined,
       isComplete: true,
+      sender: resolveUserSender({
+        id: userId,
+        name: (userContextSeedRef.current?.profile as any)?.full_name ?? userId,
+      }),
     };
+
+    const assistantSender = targetAgentNameRef.current
+      ? resolveAgentSender(
+        { id: targetAgentNameRef.current, name: targetAgentNameRef.current },
+        senderOptionsRef.current,
+      )
+      : preferredAgentRef.current
+        ? resolveAgentSender(
+          { id: preferredAgentRef.current, name: preferredAgentRef.current },
+          senderOptionsRef.current,
+        )
+        : resolveAssistantFallbackSender(senderOptionsRef.current);
 
     // Create an assistant message placeholder with streaming state for typewriter effect
     const assistantPlaceholder: ChatViewMessage = {
@@ -1535,11 +1125,11 @@ export function useCopilotz({
       timestamp: timestamp + 1,
       isStreaming: true,
       isComplete: false,
-      ...(targetAgentNameRef.current ? { senderName: targetAgentNameRef.current } : {}),
+      sender: assistantSender,
     };
 
     // Add user message and assistant placeholder for typewriter loading effect
-    setMessages((prev) => [...prev, userMessage as InternalChatMessage, syncAssistantActivity(assistantPlaceholder as InternalChatMessage)]);
+    setMessages((prev) => [...prev, userMessage as InternalChatMessage, assistantPlaceholder as InternalChatMessage]);
     setSpecialState(null);
 
     // Use ref for threads check
@@ -1566,6 +1156,8 @@ export function useCopilotz({
         // userName can be anything, but let's try to find it in context or just fallback
         userName: (userContextSeedRef.current?.profile as any)?.full_name ?? userId,
         agentName: preferredAgentRef.current,
+        assistantMessageId: assistantPlaceholder.id,
+        assistantSender,
         // Include pending title for new threads
         threadMetadata: pendingTitle ? { name: pendingTitle } : undefined,
       });
@@ -1600,25 +1192,27 @@ export function useCopilotz({
           if (message.role !== 'assistant') continue;
 
           const updated = [...finalized];
-          updated[i] = syncAssistantActivity({
+          updated[i] = {
             ...message,
             content: 'Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente novamente.',
             isStreaming: false,
             isComplete: true,
-          });
+            sender: message.sender ?? resolveAssistantFallbackSender(senderOptionsRef.current),
+          };
           return updated;
         }
 
         return [
           ...finalized,
-          syncAssistantActivity({
+          {
             id: generateId(),
             role: 'assistant',
             content: 'Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente novamente.',
             timestamp: nowTs(),
             isStreaming: false,
             isComplete: true,
-          }),
+            sender: resolveAssistantFallbackSender(senderOptionsRef.current),
+          },
         ];
       });
     }
@@ -1666,14 +1260,15 @@ export function useCopilotz({
         return;
       }
       setMessages([
-        syncAssistantActivity({
+        {
           id: generateId(),
           role: 'assistant',
           content: 'Não foi possível iniciar a conversa. Tente novamente mais tarde.',
           timestamp: nowTs(),
           isStreaming: false,
           isComplete: true,
-        }),
+          sender: resolveAssistantFallbackSender(senderOptionsRef.current),
+        },
       ]);
     }
   }, [fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage, bootstrap, defaultThreadName, getSpecialStateFromError]);

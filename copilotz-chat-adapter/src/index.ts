@@ -28,6 +28,7 @@ export type {
   ChatCallbacks,
   ChatUserContext,
   ChatMessage,
+  ChatSender,
   ChatThread,
   MediaAttachment,
   MemoryItem,

@@ -7,7 +7,6 @@ import React, {
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
-  AssistantActivityState,
   ChatMessage,
   ChatState,
   ChatUserContext,
@@ -24,6 +23,7 @@ import { ChatInput } from "./ChatInput";
 import { TargetAgentSelector } from "./AgentSelectors";
 import { UserProfile } from "./UserProfile";
 import { useChatUserContext } from "./UserContext";
+import { groupMessagesForRender } from "../../lib/messageGrouping";
 import { ScrollArea } from "../ui/scroll-area";
 import { Skeleton } from "../ui/skeleton";
 import { TooltipProvider } from "../ui/tooltip";
@@ -36,173 +36,6 @@ import {
   Sparkles,
   Zap,
 } from "lucide-react";
-
-type MessageGroup = {
-  id: string;
-  message: ChatMessage;
-  suggestionMessageId: string;
-};
-
-function getMessageSpeakerKey(
-  message: ChatMessage | null | undefined,
-): string | null {
-  if (!message) return null;
-  if (message.role === "assistant") {
-    return message.senderAgentId ?? message.senderName ?? "assistant";
-  }
-  if (message.role === "user") {
-    return "user";
-  }
-  return message.role;
-}
-
-function getAssistantSpeakerTokens(
-  message: ChatMessage | null | undefined,
-): string[] {
-  if (!message || message.role !== "assistant") return [];
-
-  const rawTokens = [message.senderAgentId, message.senderName]
-    .filter((value): value is string =>
-      typeof value === "string" && value.trim().length > 0
-    )
-    .map((value) => value.trim().toLowerCase());
-
-  if (rawTokens.length > 0) {
-    return Array.from(new Set(rawTokens));
-  }
-
-  return ["assistant"];
-}
-
-function canGroupMessages(previous: ChatMessage, next: ChatMessage): boolean {
-  if (previous.role !== next.role) {
-    return false;
-  }
-
-  if (previous.role !== "assistant") {
-    return getMessageSpeakerKey(previous) === getMessageSpeakerKey(next);
-  }
-
-  const previousTokens = getAssistantSpeakerTokens(previous);
-  const nextTokens = getAssistantSpeakerTokens(next);
-
-  return previousTokens.some((token) => nextTokens.includes(token));
-}
-
-const mergeToolCalls = (
-  activities: AssistantActivityState[],
-): AssistantActivityState["toolCalls"] | undefined => {
-  const merged = new Map<
-    string,
-    NonNullable<AssistantActivityState["toolCalls"]>[number]
-  >();
-
-  for (const activity of activities) {
-    if (!Array.isArray(activity.toolCalls)) continue;
-    for (const toolCall of activity.toolCalls) {
-      const key = toolCall.id ||
-        `${toolCall.name}:${JSON.stringify(toolCall.arguments ?? {})}`;
-      merged.set(key, toolCall);
-    }
-  }
-
-  return merged.size > 0 ? Array.from(merged.values()) : undefined;
-};
-
-const mergeReasoning = (
-  activities: AssistantActivityState[],
-): string | undefined => {
-  const segments = activities
-    .map((activity) => activity.reasoning?.trim())
-    .filter((value): value is string => Boolean(value));
-
-  if (segments.length === 0) return undefined;
-
-  return segments
-    .filter((segment, index) => index === 0 || segment !== segments[index - 1])
-    .join("\n\n");
-};
-
-const mergeGroupActivity = (
-  messages: ChatMessage[],
-): ChatMessage["activity"] => {
-  const activities = messages
-    .map((message) => message.activity)
-    .filter((activity): activity is AssistantActivityState =>
-      Boolean(activity)
-    );
-
-  if (activities.length === 0) return undefined;
-
-  const lastActivity = activities[activities.length - 1];
-  const mergedReasoning = mergeReasoning(activities);
-  const mergedToolCalls = mergeToolCalls(activities);
-
-  return {
-    ...lastActivity,
-    ...(mergedReasoning ? { reasoning: mergedReasoning } : {}),
-    ...(mergedToolCalls ? { toolCalls: mergedToolCalls } : {}),
-  };
-};
-
-const mergeMessageGroup = (messages: ChatMessage[]): ChatMessage => {
-  const firstMessage = messages[0];
-  const lastMessage = messages[messages.length - 1];
-  const content = messages
-    .map((message) => message.content.trim())
-    .filter((value) => value.length > 0)
-    .join("\n\n");
-  const attachments = messages.flatMap((message) => message.attachments ?? []);
-
-  return {
-    ...lastMessage,
-    id: lastMessage.id,
-    content,
-    timestamp: firstMessage.timestamp,
-    attachments: attachments.length > 0 ? attachments : undefined,
-    isStreaming: lastMessage.isStreaming,
-    isComplete: lastMessage.isComplete,
-    isEdited: messages.some((message) => message.isEdited),
-    originalContent: undefined,
-    editedAt: lastMessage.editedAt,
-    activity: mergeGroupActivity(messages),
-    senderName: lastMessage.senderName ?? firstMessage.senderName,
-    senderAgentId: lastMessage.senderAgentId ?? firstMessage.senderAgentId,
-    metadata: lastMessage.metadata,
-  };
-};
-
-const groupMessagesForRender = (messages: ChatMessage[]): MessageGroup[] => {
-  if (messages.length === 0) return [];
-
-  const groups: MessageGroup[] = [];
-  let currentGroup: ChatMessage[] = [messages[0]];
-
-  const flushGroup = () => {
-    const mergedMessage = mergeMessageGroup(currentGroup);
-    groups.push({
-      id: mergedMessage.id,
-      message: mergedMessage,
-      suggestionMessageId: currentGroup[currentGroup.length - 1].id,
-    });
-  };
-
-  for (let index = 1; index < messages.length; index++) {
-    const previous = currentGroup[currentGroup.length - 1];
-    const next = messages[index];
-
-    if (canGroupMessages(previous, next)) {
-      currentGroup.push(next);
-      continue;
-    }
-
-    flushGroup();
-    currentGroup = [next];
-  }
-
-  flushGroup();
-  return groups;
-};
 
 // ChatUI is a purely presentational component
 export const ChatUI: React.FC<ChatV2Props> = ({
@@ -821,7 +654,8 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     enableCopy: config.features.enableMessageCopy,
     enableEdit: config.features.enableMessageEditing,
     enableRegenerate: config.features.enableRegeneration,
-    activityDisplay: config.features.activityDisplay,
+    showActivity: config.features.showActivity,
+    showActivityDetails: config.features.showActivityDetails,
     compactMode: config.ui.compactMode,
     onAction: handleMessageAction,
     labels: config.labels,
@@ -834,21 +668,19 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     renderUserMarkdown: config.ui.renderUserMarkdown,
     markdown: config.markdown,
     onToggleExpanded: handleToggleMessageExpansion,
-    agentOptions: isMultiAgentMode ? agentOptions : undefined,
   }), [
     user?.avatar,
     user?.name,
     assistant?.avatar,
     assistant?.name,
-    isMultiAgentMode,
-    agentOptions,
     config.ui.showTimestamps,
     config.ui.showAvatars,
     config.ui.compactMode,
     config.features.enableMessageCopy,
     config.features.enableMessageEditing,
     config.features.enableRegeneration,
-    config.features.activityDisplay,
+    config.features.showActivity,
+    config.features.showActivityDetails,
     config.labels,
     config.labels.showMoreMessage,
     config.labels.showLessMessage,
@@ -873,7 +705,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     <TooltipProvider>
       <SidebarProvider defaultOpen>
         <div
-          className={`flex h-[100svh] md:h-screen bg-background w-full overflow-hidden ${className}`}
+          className={`flex h-[100dvh] bg-background w-full overflow-hidden ${className}`}
         >
           <Sidebar
             threads={threads}

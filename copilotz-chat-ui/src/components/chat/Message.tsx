@@ -2,15 +2,14 @@ import React, { useState, useMemo, useEffect, memo } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import { ActivityDisplayMode, ChatConfig, ChatMarkdownConfig, ChatMessage, AgentOption, MediaAttachment, MessageActionEvent } from '../../types/chatTypes';
-import { getAgentColor, getAgentInitials } from '../../lib/chatUtils';
+import { ChatConfig, ChatMarkdownConfig, ChatMessage, MediaAttachment, MessageActionEvent } from '../../types/chatTypes';
 import { Button } from '../ui/button';
-import { Avatar, AvatarFallback, AvatarImage } from '../ui/avatar';
 import { Badge } from '../ui/badge';
 import { Textarea } from '../ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { createObjectUrlFromDataUrl } from '../../lib/utils';
 import { AssistantActivity } from './AssistantActivity';
+import { MessageSenderAvatar, resolveMessageSenderDisplay } from './MessageSender';
 import {
   Copy,
   Edit,
@@ -32,7 +31,8 @@ interface MessageProps {
   enableCopy?: boolean;
   enableEdit?: boolean;
   enableRegenerate?: boolean;
-  activityDisplay?: ActivityDisplayMode;
+  showActivity?: boolean;
+  showActivityDetails?: boolean;
   compactMode?: boolean;
   onAction?: (event: MessageActionEvent) => void;
   className?: string;
@@ -47,15 +47,13 @@ interface MessageProps {
   markdown?: ChatMarkdownConfig;
   isExpanded?: boolean;
   onToggleExpanded?: (messageId: string) => void;
-  /** Available agents for resolving multi-agent display (colors, avatars) */
-  agentOptions?: AgentOption[];
 }
 
 const hasRenderableAssistantBody = (message: ChatMessage): boolean => {
   if (message.role !== 'assistant') return true;
   if (typeof message.content === 'string' && message.content.trim().length > 0) return true;
   if (Array.isArray(message.attachments) && message.attachments.length > 0) return true;
-  return Boolean(message.activity);
+  return Boolean(message.activity?.items.length);
 };
 
 // Memoized markdown components configuration to prevent recreation on every render
@@ -334,7 +332,8 @@ const arePropsEqual = (prevProps: MessageProps, nextProps: MessageProps): boolea
   if (prevProps.enableCopy !== nextProps.enableCopy) return false;
   if (prevProps.enableEdit !== nextProps.enableEdit) return false;
   if (prevProps.enableRegenerate !== nextProps.enableRegenerate) return false;
-  if (prevProps.activityDisplay !== nextProps.activityDisplay) return false;
+  if (prevProps.showActivity !== nextProps.showActivity) return false;
+  if (prevProps.showActivityDetails !== nextProps.showActivityDetails) return false;
   if (prevProps.compactMode !== nextProps.compactMode) return false;
   if (prevProps.className !== nextProps.className) return false;
   if (prevProps.labels !== nextProps.labels) return false;
@@ -365,7 +364,8 @@ export const Message: React.FC<MessageProps> = memo(({
   enableCopy = true,
   enableEdit = true,
   enableRegenerate = true,
-  activityDisplay = 'full',
+  showActivity = true,
+  showActivityDetails = true,
   compactMode = false,
   onAction,
   className = '',
@@ -380,7 +380,6 @@ export const Message: React.FC<MessageProps> = memo(({
   markdown,
   isExpanded = false,
   onToggleExpanded,
-  agentOptions = [],
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(message.content);
@@ -392,17 +391,13 @@ export const Message: React.FC<MessageProps> = memo(({
     return null;
   }
 
-  // Resolve multi-agent sender display
-  const agentSender = !messageIsUser && message.senderAgentId
-    ? agentOptions.find(a =>
-        a.id === message.senderAgentId ||
-        a.name.toLowerCase() === (message.senderAgentId ?? '').toLowerCase() ||
-        a.name.toLowerCase() === (message.senderName ?? '').toLowerCase()
-      )
-    : undefined;
-  const isMultiAgent = agentOptions.length > 1;
-  const resolvedAssistantName = (isMultiAgent && (agentSender?.name || message.senderName)) || assistantName;
-  const agentColor = agentSender ? (agentSender.color || getAgentColor(agentSender.id)) : undefined;
+  const senderDisplay = resolveMessageSenderDisplay({
+    sender: message.sender,
+    fallbackName: messageIsUser ? userName : assistantName,
+    fallbackAvatar: messageIsUser ? undefined : assistantAvatar,
+    fallbackAvatarUrl: messageIsUser ? userAvatar : undefined,
+    compactMode,
+  });
   const canEdit = enableEdit && messageIsUser;
   const canRegenerate = enableRegenerate && !messageIsUser;
   const normalizedPreviewChars = Math.max(longMessagePreviewChars, 1);
@@ -479,45 +474,22 @@ export const Message: React.FC<MessageProps> = memo(({
         <div className={`flex gap-3 ${messageIsUser ? 'flex-row-reverse' : 'flex-row'} w-full mb-1`}>
           {showAvatar && (
             <div className={`flex-shrink-0 ${compactMode ? 'mt-1' : 'mt-0'}`}>
-              <Avatar className={compactMode ? 'h-6 w-6' : 'h-8 w-8'}>
-                {messageIsUser ? (
-                  <>
-                    <AvatarImage src={userAvatar} alt={userName} />
-                    <AvatarFallback className="bg-primary text-primary-foreground">
-                      {userName.charAt(0).toUpperCase()}
-                    </AvatarFallback>
-                  </>
-                ) : agentSender ? (
-                  <>
-                    {agentSender.avatarUrl ? (
-                      <AvatarImage src={agentSender.avatarUrl} alt={agentSender.name} />
-                    ) : null}
-                    <AvatarFallback
-                      style={agentColor ? { backgroundColor: agentColor, color: 'white' } : undefined}
-                      className={agentColor ? 'text-[10px]' : 'bg-secondary text-secondary-foreground'}
-                    >
-                      {getAgentInitials(agentSender.name)}
-                    </AvatarFallback>
-                  </>
-                ) : (
-                  <>
-                    {assistantAvatar || (
-                      <AvatarFallback className="bg-secondary text-secondary-foreground">
-                        AI
-                      </AvatarFallback>
-                    )}
-                  </>
-                )}
-              </Avatar>
+              <MessageSenderAvatar
+                sender={message.sender}
+                fallbackName={messageIsUser ? userName : assistantName}
+                fallbackAvatar={messageIsUser ? undefined : assistantAvatar}
+                fallbackAvatarUrl={messageIsUser ? userAvatar : undefined}
+                compactMode={compactMode}
+              />
             </div>
           )}
 
           <div className={`flex items-center gap-2 mb-1 ${messageIsUser ? 'flex-row-reverse' : 'flex-row'}`}>
             <span
               className={`font-medium ${compactMode ? 'text-sm' : 'text-base'}`}
-              style={!messageIsUser && agentColor ? { color: agentColor } : undefined}
+              style={!messageIsUser && senderDisplay.color ? { color: senderDisplay.color } : undefined}
             >
-              {messageIsUser ? userName : resolvedAssistantName}
+              {senderDisplay.name}
             </span>
             {showTimestamp && (
               <span className="text-xs text-muted-foreground">
@@ -564,7 +536,8 @@ export const Message: React.FC<MessageProps> = memo(({
                 {!messageIsUser && (
                   <AssistantActivity
                     activity={message.activity}
-                    displayMode={activityDisplay}
+                    showActivity={showActivity}
+                    showActivityDetails={showActivityDetails}
                     labels={labels}
                   />
                 )}

@@ -1,91 +1,71 @@
-import type { ChatMessage, ToolCall } from '@copilotz/chat-ui';
+import type {
+  AssistantActivityItem,
+  AssistantActivityStatus,
+  ChatMessage,
+  ToolCall,
+} from '@copilotz/chat-ui';
 
-export interface InternalChatMessage extends ChatMessage {
-  _activityReasoning?: string;
-  _activityReasoningStreaming?: boolean;
-  _activityToolCalls?: ToolCall[];
-}
+export interface InternalChatMessage extends ChatMessage {}
 
-type MessageActivity = NonNullable<ChatMessage['activity']>;
+const thinkingId = 'thinking';
+const answeringId = 'answering';
 
-const isToolCallActive = (toolCall: ToolCall): boolean => (
-  toolCall.status === 'pending' || toolCall.status === 'running'
-);
+const getItems = (message: InternalChatMessage): AssistantActivityItem[] =>
+  Array.isArray(message.activity?.items) ? message.activity.items : [];
+
+const setItems = <T extends InternalChatMessage>(
+  message: T,
+  items: AssistantActivityItem[],
+): T => ({
+  ...message,
+  activity: items.length > 0 ? { items } : undefined,
+});
+
+const toolStatusToActivityStatus = (status: ToolCall['status']): AssistantActivityStatus => {
+  if (status === 'failed') return 'failed';
+  if (status === 'completed') return 'complete';
+  return 'active';
+};
+
+const upsertItem = <T extends InternalChatMessage>(
+  message: T,
+  item: AssistantActivityItem,
+): T => {
+  const items = getItems(message);
+  const index = items.findIndex((current) => current.id === item.id);
+  if (index === -1) return setItems(message, [...items, item]);
+
+  const next = [...items];
+  next[index] = {
+    ...next[index],
+    ...item,
+    details: {
+      ...(next[index].details ?? {}),
+      ...(item.details ?? {}),
+    },
+  };
+  return setItems(message, next);
+};
+
+const completeItems = <T extends InternalChatMessage>(
+  message: T,
+  shouldComplete: (item: AssistantActivityItem) => boolean,
+): T => setItems(message, getItems(message).map((item) => (
+  item.status === 'active' && shouldComplete(item)
+    ? { ...item, status: 'complete', completedAt: Date.now() }
+    : item
+)));
 
 export const hasVisibleAssistantOutput = (message: InternalChatMessage): boolean => {
   if (message.role !== 'assistant') return false;
   if (typeof message.content === 'string' && message.content.trim().length > 0) return true;
   if (Array.isArray(message.attachments) && message.attachments.length > 0) return true;
-  if (Array.isArray(message._activityToolCalls) && message._activityToolCalls.length > 0) return true;
-  return false;
-};
-
-export const buildAssistantActivity = (
-  message: Pick<InternalChatMessage, 'content' | 'isStreaming' | '_activityReasoning' | '_activityReasoningStreaming' | '_activityToolCalls'>,
-): MessageActivity | undefined => {
-  const toolCalls = Array.isArray(message._activityToolCalls) ? message._activityToolCalls : [];
-  const hasReasoning = typeof message._activityReasoning === 'string' && message._activityReasoning.length > 0;
-  const hasToolCalls = toolCalls.length > 0;
-  const runningTools = toolCalls.filter(isToolCallActive);
-  const hasRunningTools = runningTools.length > 0;
-  const isStreaming = message.isStreaming === true;
-  const isReasoningStreaming = message._activityReasoningStreaming === true;
-  const hasContent = typeof message.content === 'string' && message.content.trim().length > 0;
-
-  if (!hasReasoning && !hasToolCalls && !isStreaming && !isReasoningStreaming) {
-    return undefined;
-  }
-
-  const isActive = isStreaming || isReasoningStreaming || hasRunningTools;
-  const summary = hasRunningTools
-    ? {
-        kind: 'using_tools' as const,
-        ...(runningTools.length === 1 ? { toolName: runningTools[0].name } : {}),
-        ...(runningTools.length > 1 ? { toolCount: runningTools.length } : {}),
-      }
-    : isStreaming && hasToolCalls && !hasContent
-      ? {
-          kind: 'using_tools' as const,
-          ...(toolCalls.length === 1 ? { toolName: toolCalls[0].name } : {}),
-          ...(toolCalls.length > 1 ? { toolCount: toolCalls.length } : {}),
-        }
-      : isReasoningStreaming || (!hasContent && hasReasoning)
-        ? { kind: 'thinking' as const }
-        : isStreaming && hasContent
-          ? { kind: 'preparing_answer' as const }
-          : isStreaming
-            ? { kind: 'working' as const }
-            : hasToolCalls
-              ? {
-                  kind: 'using_tools' as const,
-                  ...(toolCalls.length === 1 ? { toolName: toolCalls[0].name } : {}),
-                  ...(toolCalls.length > 1 ? { toolCount: toolCalls.length } : {}),
-                }
-              : { kind: 'thinking' as const };
-
-  return {
-    isActive,
-    ...(isActive ? {} : { isComplete: true }),
-    summary,
-    ...(hasReasoning ? { reasoning: message._activityReasoning } : {}),
-    ...(hasToolCalls ? { toolCalls } : {}),
-  };
-};
-
-export const syncAssistantActivity = <T extends InternalChatMessage>(message: T): T => {
-  if (message.role !== 'assistant') {
-    const { _activityReasoning, _activityReasoningStreaming, _activityToolCalls, ...rest } = message;
-    return rest as T;
-  }
-
-  return {
-    ...message,
-    activity: buildAssistantActivity(message),
-  };
+  return getItems(message).length > 0;
 };
 
 export const toPublicChatMessage = (message: InternalChatMessage): ChatMessage => {
-  const { _activityReasoning, _activityReasoningStreaming, _activityToolCalls, ...rest } = syncAssistantActivity(message);
+  if (message.role === 'assistant') return message;
+  const { activity, ...rest } = message;
   return rest;
 };
 
@@ -94,29 +74,35 @@ export const updateAssistantMessageToken = (
   params: {
     partial: string;
     isReasoning?: boolean;
-    agentIdentity?: { senderAgentId?: string; senderName?: string };
   },
 ): InternalChatMessage => {
   if (message.role !== 'assistant') return message;
-  const next = params.isReasoning
-    ? {
-        ...message,
-        ...params.agentIdentity,
-        _activityReasoning: params.partial,
-        _activityReasoningStreaming: true,
-        isStreaming: true,
-        isComplete: false,
-      }
-    : {
-        ...message,
-        ...params.agentIdentity,
-        content: params.partial,
-        _activityReasoningStreaming: false,
-        isStreaming: true,
-        isComplete: false,
-      };
 
-  return syncAssistantActivity(next);
+  if (params.isReasoning) {
+    return upsertItem({
+      ...message,
+      isStreaming: true,
+      isComplete: false,
+    }, {
+      id: thinkingId,
+      kind: 'thinking',
+      status: 'active',
+      startedAt: getItems(message).find((item) => item.id === thinkingId)?.startedAt ?? Date.now(),
+      details: { reasoning: params.partial },
+    });
+  }
+
+  return upsertItem(completeItems({
+    ...message,
+    content: params.partial,
+    isStreaming: true,
+    isComplete: false,
+  }, (item) => item.kind === 'thinking' || item.kind === 'tool'), {
+    id: answeringId,
+    kind: 'answering',
+    status: 'active',
+    startedAt: getItems(message).find((item) => item.id === answeringId)?.startedAt ?? Date.now(),
+  });
 };
 
 export const appendAssistantToolCall = (
@@ -124,14 +110,23 @@ export const appendAssistantToolCall = (
   toolCall: ToolCall,
 ): InternalChatMessage => {
   if (message.role !== 'assistant') return message;
-  return syncAssistantActivity({
+  const status = toolStatusToActivityStatus(toolCall.status);
+
+  return upsertItem({
     ...message,
-    _activityToolCalls: [
-      ...(Array.isArray(message._activityToolCalls) ? message._activityToolCalls : []),
-      toolCall,
-    ],
     isStreaming: true,
     isComplete: false,
+  }, {
+    id: toolCall.id,
+    kind: 'tool',
+    status,
+    toolName: toolCall.name,
+    startedAt: toolCall.startTime ?? Date.now(),
+    ...(status !== 'active' ? { completedAt: toolCall.endTime ?? Date.now() } : {}),
+    details: {
+      toolCall,
+      ...(toolCall.result !== undefined ? { result: toolCall.result } : {}),
+    },
   });
 };
 
@@ -140,22 +135,37 @@ export const applyAssistantToolResult = (
   update: Partial<ToolCall> & Pick<ToolCall, 'name' | 'status'> & { id?: string },
 ): InternalChatMessage => {
   if (message.role !== 'assistant') return message;
-  const toolCalls = Array.isArray(message._activityToolCalls) ? message._activityToolCalls : [];
-  const nextToolCalls = toolCalls.map((toolCall) => {
-    const matchesById = update.id && toolCall.id === update.id;
-    const matchesByName = !update.id && toolCall.name === update.name;
-    if (!matchesById && !matchesByName) return toolCall;
+  const items = getItems(message);
+  const index = items.findIndex((item) => (
+    item.kind === 'tool' &&
+    ((update.id && item.id === update.id) || (!update.id && item.toolName === update.name))
+  ));
+  if (index === -1) return message;
 
-    return {
-      ...toolCall,
-      ...update,
-    };
-  });
-
-  return syncAssistantActivity({
-    ...message,
-    _activityToolCalls: nextToolCalls,
-  });
+  const item = items[index];
+  const toolCall = item.details?.toolCall;
+  const nextToolCall = toolCall ? { ...toolCall, ...update } : {
+    id: update.id ?? item.id,
+    name: update.name,
+    arguments: {},
+    status: update.status,
+    ...(update.result !== undefined ? { result: update.result } : {}),
+    ...(update.endTime !== undefined ? { endTime: update.endTime } : {}),
+  };
+  const status = toolStatusToActivityStatus(update.status);
+  const next = [...items];
+  next[index] = {
+    ...item,
+    status,
+    toolName: update.name,
+    ...(status !== 'active' ? { completedAt: update.endTime ?? Date.now() } : {}),
+    details: {
+      ...(item.details ?? {}),
+      toolCall: nextToolCall,
+      ...(update.result !== undefined ? { result: update.result } : {}),
+    },
+  };
+  return setItems(message, next);
 };
 
 export const finalizeAssistantMessage = (
@@ -163,23 +173,22 @@ export const finalizeAssistantMessage = (
   finalAnswer?: string,
 ): InternalChatMessage => {
   if (message.role !== 'assistant') return message;
-  return syncAssistantActivity({
+  const completed = completeItems({
     ...message,
     ...(typeof finalAnswer === 'string' && finalAnswer.length > 0 ? { content: finalAnswer } : {}),
     isStreaming: false,
     isComplete: true,
-    _activityReasoningStreaming: false,
-  });
+  }, (item) => item.kind === 'thinking' || item.kind === 'answering');
+  return setItems(completed, getItems(completed).filter((item) => item.kind !== 'answering'));
 };
 
 export const closeAssistantMessage = (
   message: InternalChatMessage,
 ): InternalChatMessage => {
   if (message.role !== 'assistant') return message;
-  return syncAssistantActivity({
+  return completeItems({
     ...message,
     isStreaming: false,
     isComplete: true,
-    _activityReasoningStreaming: false,
-  });
+  }, () => true);
 };

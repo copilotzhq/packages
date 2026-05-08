@@ -329,9 +329,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="px-2 py-1 mt-4">
           {/* Expanded View: Input */}
           <div className="relative group-data-[collapsible=icon]:hidden">
-            <Search className="pointer-events-none absolute left-2 top-1/2 size-4 -translate-y-1/2 select-none opacity-50" />
+            <Search
+              aria-hidden="true"
+              className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 select-none opacity-50"
+            />
             <Input
-              className="pl-8 h-8 bg-sidebar-accent/50 border-sidebar-border focus-visible:ring-1 focus-visible:ring-sidebar-ring"
+              className="h-8 pl-3 pr-10 bg-sidebar-accent/50 border-sidebar-border focus-visible:ring-1 focus-visible:ring-sidebar-ring"
               placeholder={config.labels?.search || "Search..."}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}

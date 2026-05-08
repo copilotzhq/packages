@@ -94,26 +94,44 @@ export interface ToolCall {
   endTime?: number;
 }
 
-export type ActivityDisplayMode = "full" | "summary" | "hidden";
+export type AssistantActivityKind = "thinking" | "tool" | "answering";
+export type AssistantActivityStatus = "active" | "complete" | "failed";
 
-export type AssistantActivitySummaryKind =
-  | "thinking"
-  | "working"
-  | "using_tools"
-  | "preparing_answer";
-
-export interface AssistantActivitySummary {
-  kind: AssistantActivitySummaryKind;
+export interface AssistantActivityItem {
+  id: string;
+  kind: AssistantActivityKind;
+  status: AssistantActivityStatus;
   toolName?: string;
-  toolCount?: number;
+  startedAt?: number;
+  completedAt?: number;
+  details?: {
+    reasoning?: string;
+    toolCall?: ToolCall;
+    result?: any;
+    error?: string;
+  };
 }
 
-export interface AssistantActivityState {
-  isActive: boolean;
-  isComplete?: boolean;
-  summary: AssistantActivitySummary;
-  reasoning?: string;
-  toolCalls?: ToolCall[];
+export interface AssistantActivityBlock {
+  items: AssistantActivityItem[];
+}
+
+export interface ChatSender {
+  /** Copilotz sender type from the message domain. */
+  type: "user" | "agent" | "tool" | "system";
+  /** Conversational identity: user external id, agent id, or tool owner id. */
+  id: string;
+  /** Human-readable display label. */
+  name: string;
+  /** Backend participant/node id when known. Never used as display text. */
+  participantId?: string;
+  /** Original external id when distinct from id. */
+  externalId?: string;
+  /** Agent config id for agent/tool senders when known. */
+  agentId?: string;
+  avatarUrl?: string;
+  /** Custom color for participant display. */
+  color?: string;
 }
 
 // Enhanced Chat Message
@@ -130,11 +148,9 @@ export interface ChatMessage {
   editedAt?: number;
   metadata?: Record<string, any>;
   /** Unified assistant activity state for live rendering and history hydration */
-  activity?: AssistantActivityState;
-  /** Agent/sender identity for multi-agent conversations */
-  senderName?: string;
-  /** Agent ID of the sender (for multi-agent conversations) */
-  senderAgentId?: string;
+  activity?: AssistantActivityBlock;
+  /** Canonical frontend sender identity. Prefer this over legacy sender fields. */
+  sender?: ChatSender;
 }
 
 // Thread Management
@@ -236,12 +252,13 @@ export interface ChatConfig {
     footerLabel?: string;
     daysAgo?: string;
     inputHelpText?: string;
-    activityThinking?: string;
-    activityWorking?: string;
-    activityUsingTools?: string;
-    activityPreparingAnswer?: string;
-    activityToolRunning?: string;
-    activityMultipleTools?: string;
+    activityThinkingActive?: string;
+    activityThinkingComplete?: string;
+    activityToolActive?: string;
+    activityToolComplete?: string;
+    activityToolFailed?: string;
+    activityAnsweringActive?: string;
+    activityAnsweringComplete?: string;
     activityShowDetails?: string;
     activityHideDetails?: string;
     defaultThreadName?: string;
@@ -257,7 +274,8 @@ export interface ChatConfig {
     enableMessageEditing?: boolean;
     enableMessageCopy?: boolean;
     enableRegeneration?: boolean;
-    activityDisplay?: ActivityDisplayMode;
+    showActivity?: boolean;
+    showActivityDetails?: boolean;
     maxAttachments?: number;
     maxFileSize?: number; // in bytes
   };

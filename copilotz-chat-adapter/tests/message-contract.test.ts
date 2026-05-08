@@ -1,0 +1,184 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  convertServerMessage,
+  prepareHydratedMessages,
+  shouldRenderHydratedMessage,
+} from '../src/messageContract.ts';
+import {
+  extractLiveToolCall,
+  extractLiveToolResultUpdate,
+  mergePersistedToolResults,
+} from '../src/toolActivity.ts';
+import type { RestMessage } from '../src/copilotzService.ts';
+
+const agents = [
+  { id: 'north', name: 'North', color: '#3b82f6' },
+];
+
+test('hydrated message contract resolves sender, activity, and content from Copilotz metadata', () => {
+  const message = convertServerMessage({
+    id: 'msg-agent',
+    threadId: 'thread-1',
+    senderType: 'agent',
+    senderId: '01KQV7M84RVH3FZ82MT665XPBB',
+    senderUserId: '01KQV7M84RVH3FZ82MT665XPBB',
+    content: 'Ready.',
+    reasoning: 'Checking direction.',
+    metadata: {
+      senderExternalId: 'north',
+      senderDisplayName: 'North',
+      senderParticipantId: '01KQV7M84RVH3FZ82MT665XPBB',
+    },
+    createdAt: '2026-05-05T14:36:48.959Z',
+  }, { senderOptions: { agents } });
+
+  assert.equal(message.role, 'assistant');
+  assert.equal(message.content, 'Ready.');
+  assert.deepEqual(message.sender, {
+    type: 'agent',
+    id: 'north',
+    name: 'North',
+    agentId: 'north',
+    color: '#3b82f6',
+    participantId: '01KQV7M84RVH3FZ82MT665XPBB',
+  });
+  assert.deepEqual(message.activity?.items[0], {
+    id: 'msg-agent:thinking',
+    kind: 'thinking',
+    status: 'complete',
+    completedAt: new Date('2026-05-05T14:36:48.959Z').getTime(),
+    details: { reasoning: 'Checking direction.' },
+  });
+});
+
+test('internal hydrated messages are filtered out by contract', () => {
+  assert.equal(shouldRenderHydratedMessage({
+    id: 'internal',
+    threadId: 'thread-1',
+    senderType: 'agent',
+    content: 'hidden',
+    metadata: { visibility: 'internal' },
+  }), false);
+});
+
+test('hydrated message contract throws instead of normalizing malformed sender metadata', () => {
+  assert.throws(() => convertServerMessage({
+    id: 'msg-agent',
+    threadId: 'thread-1',
+    senderType: 'agent',
+    senderId: '01KQV7M84RVH3FZ82MT665XPBB',
+    senderUserId: '01KQV7M84RVH3FZ82MT665XPBB',
+    content: 'Ready.',
+    metadata: {
+      senderParticipantId: '01KQV7M84RVH3FZ82MT665XPBB',
+    },
+  }), /senderExternalId/);
+});
+
+test('persisted tool call and tool result hydrate into one completed activity', async () => {
+  const toolCall: RestMessage = {
+    id: 'tool-call-message',
+    threadId: 'thread-1',
+    senderType: 'agent',
+    senderId: '01KQV7M84RVH3FZ82MT665XPBB',
+    senderUserId: '01KQV7M84RVH3FZ82MT665XPBB',
+    content: '',
+    toolCalls: [{
+      id: 'tool-1',
+      args: { action: 'list_cards' },
+      tool: { id: 'kanban' },
+    }],
+    metadata: {
+      senderExternalId: 'north',
+      senderDisplayName: 'North',
+      senderParticipantId: '01KQV7M84RVH3FZ82MT665XPBB',
+    },
+    createdAt: '2026-05-05T14:36:25.267Z',
+  };
+  const toolResult: RestMessage = {
+    id: 'tool-result-message',
+    threadId: 'thread-1',
+    senderType: 'tool',
+    senderId: '01KQV7M84RVH3FZ82MT665XPBB',
+    senderUserId: '01KQV7M84RVH3FZ82MT665XPBB',
+    content: '{"cards":[]}',
+    metadata: {
+      senderExternalId: 'north',
+      senderDisplayName: 'North',
+      senderParticipantId: '01KQV7M84RVH3FZ82MT665XPBB',
+      toolCalls: [{
+        id: 'tool-1',
+        args: '{"action":"list_cards"}',
+        tool: { id: 'kanban', name: 'kanban' },
+        output: { cards: [] },
+        status: 'completed',
+      }],
+    },
+    createdAt: '2026-05-05T14:36:25.308Z',
+  };
+
+  const { viewMessages, toolResultUpdates } = await prepareHydratedMessages(
+    [toolCall, toolResult],
+    { senderOptions: { agents }, createId: () => 'generated-id' },
+  );
+
+  assert.equal(viewMessages.length, 1);
+  assert.equal(toolResultUpdates.length, 1);
+  assert.equal(viewMessages[0].activity?.items[0].kind, 'tool');
+  const mergedMessages = mergePersistedToolResults(viewMessages, toolResultUpdates);
+  assert.deepEqual(mergedMessages[0].activity?.items[0].details?.toolCall, {
+    id: 'tool-1',
+    name: 'kanban',
+    arguments: { action: 'list_cards' },
+    status: 'completed',
+    result: { cards: [] },
+    endTime: new Date('2026-05-05T14:36:25.308Z').getTime(),
+  });
+  assert.deepEqual(toolResultUpdates[0], {
+    id: 'tool-1',
+    name: 'kanban',
+    status: 'completed',
+    result: { cards: [] },
+    endTime: new Date('2026-05-05T14:36:25.308Z').getTime(),
+  });
+});
+
+test('live tool events parse to the same tool identity as persisted history', () => {
+  const liveCall = extractLiveToolCall({
+    toolCall: {
+      id: 'tool-1',
+      args: { action: 'list_cards' },
+      tool: { id: 'kanban' },
+    },
+  });
+  const liveResult = extractLiveToolResultUpdate({
+    toolCallId: 'tool-1',
+    tool: { id: 'kanban', name: 'kanban' },
+    output: { cards: [] },
+    status: 'completed',
+  }, () => 123);
+
+  assert.deepEqual(liveCall, {
+    id: 'tool-1',
+    name: 'kanban',
+    arguments: { action: 'list_cards' },
+    status: 'running',
+  });
+  assert.deepEqual(liveResult, {
+    id: 'tool-1',
+    name: 'kanban',
+    status: 'completed',
+    result: { cards: [] },
+    endTime: 123,
+  });
+});
+
+test('tool contract throws instead of defaulting malformed statuses', () => {
+  assert.throws(() => extractLiveToolResultUpdate({
+    toolCallId: 'tool-1',
+    tool: { id: 'kanban', name: 'kanban' },
+    output: { cards: [] },
+    status: 'mystery',
+  }, () => 123), /status/);
+});

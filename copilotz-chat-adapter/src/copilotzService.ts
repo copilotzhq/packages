@@ -68,7 +68,7 @@ type AgentApiItem = {
   description?: string | null;
 };
 
-type RestMessage = {
+export type RestMessage = {
   id: string;
   threadId: string;
   senderId?: string | null;
@@ -615,10 +615,18 @@ export async function runCopilotzStream(
   let buffer = "";
   let aggregatedText = "";
   let aggregatedReasoning = "";
+  let lastCompletedText = "";
   let lastTokenWasReasoning = false;
   let hadNonReasoningContent = false;
   const collectedMessages: any[] = [];
   let collectedMedia: Record<string, string> | null = null;
+
+  const resetTokenAggregation = () => {
+    aggregatedText = "";
+    aggregatedReasoning = "";
+    lastTokenWasReasoning = false;
+    hadNonReasoningContent = false;
+  };
 
   const processEvent = (eventChunk: string) => {
     if (!eventChunk.trim()) return;
@@ -670,6 +678,12 @@ export async function runCopilotzStream(
         if (chunk || isComplete) {
           const tokenText = isReasoning ? aggregatedReasoning : aggregatedText;
           onToken?.(tokenText, isComplete, payload, { isReasoning });
+          if (isComplete) {
+            if (!isReasoning && tokenText) {
+              lastCompletedText = tokenText;
+            }
+            resetTokenAggregation();
+          }
         }
         break;
       }
@@ -688,8 +702,16 @@ export async function runCopilotzStream(
       }
       case "TOOL_RESULT":
       case "LLM_RESULT": {
-        hadNonReasoningContent = true;
-        lastTokenWasReasoning = false;
+        const resultAnswer =
+          typeof payload?.payload?.answer === "string"
+            ? payload.payload.answer
+            : typeof payload?.answer === "string"
+              ? payload.answer
+              : undefined;
+        if (resultAnswer) {
+          lastCompletedText = resultAnswer;
+        }
+        resetTokenAggregation();
         onMessageEvent?.(payload);
         break;
       }
@@ -747,7 +769,7 @@ export async function runCopilotzStream(
   }
 
   return {
-    text: aggregatedText,
+    text: lastCompletedText || aggregatedText,
     messages: collectedMessages,
     media: collectedMedia,
   };

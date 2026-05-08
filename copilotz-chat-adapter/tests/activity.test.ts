@@ -3,28 +3,11 @@ import assert from 'node:assert/strict';
 import {
   appendAssistantToolCall,
   applyAssistantToolResult,
-  buildAssistantActivity,
   finalizeAssistantMessage,
-  syncAssistantActivity,
   updateAssistantMessageToken,
 } from '../src/activity.ts';
 
-test('buildAssistantActivity derives thinking activity from reasoning history', () => {
-  const activity = buildAssistantActivity({
-    content: '',
-    _activityReasoning: 'Reasoning trace',
-    _activityReasoningStreaming: false,
-    isStreaming: false,
-    _activityToolCalls: undefined,
-  });
-
-  assert.ok(activity);
-  assert.equal(activity.summary.kind, 'thinking');
-  assert.equal(activity.isActive, false);
-  assert.equal(activity.isComplete, true);
-});
-
-test('updateAssistantMessageToken marks reasoning as active', () => {
+test('reasoning tokens create an active thinking timeline item', () => {
   const next = updateAssistantMessageToken({
     id: 'm1',
     role: 'assistant',
@@ -35,22 +18,39 @@ test('updateAssistantMessageToken marks reasoning as active', () => {
     isReasoning: true,
   });
 
-  assert.equal(next._activityReasoning, 'Analyzing');
-  assert.equal(next.activity?.summary.kind, 'thinking');
-  assert.equal(next.activity?.isActive, true);
+  assert.equal(next.activity?.items[0].kind, 'thinking');
+  assert.equal(next.activity?.items[0].status, 'active');
+  assert.equal(next.activity?.items[0].details?.reasoning, 'Analyzing');
 });
 
-test('tool call then tool result resolves to using_tools summary', () => {
-  const base = syncAssistantActivity({
+test('answer tokens complete thinking and create an active answering item', () => {
+  const thinking = updateAssistantMessageToken({
+    id: 'm1',
+    role: 'assistant',
+    content: '',
+    timestamp: Date.now(),
+  }, {
+    partial: 'Thinking',
+    isReasoning: true,
+  });
+  const answering = updateAssistantMessageToken(thinking, {
+    partial: 'Done',
+  });
+
+  assert.equal(answering.activity?.items[0].status, 'complete');
+  assert.equal(answering.activity?.items[1].kind, 'answering');
+  assert.equal(answering.activity?.items[1].status, 'active');
+});
+
+test('tool call then tool result updates one timeline item', () => {
+  const withTool = appendAssistantToolCall({
     id: 'm1',
     role: 'assistant',
     content: '',
     timestamp: Date.now(),
     isStreaming: true,
     isComplete: false,
-  });
-
-  const withTool = appendAssistantToolCall(base, {
+  }, {
     id: 'tool-1',
     name: 'instagramProfile',
     arguments: { username: 'gil' },
@@ -58,8 +58,9 @@ test('tool call then tool result resolves to using_tools summary', () => {
     startTime: 1,
   });
 
-  assert.equal(withTool.activity?.summary.kind, 'using_tools');
-  assert.equal(withTool.activity?.summary.toolName, 'instagramProfile');
+  assert.equal(withTool.activity?.items[0].kind, 'tool');
+  assert.equal(withTool.activity?.items[0].status, 'active');
+  assert.equal(withTool.activity?.items[0].toolName, 'instagramProfile');
 
   const resolved = applyAssistantToolResult(withTool, {
     id: 'tool-1',
@@ -69,57 +70,27 @@ test('tool call then tool result resolves to using_tools summary', () => {
     endTime: 2,
   });
 
-  assert.equal(resolved.activity?.toolCalls?.[0]?.status, 'completed');
-  assert.equal(resolved.activity?.summary.kind, 'using_tools');
-  assert.equal(resolved.activity?.isActive, true);
+  assert.equal(resolved.activity?.items.length, 1);
+  assert.equal(resolved.activity?.items[0].status, 'complete');
+  assert.deepEqual(resolved.activity?.items[0].details?.result, { ok: true });
 });
 
-test('persisted completed tool result does not reactivate assistant history', () => {
-  const persisted = syncAssistantActivity({
-    id: 'm-history',
-    role: 'assistant',
-    content: 'Saved.',
-    timestamp: Date.now(),
-    isStreaming: false,
-    isComplete: true,
-    _activityReasoning: 'Reasoning trace',
-    _activityToolCalls: [{
-      id: 'tool-1',
-      name: 'saveUserContext',
-      arguments: { origin: { nonNegotiableValue: 'x' } },
-      status: 'completed',
-    }],
-  });
-
-  const resolved = applyAssistantToolResult(persisted, {
-    id: 'tool-1',
-    name: 'saveUserContext',
-    status: 'completed',
-    result: { success: true },
-  });
-
-  assert.equal(resolved.isStreaming, false);
-  assert.equal(resolved.isComplete, true);
-  assert.equal(resolved.activity?.isActive, false);
-  assert.equal(resolved.activity?.isComplete, true);
-});
-
-test('finalizeAssistantMessage moves active turn to preparing/complete answer state', () => {
-  const streaming = syncAssistantActivity({
+test('finalizeAssistantMessage removes transient answering activity', () => {
+  const answering = updateAssistantMessageToken({
     id: 'm1',
     role: 'assistant',
     content: '',
     timestamp: Date.now(),
     isStreaming: true,
     isComplete: false,
-    _activityReasoning: 'Thinking',
-    _activityReasoningStreaming: true,
+  }, {
+    partial: 'Done',
   });
 
-  const finalized = finalizeAssistantMessage(streaming, 'Done');
+  const finalized = finalizeAssistantMessage(answering, 'Done');
 
   assert.equal(finalized.content, 'Done');
   assert.equal(finalized.isStreaming, false);
-  assert.equal(finalized.activity?.isActive, false);
-  assert.equal(finalized.activity?.isComplete, true);
+  assert.equal(finalized.isComplete, true);
+  assert.equal(finalized.activity, undefined);
 });

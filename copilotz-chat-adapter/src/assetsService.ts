@@ -1,5 +1,15 @@
 // Minimal API client for Copilotz assets
 
+class ContractViolation extends Error { name = 'ContractViolation'; }
+const expectRecord = (value: unknown, path: string): Record<string, unknown> => {
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) return value as Record<string, unknown>;
+  throw new ContractViolation(`${path} must be an object`);
+};
+const expectString = (value: unknown, path: string): string => {
+  if (typeof value === 'string' && value.trim().length > 0) return value;
+  throw new ContractViolation(`${path} must be a non-empty string`);
+};
+
 type FetchAssetResult = {
   assetId: string;
   ref: string;
@@ -32,12 +42,19 @@ export async function getAssetDataUrl(refOrId: string): Promise<{ dataUrl: strin
     throw new Error(text || `Failed to fetch asset ${refOrId}`);
   }
   const body = (await res.json()) as { data?: FetchAssetResult } | FetchAssetResult;
-  // Unified response envelope: `{ data }`. Tolerate legacy top-level shape.
-  const data = (body as { data?: FetchAssetResult })?.data ?? (body as FetchAssetResult);
-  if (!data?.dataUrl) {
-    throw new Error(data?.error || `Asset ${refOrId} has no dataUrl`);
+  const envelope = expectRecord(body, 'asset response');
+  const data = expectRecord(envelope.data, 'asset response.data') as FetchAssetResult;
+  if (typeof data.error === 'string' && data.error.length > 0) {
+    throw new Error(data.error);
   }
-  return { dataUrl: data.dataUrl, mime: data.mime, assetId: data.assetId };
+  if (typeof data.dataUrl !== 'string' || data.dataUrl.length === 0) {
+    throw new ContractViolation(`asset response.data.dataUrl is required for ${refOrId}`);
+  }
+  return {
+    dataUrl: data.dataUrl,
+    mime: typeof data.mime === 'string' ? data.mime : undefined,
+    assetId: expectString(data.assetId, 'asset response.data.assetId'),
+  };
 }
 
 // Resolve assets in messages by replacing metadata.attachments[].assetRef with dataUrl
@@ -57,35 +74,41 @@ export async function resolveAssetsInMessages<T extends WithMetadata>(messages: 
   };
 
   return Promise.all(messages.map(async (msg) => {
-    const meta = (msg.metadata ?? undefined) as Record<string, unknown> | undefined;
-    const attachments = Array.isArray(meta?.attachments)
-      ? (meta!.attachments as Array<Record<string, unknown>>)
-      : undefined;
+    const meta = msg.metadata === null || msg.metadata === undefined
+      ? undefined
+      : expectRecord(msg.metadata, 'message.metadata');
+    const attachments = meta?.attachments === undefined
+      ? undefined
+      : Array.isArray(meta.attachments)
+        ? meta.attachments.map((att, index) =>
+          expectRecord(att, `message.metadata.attachments[${index}]`)
+        )
+        : (() => {
+          throw new ContractViolation('message.metadata.attachments must be an array');
+        })();
 
     if (!attachments || attachments.length === 0) {
       return msg;
     }
 
-    const newAttachments = await Promise.all(attachments.map(async (att) => {
-      const assetRef = typeof att?.assetRef === 'string' ? (att.assetRef as string) : undefined;
+    const newAttachments = await Promise.all(attachments.map(async (att, index) => {
+      const assetRef = typeof att.assetRef === 'string' ? att.assetRef : undefined;
       if (!assetRef) return att;
 
-      try {
-        const { dataUrl, mime } = await resolveAssetRef(assetRef);
-        const kind = typeof att.kind === 'string' ? (att.kind as string) : 'image';
-        return {
-          kind,
-          dataUrl,
-          mimeType: typeof att.mimeType === 'string' ? att.mimeType : (mime ?? undefined),
-        } as Record<string, unknown>;
-      } catch {
-        // If fetching fails, keep original so UI can ignore gracefully
-        return att;
-      }
+      const { dataUrl, mime } = await resolveAssetRef(assetRef);
+      const kind = expectString(att.kind, `message.metadata.attachments[${index}].kind`);
+      const mimeType = typeof att.mimeType === 'string'
+        ? att.mimeType
+        : expectString(mime, `asset ${assetRef}.mime`);
+      return {
+        ...att,
+        kind,
+        dataUrl,
+        mimeType,
+      } as Record<string, unknown>;
     }));
 
-    const newMeta = { ...(meta ?? {}), attachments: newAttachments } as Record<string, unknown>;
+    const newMeta = { ...meta, attachments: newAttachments } as Record<string, unknown>;
     return { ...msg, metadata: newMeta };
   }));
 }
-

@@ -153,6 +153,10 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     loadOlderMessages,
   } = useCopilotz({
     userId,
+    userName,
+    userAvatar,
+    assistantName: userConfig?.branding?.title,
+    agentOptions,
     initialContext,
     bootstrap,
     defaultThreadName: userConfig?.labels?.defaultThreadName,
