@@ -5,6 +5,8 @@ import type {
 } from "react-markdown";
 
 // Enhanced Media Attachments
+export type MediaAttachmentKind = "image" | "audio" | "video" | "file";
+
 export type MediaAttachment =
   | {
     kind: "image";
@@ -29,6 +31,13 @@ export type MediaAttachment =
     fileName?: string;
     size?: number;
     poster?: string;
+  }
+  | {
+    kind: "file";
+    dataUrl: string;
+    mimeType: string;
+    fileName?: string;
+    size?: number;
   };
 
 export type AudioAttachment = Extract<MediaAttachment, { kind: "audio" }>;
@@ -278,6 +287,7 @@ export interface ChatConfig {
     showActivityDetails?: boolean;
     maxAttachments?: number;
     maxFileSize?: number; // in bytes
+    acceptedFileTypes?: string[];
   };
   ui?: {
     theme?: "light" | "dark" | "auto";

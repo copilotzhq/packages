@@ -544,7 +544,9 @@ export const ChatUI: React.FC<ChatV2Props> = ({
         {/* Hero section */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 mb-4 shadow-sm">
-            <Sparkles className="w-7 h-7 text-primary" />
+            {config.branding.avatar ?? (
+              <Sparkles className="w-7 h-7 text-primary" />
+            )}
           </div>
           <h2 className="text-xl font-semibold mb-2">
             {config.branding.title}
@@ -886,6 +888,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                         .enableAudioRecording}
                       maxAttachments={config.features.maxAttachments}
                       maxFileSize={config.features.maxFileSize}
+                      acceptedFileTypes={config.features.acceptedFileTypes}
                       config={config}
                       mentionAgents={participantIds && participantIds.length > 0
                         ? agentOptions.filter((a) =>

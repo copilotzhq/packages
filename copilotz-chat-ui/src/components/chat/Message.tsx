@@ -7,7 +7,16 @@ import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { Textarea } from '../ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
-import { createObjectUrlFromDataUrl } from '../../lib/utils';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '../ui/dialog';
+import { createObjectUrlFromDataUrl, formatFileSize } from '../../lib/utils';
 import { AssistantActivity } from './AssistantActivity';
 import { MessageSenderAvatar, resolveMessageSenderDisplay } from './MessageSender';
 import {
@@ -16,6 +25,13 @@ import {
   RotateCcw,
   Check,
   X,
+  Download,
+  File,
+  FileArchive,
+  FileAudio,
+  FileImage,
+  FileText,
+  FileVideo,
 } from 'lucide-react';
 
 
@@ -234,6 +250,126 @@ const StreamingText: React.FC<{
   );
 });
 
+const getAttachmentLabel = (attachment: MediaAttachment) =>
+  attachment.fileName || attachment.mimeType || 'Attachment';
+
+const getAttachmentIcon = (attachment: MediaAttachment) => {
+  if (attachment.kind === 'image') return FileImage;
+  if (attachment.kind === 'audio') return FileAudio;
+  if (attachment.kind === 'video') return FileVideo;
+
+  const value = `${attachment.fileName || ''} ${attachment.mimeType || ''}`.toLowerCase();
+  if (value.includes('zip') || value.includes('gzip') || value.includes('tar') || value.includes('archive')) {
+    return FileArchive;
+  }
+  if (value.includes('json') || value.includes('text') || value.includes('markdown') || value.includes('csv')) {
+    return FileText;
+  }
+  return File;
+};
+
+const AttachmentDownloadButton: React.FC<{ attachment: MediaAttachment }> = ({ attachment }) => (
+  <Button asChild size="sm">
+    <a href={attachment.dataUrl} download={attachment.fileName || 'attachment'}>
+      <Download className="h-4 w-4" />
+      Download
+    </a>
+  </Button>
+);
+
+const AttachmentMetadata: React.FC<{ attachment: MediaAttachment }> = ({ attachment }) => (
+  <dl className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
+    <dt className="text-muted-foreground">Type</dt>
+    <dd className="min-w-0 truncate">{attachment.mimeType || 'application/octet-stream'}</dd>
+    {attachment.fileName && (
+      <>
+        <dt className="text-muted-foreground">Name</dt>
+        <dd className="min-w-0 truncate">{attachment.fileName}</dd>
+      </>
+    )}
+    {typeof attachment.size === 'number' && (
+      <>
+        <dt className="text-muted-foreground">Size</dt>
+        <dd>{formatFileSize(attachment.size)}</dd>
+      </>
+    )}
+  </dl>
+);
+
+const FileAttachmentCard: React.FC<{ attachment: MediaAttachment; compact?: boolean }> = ({ attachment, compact = false }) => {
+  const Icon = getAttachmentIcon(attachment);
+  const size = formatFileSize(attachment.size);
+
+  return (
+    <div className={`flex w-full min-w-0 max-w-md items-center gap-3 rounded-lg border bg-muted/20 text-left ${compact ? 'p-2' : 'p-3'}`}>
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-muted">
+        <Icon className="h-5 w-5 text-foreground" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium">{getAttachmentLabel(attachment)}</p>
+        <p className="truncate text-xs text-muted-foreground">
+          {[attachment.mimeType || 'File', size].filter(Boolean).join(' · ')}
+        </p>
+      </div>
+    </div>
+  );
+};
+
+const AttachmentDialog: React.FC<{
+  attachment: MediaAttachment;
+  children: React.ReactNode;
+}> = ({ attachment, children }) => {
+  const label = getAttachmentLabel(attachment);
+  const Icon = getAttachmentIcon(attachment);
+
+  return (
+    <Dialog>
+      <DialogTrigger asChild>{children}</DialogTrigger>
+      <DialogContent className="w-[min(calc(100vw-2rem),48rem)] max-w-[calc(100vw-2rem)] overflow-hidden">
+        <DialogHeader className="min-w-0 pr-8">
+          <DialogTitle className="min-w-0 truncate">{label}</DialogTitle>
+          <DialogDescription className="min-w-0 truncate">Attachment details and download options.</DialogDescription>
+        </DialogHeader>
+        <div className="min-w-0 max-w-full space-y-4 overflow-hidden">
+          {attachment.kind === 'image' ? (
+            <div className="max-h-[65vh] min-w-0 overflow-auto rounded-lg border bg-muted/20">
+              <img
+                src={attachment.dataUrl}
+                alt={label}
+                className="mx-auto h-auto max-h-[65vh] w-auto max-w-full object-contain"
+              />
+            </div>
+          ) : attachment.kind === 'video' ? (
+            <div className="min-w-0 rounded-lg border bg-muted/20">
+              <video
+                src={attachment.dataUrl}
+                poster={attachment.poster}
+                controls
+                className="max-h-[65vh] w-full rounded-lg"
+              />
+            </div>
+          ) : attachment.kind === 'audio' ? (
+            <audio className="w-full" preload="metadata" controls>
+              <source src={attachment.dataUrl} type={attachment.mimeType} />
+            </audio>
+          ) : (
+            <div className="flex min-w-0 flex-col items-center gap-3 rounded-lg border bg-muted/20 p-8 text-center">
+              <div className="flex h-16 w-16 items-center justify-center rounded-lg bg-muted">
+                <Icon className="h-8 w-8 text-foreground" />
+              </div>
+              <p className="w-full min-w-0 truncate text-sm font-medium">{label}</p>
+            </div>
+          )}
+          <AttachmentMetadata attachment={attachment} />
+        </div>
+        <DialogFooter className="min-w-0">
+          <AttachmentDownloadButton attachment={attachment} />
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
 // Media attachment renderer - memoized to prevent unnecessary re-renders
 const MediaRenderer: React.FC<{ attachment: MediaAttachment }> = memo(function MediaRenderer({ attachment }) {
   const [audioPlaybackSrc, setAudioPlaybackSrc] = useState(attachment.dataUrl);
@@ -267,49 +403,75 @@ const MediaRenderer: React.FC<{ attachment: MediaAttachment }> = memo(function M
   switch (attachment.kind) {
     case 'image':
       return (
-        <div className="relative rounded-lg overflow-hidden border bg-muted/20 max-w-md">
-          <img
-            src={attachment.dataUrl}
-            alt={attachment.fileName || 'Attachment'}
-            className="w-full h-auto object-cover"
-            loading="lazy"
-          />
-          {attachment.fileName && (
-            <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-xs p-2">
-              {attachment.fileName}
+        <AttachmentDialog attachment={attachment}>
+          <button type="button" className="block max-w-md text-left">
+            <div className="relative overflow-hidden rounded-lg border bg-muted/20">
+              <img
+                src={attachment.dataUrl}
+                alt={attachment.fileName || 'Attachment'}
+                className="h-auto w-full object-cover"
+                loading="lazy"
+              />
+              {attachment.fileName && (
+                <div className="absolute bottom-0 left-0 right-0 bg-black/50 p-2 text-xs text-white">
+                  {attachment.fileName}
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </button>
+        </AttachmentDialog>
       );
 
     case 'audio':
       return (
-            <div className="flex w-full max-w-md py-0 min-w-64 items-center gap-3">
-                <audio
-                  className="w-full mt-2"
-                  preload="metadata"
-                  controls
-                >
-                  <source src={audioPlaybackSrc} type={attachment.mimeType} />
-                </audio>
-            </div>
+        <div className="flex w-full max-w-md min-w-64 items-center gap-2 py-0">
+          <audio
+            className="mt-2 w-full"
+            preload="metadata"
+            controls
+          >
+            <source src={audioPlaybackSrc} type={attachment.mimeType} />
+          </audio>
+          <AttachmentDialog attachment={attachment}>
+            <Button type="button" variant="outline" size="icon" className="mt-2 shrink-0">
+              <FileAudio className="h-4 w-4" />
+            </Button>
+          </AttachmentDialog>
+        </div>
       );
 
     case 'video':
       return (
-        <div className="relative rounded-lg overflow-hidden border bg-muted/20 max-w-lg">
-          <video
-            src={attachment.dataUrl}
-            poster={attachment.poster}
-            controls
-            className="w-full h-auto"
-          />
-          {attachment.fileName && (
-            <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-xs p-2">
-              {attachment.fileName}
+        <AttachmentDialog attachment={attachment}>
+          <button type="button" className="block max-w-lg text-left">
+            <div className="relative overflow-hidden rounded-lg border bg-muted/20">
+              <video
+                src={attachment.dataUrl}
+                poster={attachment.poster}
+                className="h-auto w-full"
+                muted
+                preload="metadata"
+              />
+              <div className="absolute inset-0 flex items-center justify-center bg-black/10">
+                <FileVideo className="h-8 w-8 rounded-full bg-black/50 p-1.5 text-white" />
+              </div>
+              {attachment.fileName && (
+                <div className="absolute bottom-0 left-0 right-0 bg-black/50 p-2 text-xs text-white">
+                  {attachment.fileName}
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </button>
+        </AttachmentDialog>
+      );
+
+    case 'file':
+      return (
+        <AttachmentDialog attachment={attachment}>
+          <button type="button" className="block w-full max-w-md text-left">
+            <FileAttachmentCard attachment={attachment} />
+          </button>
+        </AttachmentDialog>
       );
 
     default:

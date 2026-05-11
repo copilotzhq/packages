@@ -1,3 +1,4 @@
+import { getAttachmentKindFromMimeType, getMimeTypeFromDataUrl } from '@copilotz/chat-ui';
 import type { AssistantActivityItem, MediaAttachment, ToolCall } from '@copilotz/chat-ui';
 import type { InternalChatMessage } from './activity.ts';
 import { resolveAssetsInMessages } from './assetsService.ts';
@@ -7,7 +8,7 @@ import {
   expectString,
   expectStringValue,
 } from './contract.ts';
-import type { RestMessage } from './copilotzService.ts';
+import type { RequestHeadersProvider, RestMessage } from './copilotzService.ts';
 import { resolveHydratedMessageSender, type SenderResolutionOptions } from './senders.ts';
 import {
   extractToolCallsFromServerMessage,
@@ -25,6 +26,7 @@ type MessageContractOptions = {
   createId?: () => string;
   now?: () => number;
   onToolOutput?: (output: Record<string, unknown>) => void;
+  getRequestHeaders?: RequestHeadersProvider;
 };
 
 export const isInternalMessageMetadata = (
@@ -58,22 +60,30 @@ const extractAttachments = (
   return metadata.attachments.map((value, index) => {
     const path = `message.metadata.attachments[${index}]`;
     const att = expectRecord(value, path);
+    const dataUrl = expectString(att.dataUrl, `${path}.dataUrl`);
+    const mimeType = typeof att.mimeType === 'string' && att.mimeType.trim().length > 0
+      ? att.mimeType
+      : getMimeTypeFromDataUrl(dataUrl) || 'application/octet-stream';
+    const inferredKind = getAttachmentKindFromMimeType(mimeType);
+    const normalizedKind = inferredKind;
     const base = {
-      kind: expectString(att.kind, `${path}.kind`),
-      dataUrl: expectString(att.dataUrl, `${path}.dataUrl`),
-      mimeType: expectString(att.mimeType, `${path}.mimeType`),
+      kind: normalizedKind,
+      dataUrl,
+      mimeType,
+      ...(typeof att.fileName === 'string' ? { fileName: att.fileName } : {}),
+      ...(att.size !== undefined ? { size: expectNumber(att.size, `${path}.size`) } : {}),
     };
-    if (base.kind === 'image') return base as MediaAttachment;
-    if (base.kind === 'audio') return {
+    if (normalizedKind === 'image') return base as MediaAttachment;
+    if (normalizedKind === 'audio') return {
       ...base,
       ...(att.durationMs !== undefined ? { durationMs: expectNumber(att.durationMs, `${path}.durationMs`) } : {}),
     } as MediaAttachment;
-    if (base.kind === 'video') return {
+    if (normalizedKind === 'video') return {
       ...base,
       ...(att.durationMs !== undefined ? { durationMs: expectNumber(att.durationMs, `${path}.durationMs`) } : {}),
       ...(att.poster !== undefined ? { poster: expectString(att.poster, `${path}.poster`) } : {}),
     } as MediaAttachment;
-    throw new ContractViolation(`${path}.kind must be image, audio, or video`);
+    return base as MediaAttachment;
   });
 };
 
@@ -180,7 +190,10 @@ export const prepareHydratedMessages = async (
   options: MessageContractOptions = {},
 ): Promise<HydratedMessageBatch> => {
   rawMessages.forEach(assertRestMessageContract);
-  const resolvedMessages = await resolveAssetsInMessages(rawMessages);
+  const resolvedMessages = await resolveAssetsInMessages(
+    rawMessages,
+    options.getRequestHeaders,
+  );
 
   resolvedMessages.forEach((msg) => {
     if (msg.senderType === 'tool') {

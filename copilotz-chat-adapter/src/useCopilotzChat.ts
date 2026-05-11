@@ -7,7 +7,16 @@ import {
   updateThread as updateThreadApi,
   deleteThread as deleteThreadApi,
 } from './copilotzService';
-import type { AgentOption, ChatMessage as ChatViewMessage, ChatSender, ChatThread, MediaAttachment, ChatUserContext } from '@copilotz/chat-ui';
+import { getAttachmentKindFromMimeType, getMimeTypeFromDataUrl } from '@copilotz/chat-ui';
+import type {
+  AgentOption,
+  AssistantActivityBlock,
+  ChatMessage as ChatViewMessage,
+  ChatSender,
+  ChatThread,
+  MediaAttachment,
+  ChatUserContext,
+} from '@copilotz/chat-ui';
 import { useUrlState } from './useUrlState';
 import type { EventInterceptor, RunErrorInterceptor, SpecialChatState } from './specialState';
 import type { RequestHeadersProvider, RestMessage, RestMessagePageInfo } from './copilotzService';
@@ -62,6 +71,15 @@ const createEmptyMessagePageInfo = (): RestMessagePageInfo => ({
   hasMoreBefore: false,
   oldestMessageId: null,
   newestMessageId: null,
+});
+
+const createPendingAssistantActivity = (): AssistantActivityBlock => ({
+  items: [{
+    id: 'thinking',
+    kind: 'thinking',
+    status: 'active',
+    startedAt: nowTs(),
+  }],
 });
 
 export interface UseCopilotzOptions {
@@ -353,8 +371,9 @@ export function useCopilotz({
       createId: generateId,
       now: nowTs,
       onToolOutput: processToolOutput,
+      getRequestHeaders,
     });
-  }, [processToolOutput]);
+  }, [getRequestHeaders, processToolOutput]);
 
   const loadThreadMessages = useCallback(async (threadId: string) => {
     const requestId = messagesRequestRef.current + 1;
@@ -591,21 +610,16 @@ export function useCopilotz({
     // Handle ASSET_CREATED event from copilotz
     if (!payload?.dataUrl) return;
 
-    const mimeType = payload.mime || 'image/png';
+    const mimeType = payload.mime || payload.mimeType || getMimeTypeFromDataUrl(payload.dataUrl) || 'application/octet-stream';
     const dataUrl = payload.dataUrl;
-
-    // Determine attachment kind based on mime type
-    let kind: 'image' | 'audio' | 'video' = 'image';
-    if (mimeType.startsWith('audio/')) {
-      kind = 'audio';
-    } else if (mimeType.startsWith('video/')) {
-      kind = 'video';
-    }
+    const kind = getAttachmentKindFromMimeType(mimeType);
 
     const mediaAttachment: MediaAttachment = {
       kind,
       dataUrl,
       mimeType,
+      ...(typeof payload.fileName === 'string' ? { fileName: payload.fileName } : {}),
+      ...(typeof payload.size === 'number' ? { size: payload.size } : {}),
     };
 
     setMessages((prev) => prev.map((msg) => (msg.id === assistantMessageId
@@ -1126,6 +1140,7 @@ export function useCopilotz({
       isStreaming: true,
       isComplete: false,
       sender: assistantSender,
+      activity: createPendingAssistantActivity(),
     };
 
     // Add user message and assistant placeholder for typewriter loading effect
@@ -1226,8 +1241,23 @@ export function useCopilotz({
     setCurrentThreadExternalId(bootstrapThreadExternalId);
     setThreadExternalIdMap((prev) => ({ ...prev, [bootstrapThreadExternalId]: bootstrapThreadExternalId }));
     setThreadMetadataMap((prev) => ({ ...prev, [bootstrapThreadExternalId]: {} }));
-    // Clear messages; let streaming create bubbles as needed
-    setMessages([]);
+    const assistantSender = preferredAgentRef.current
+      ? resolveAgentSender(
+        { id: preferredAgentRef.current, name: preferredAgentRef.current },
+        senderOptionsRef.current,
+      )
+      : resolveAssistantFallbackSender(senderOptionsRef.current);
+    const assistantMessageId = generateId();
+    setMessages([{
+      id: assistantMessageId,
+      role: 'assistant',
+      content: '',
+      timestamp: nowTs(),
+      isStreaming: true,
+      isComplete: false,
+      sender: assistantSender,
+      activity: createPendingAssistantActivity(),
+    } as InternalChatMessage]);
     setMessagePageInfo(createEmptyMessagePageInfo());
     persistedToolUpdatesRef.current = [];
     setSpecialState(null);
@@ -1239,6 +1269,8 @@ export function useCopilotz({
         toolCalls: bootstrap.initialToolCalls,
         userId: uid,
         agentName: preferredAgentRef.current,
+        assistantMessageId,
+        assistantSender,
         threadMetadata: {
           name: defaultThreadName || 'Main Thread',
         },

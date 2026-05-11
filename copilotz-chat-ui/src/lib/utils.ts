@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
-import type { ChatConfig } from "../types/chatTypes"
+import type { ChatConfig, MediaAttachmentKind } from "../types/chatTypes"
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -46,4 +46,35 @@ export const createObjectUrlFromDataUrl = (dataUrl: string): string | null => {
   } catch {
     return null;
   }
+};
+
+export const getAttachmentKindFromMimeType = (
+  mimeType?: string | null,
+): MediaAttachmentKind => {
+  const normalized = (mimeType || '').toLowerCase();
+  if (normalized.startsWith('image/')) return 'image';
+  if (normalized.startsWith('audio/')) return 'audio';
+  if (normalized.startsWith('video/')) return 'video';
+  return 'file';
+};
+
+export const getMimeTypeFromDataUrl = (dataUrl: string): string | null => {
+  const match = dataUrl.match(/^data:([^;,]+)[;,]/);
+  return match?.[1] || null;
+};
+
+export const formatFileSize = (bytes?: number): string => {
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) return '';
+  if (bytes < 1024) return `${bytes} B`;
+
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = bytes / 1024;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
 };

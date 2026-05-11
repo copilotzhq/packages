@@ -10,7 +10,7 @@ import {
   VoiceSegment,
   VoiceTranscript,
 } from '../../types/chatTypes';
-import { createObjectUrlFromDataUrl } from '../../lib/utils';
+import { createObjectUrlFromDataUrl, formatFileSize, getAttachmentKindFromMimeType } from '../../lib/utils';
 import { appendVoiceSegments, mergeVoiceTranscripts, resolveVoiceProviderFactory } from '../../lib/voiceCompose';
 import { Button } from '../ui/button';
 import { Textarea } from '../ui/textarea';
@@ -298,7 +298,31 @@ const AttachmentPreview: React.FC<{
           </div>
         )}
 
-        {attachment.fileName && attachment.kind !== 'audio' && (
+        {attachment.kind === 'file' && (
+          <div className="flex min-w-48 items-center gap-2 p-2">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-muted">
+              <FileText className="h-4 w-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs font-medium">
+                {attachment.fileName || 'File'}
+              </p>
+              <p className="truncate text-xs text-muted-foreground">
+                {[attachment.mimeType || 'File', formatFileSize(attachment.size)].filter(Boolean).join(' · ')}
+              </p>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 opacity-0 transition-opacity group-hover:opacity-100"
+              onClick={onRemove}
+            >
+              <X className="h-3 w-3" />
+            </Button>
+          </div>
+        )}
+
+        {attachment.fileName && attachment.kind !== 'audio' && attachment.kind !== 'file' && (
           <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-white text-xs p-1 rounded-b">
             <p className="truncate">{attachment.fileName}</p>
           </div>
@@ -337,7 +361,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   enableAudioRecording = true,
   maxAttachments = 4,
   maxFileSize = 10 * 1024 * 1024, // 10MB
-  acceptedFileTypes = ['image/*', 'video/*', 'audio/*'],
+  acceptedFileTypes = [],
   className = '',
   config,
   mentionAgents = [],
@@ -553,11 +577,9 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
       });
 
       const attachment: MediaAttachment = {
-        kind: file.type.startsWith('image/') ? 'image' :
-          file.type.startsWith('video/') ? 'video' :
-            file.type.startsWith('audio/') ? 'audio' : 'image',
+        kind: getAttachmentKindFromMimeType(file.type),
         dataUrl,
-        mimeType: file.type,
+        mimeType: file.type || 'application/octet-stream',
         fileName: file.name,
         size: file.size,
       };
@@ -1084,7 +1106,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                       ref={fileInputRef}
                       type="file"
                       multiple
-                      accept={acceptedFileTypes.join(',')}
+                      accept={acceptedFileTypes.length > 0 ? acceptedFileTypes.join(',') : undefined}
                       onChange={handleFileSelect}
                       className="hidden"
                     />

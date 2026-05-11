@@ -257,6 +257,7 @@ const toAttachmentPayload = (attachments?: MediaAttachment[]) => {
       dataUrl: att.dataUrl,
       mimeType: att.mimeType,
       fileName: att.fileName,
+      size: att.size,
     };
     if (att.kind === "audio" || att.kind === "video") {
       return {

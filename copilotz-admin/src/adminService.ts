@@ -4,14 +4,14 @@ import type {
   AdminAgentSummary,
   AdminCollectionItem,
   AdminDatePreset,
+  AdminMessage,
+  AdminMessagePage,
   AdminOverview,
   AdminParticipantDetail,
   AdminParticipantSummary,
   AdminQueueEvent,
-  AdminThreadSummary,
   AdminThreadDetail,
-  AdminMessage,
-  AdminMessagePage,
+  AdminThreadSummary,
   RequestHeadersProvider,
 } from "./types";
 
@@ -90,7 +90,10 @@ async function fetchAdminJson<T>(
   params: Record<string, string | undefined>,
   options?: FetchOptions,
 ): Promise<T> {
-  const url = new URL(`${resolveBaseUrl(options?.baseUrl)}${path}`, window.location.origin);
+  const url = new URL(
+    `${resolveBaseUrl(options?.baseUrl)}${path}`,
+    window.location.origin,
+  );
   for (const [key, value] of Object.entries(params)) {
     if (typeof value === "string" && value.length > 0) {
       url.searchParams.set(key, value);
@@ -114,7 +117,10 @@ async function fetchRawJson<T>(
   params: Record<string, string | undefined>,
   options?: FetchOptions,
 ): Promise<T> {
-  const url = new URL(`${resolveBaseUrl(options?.baseUrl)}${path}`, window.location.origin);
+  const url = new URL(
+    `${resolveBaseUrl(options?.baseUrl)}${path}`,
+    window.location.origin,
+  );
   for (const [key, value] of Object.entries(params)) {
     if (typeof value === "string" && value.length > 0) {
       url.searchParams.set(key, value);
@@ -179,11 +185,15 @@ export async function fetchAdminParticipants(
   namespace?: string,
   options?: FetchOptions,
 ): Promise<AdminParticipantSummary[]> {
-  return await fetchAdminJson<AdminParticipantSummary[]>("/v1/admin/participants", {
-    search,
-    namespace,
-    limit: "8",
-  }, options);
+  return await fetchAdminJson<AdminParticipantSummary[]>(
+    "/v1/admin/participants",
+    {
+      search,
+      namespace,
+      limit: "8",
+    },
+    options,
+  );
 }
 
 export async function fetchAdminAgents(
@@ -234,7 +244,7 @@ export async function fetchParticipantDetail(
 ): Promise<AdminParticipantDetail | null> {
   return await fetchAdminJson<AdminParticipantDetail | null>(
     `/v1/collections/participant/${encodeURIComponent(participantId)}`,
-    { namespace: "global" },
+    {},
     options,
   );
 }
@@ -245,10 +255,11 @@ export async function updateParticipant(
   options?: FetchOptions,
 ): Promise<AdminParticipantDetail> {
   const url = new URL(
-    `${resolveBaseUrl(options?.baseUrl)}/v1/collections/participant/${encodeURIComponent(participantId)}`,
+    `${resolveBaseUrl(options?.baseUrl)}/v1/collections/participant/${
+      encodeURIComponent(participantId)
+    }`,
     window.location.origin,
   );
-  url.searchParams.set("namespace", "global");
   const response = await fetch(url.toString(), {
     method: "PUT",
     headers: await withAuthHeaders(
@@ -274,11 +285,15 @@ export async function fetchCollectionNames(
 
 export async function fetchCollectionItems(
   collection: string,
-  queryOptions?: { search?: string; namespace?: string; limit?: number; offset?: number },
+  queryOptions?: {
+    search?: string;
+    namespace?: string;
+    limit?: number;
+    offset?: number;
+  },
   options?: FetchOptions,
 ): Promise<AdminCollectionItem[]> {
   const params: Record<string, string | undefined> = {
-    namespace: queryOptions?.namespace,
     limit: queryOptions?.limit?.toString(),
   };
   if (queryOptions?.search) {
@@ -296,12 +311,14 @@ export async function fetchCollectionItems(
 export async function fetchCollectionItem(
   collection: string,
   itemId: string,
-  namespace?: string,
+  _namespace?: string,
   options?: FetchOptions,
 ): Promise<AdminCollectionItem> {
   return await fetchAdminJson<AdminCollectionItem>(
-    `/v1/collections/${encodeURIComponent(collection)}/${encodeURIComponent(itemId)}`,
-    { namespace },
+    `/v1/collections/${encodeURIComponent(collection)}/${
+      encodeURIComponent(itemId)
+    }`,
+    {},
     options,
   );
 }
@@ -309,14 +326,15 @@ export async function fetchCollectionItem(
 export async function createCollectionItem(
   collection: string,
   data: Record<string, unknown>,
-  namespace?: string,
+  _namespace?: string,
   options?: FetchOptions,
 ): Promise<AdminCollectionItem> {
   const url = new URL(
-    `${resolveBaseUrl(options?.baseUrl)}/v1/collections/${encodeURIComponent(collection)}`,
+    `${resolveBaseUrl(options?.baseUrl)}/v1/collections/${
+      encodeURIComponent(collection)
+    }`,
     window.location.origin,
   );
-  if (namespace) url.searchParams.set("namespace", namespace);
   const response = await fetch(url.toString(), {
     method: "POST",
     headers: await withAuthHeaders(
@@ -328,25 +346,23 @@ export async function createCollectionItem(
   if (!response.ok) {
     throw new Error(`Create collection item failed (${response.status})`);
   }
-  const payload = await response.json() as Record<string, unknown>;
-  if ("body" in payload && payload.body && typeof payload.body === "object") {
-    return payload.body as AdminCollectionItem;
-  }
-  return payload as AdminCollectionItem;
+  const payload = await response.json() as { data?: AdminCollectionItem };
+  return payload.data as AdminCollectionItem;
 }
 
 export async function updateCollectionItem(
   collection: string,
   itemId: string,
   data: Record<string, unknown>,
-  namespace?: string,
+  _namespace?: string,
   options?: FetchOptions,
 ): Promise<AdminCollectionItem> {
   const url = new URL(
-    `${resolveBaseUrl(options?.baseUrl)}/v1/collections/${encodeURIComponent(collection)}/${encodeURIComponent(itemId)}`,
+    `${resolveBaseUrl(options?.baseUrl)}/v1/collections/${
+      encodeURIComponent(collection)
+    }/${encodeURIComponent(itemId)}`,
     window.location.origin,
   );
-  if (namespace) url.searchParams.set("namespace", namespace);
   const response = await fetch(url.toString(), {
     method: "PUT",
     headers: await withAuthHeaders(
@@ -365,14 +381,15 @@ export async function updateCollectionItem(
 export async function deleteCollectionItem(
   collection: string,
   itemId: string,
-  namespace?: string,
+  _namespace?: string,
   options?: FetchOptions,
 ): Promise<void> {
   const url = new URL(
-    `${resolveBaseUrl(options?.baseUrl)}/v1/collections/${encodeURIComponent(collection)}/${encodeURIComponent(itemId)}`,
+    `${resolveBaseUrl(options?.baseUrl)}/v1/collections/${
+      encodeURIComponent(collection)
+    }/${encodeURIComponent(itemId)}`,
     window.location.origin,
   );
-  if (namespace) url.searchParams.set("namespace", namespace);
   const response = await fetch(url.toString(), {
     method: "DELETE",
     headers: await withAuthHeaders({}, options?.getRequestHeaders),
