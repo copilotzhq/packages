@@ -28,8 +28,8 @@ const clean = (value: string | null | undefined): string | undefined =>
   typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 
 const expectSenderType = (value: unknown, path: string): SenderType => {
-  if (value === 'user' || value === 'agent' || value === 'tool' || value === 'system') return value;
-  throw new ContractViolation(`${path} must be user, agent, tool, or system`);
+  if (value === 'user' || value === 'agent' || value === 'tool' || value === 'system' || value === 'job') return value;
+  throw new ContractViolation(`${path} must be user, agent, tool, system, or job`);
 };
 
 const defined = <T extends Record<string, unknown>>(value: T): T =>
@@ -115,7 +115,7 @@ export const resolveHydratedMessageSender = (
   const externalId = expectString(metadata.senderExternalId, 'message.metadata.senderExternalId');
   const displayName = expectString(metadata.senderDisplayName, 'message.metadata.senderDisplayName');
 
-  if (type === 'agent' || type === 'tool') {
+  if (type === 'agent' || type === 'tool' || type === 'job') {
     const agent = findAgent(options.agents, externalId, displayName, storedId);
     if (agent) {
       return fromAgent(agent, defined({

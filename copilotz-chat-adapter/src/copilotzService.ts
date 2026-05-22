@@ -101,7 +101,7 @@ const buildFallbackPageInfo = (
   newestMessageId: data[data.length - 1]?.id ?? null,
 });
 
-type MessageSenderType = "agent" | "user" | "tool" | "system";
+type MessageSenderType = "agent" | "user" | "tool" | "system" | "job";
 
 type MessageContent =
   | string

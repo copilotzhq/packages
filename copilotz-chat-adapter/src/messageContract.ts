@@ -42,6 +42,7 @@ const roleBySender = {
   agent: 'assistant',
   tool: 'assistant',
   system: 'system',
+  job: 'assistant',
 } as const;
 
 const expectNumber = (value: unknown, path: string): number => {
@@ -57,10 +58,20 @@ const extractAttachments = (
     throw new ContractViolation('message.metadata.attachments must be an array');
   }
 
-  return metadata.attachments.map((value, index) => {
+  const results: MediaAttachment[] = [];
+
+  for (let index = 0; index < metadata.attachments.length; index++) {
+    const value = metadata.attachments[index];
     const path = `message.metadata.attachments[${index}]`;
     const att = expectRecord(value, path);
-    const dataUrl = expectString(att.dataUrl, `${path}.dataUrl`);
+
+    if (att.assetUnavailable === true) continue;
+
+    const dataUrl = typeof att.dataUrl === 'string' && att.dataUrl.trim().length > 0
+      ? att.dataUrl
+      : null;
+    if (!dataUrl) continue;
+
     const mimeType = typeof att.mimeType === 'string' && att.mimeType.trim().length > 0
       ? att.mimeType
       : getMimeTypeFromDataUrl(dataUrl) || 'application/octet-stream';
@@ -73,24 +84,32 @@ const extractAttachments = (
       ...(typeof att.fileName === 'string' ? { fileName: att.fileName } : {}),
       ...(att.size !== undefined ? { size: expectNumber(att.size, `${path}.size`) } : {}),
     };
-    if (normalizedKind === 'image') return base as MediaAttachment;
-    if (normalizedKind === 'audio') return {
-      ...base,
-      ...(att.durationMs !== undefined ? { durationMs: expectNumber(att.durationMs, `${path}.durationMs`) } : {}),
-    } as MediaAttachment;
-    if (normalizedKind === 'video') return {
-      ...base,
-      ...(att.durationMs !== undefined ? { durationMs: expectNumber(att.durationMs, `${path}.durationMs`) } : {}),
-      ...(att.poster !== undefined ? { poster: expectString(att.poster, `${path}.poster`) } : {}),
-    } as MediaAttachment;
-    return base as MediaAttachment;
-  });
+    if (normalizedKind === 'image') { results.push(base as MediaAttachment); continue; }
+    if (normalizedKind === 'audio') {
+      results.push({
+        ...base,
+        ...(att.durationMs !== undefined ? { durationMs: expectNumber(att.durationMs, `${path}.durationMs`) } : {}),
+      } as MediaAttachment);
+      continue;
+    }
+    if (normalizedKind === 'video') {
+      results.push({
+        ...base,
+        ...(att.durationMs !== undefined ? { durationMs: expectNumber(att.durationMs, `${path}.durationMs`) } : {}),
+        ...(att.poster !== undefined ? { poster: expectString(att.poster, `${path}.poster`) } : {}),
+      } as MediaAttachment);
+      continue;
+    }
+    results.push(base as MediaAttachment);
+  }
+
+  return results;
 };
 
 const assertRestMessageContract = (msg: RestMessage): void => {
   expectString(msg.id, 'message.id');
   expectString(msg.threadId, 'message.threadId');
-  if (!(msg.senderType in roleBySender)) throw new ContractViolation('message.senderType must be user, agent, tool, or system');
+  if (!(msg.senderType in roleBySender)) throw new ContractViolation('message.senderType must be user, agent, tool, system, or job');
   expectStringValue(msg.content, 'message.content');
   if (msg.metadata !== undefined && msg.metadata !== null) expectRecord(msg.metadata, 'message.metadata');
   if (msg.createdAt !== undefined) expectString(msg.createdAt, 'message.createdAt');
@@ -189,19 +208,30 @@ export const prepareHydratedMessages = async (
   rawMessages: RestMessage[],
   options: MessageContractOptions = {},
 ): Promise<HydratedMessageBatch> => {
-  rawMessages.forEach(assertRestMessageContract);
+  const validMessages = rawMessages.filter((msg) => {
+    try {
+      assertRestMessageContract(msg);
+      return true;
+    } catch (error) {
+      console.warn('Skipping message with invalid contract during hydration', msg.id, error);
+      return false;
+    }
+  });
+
   const resolvedMessages = await resolveAssetsInMessages(
-    rawMessages,
+    validMessages,
     options.getRequestHeaders,
   );
 
   resolvedMessages.forEach((msg) => {
     if (msg.senderType === 'tool') {
       const metadata = msg.metadata ?? undefined;
-      if (!metadata) {
-        throw new ContractViolation('tool message requires metadata');
+      if (!metadata) return;
+      try {
+        options.onToolOutput?.(metadata.output === undefined ? metadata : { output: metadata.output });
+      } catch (error) {
+        console.warn('Error processing tool output during hydration', msg.id, error);
       }
-      options.onToolOutput?.(metadata.output === undefined ? metadata : { output: metadata.output });
     }
   });
 
@@ -211,8 +241,21 @@ export const prepareHydratedMessages = async (
     .filter((update): update is ToolResultUpdate => update !== null);
 
   const viewMessages = resolvedMessages
-    .filter(shouldRenderHydratedMessage)
-    .map((msg) => convertServerMessage(msg, options));
+    .filter((msg) => {
+      try { return shouldRenderHydratedMessage(msg); }
+      catch (error) {
+        console.warn('Skipping unrenderable message during hydration', msg.id, error);
+        return false;
+      }
+    })
+    .map((msg) => {
+      try { return convertServerMessage(msg, options); }
+      catch (error) {
+        console.warn('Skipping unconvertible message during hydration', msg.id, error);
+        return null;
+      }
+    })
+    .filter((msg): msg is InternalChatMessage => msg !== null);
 
   return {
     viewMessages,

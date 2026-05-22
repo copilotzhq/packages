@@ -144,6 +144,76 @@ test('persisted tool call and tool result hydrate into one completed activity', 
   });
 });
 
+test('persisted job tool call and tool result hydrate into one completed activity', async () => {
+  const jobToolCall: RestMessage = {
+    id: 'job-tool-call-message',
+    threadId: 'thread-1',
+    senderType: 'job',
+    senderId: 'job-1',
+    senderUserId: 'job-1',
+    content: '',
+    toolCalls: [{
+      id: 'tool-1',
+      args: { action: 'list_cards' },
+      tool: { id: 'kanban' },
+    }],
+    metadata: {
+      senderExternalId: 'job-1',
+      senderDisplayName: 'Test Tool Call Job',
+      senderParticipantId: 'job-1',
+      scheduledJob: {
+        jobId: 'job-1',
+        jobName: 'Test Tool Call Job',
+        runId: 'job-1:123',
+      },
+    },
+    createdAt: '2026-05-05T14:36:25.267Z',
+  };
+  const toolResult: RestMessage = {
+    id: 'job-tool-result-message',
+    threadId: 'thread-1',
+    senderType: 'tool',
+    senderId: 'job-1',
+    senderUserId: 'job-1',
+    content: '{"cards":[]}',
+    metadata: {
+      senderExternalId: 'job-1',
+      senderDisplayName: 'Test Tool Call Job',
+      senderParticipantId: 'job-1',
+      toolCalls: [{
+        id: 'tool-1',
+        args: '{"action":"list_cards"}',
+        tool: { id: 'kanban', name: 'kanban' },
+        output: { cards: [] },
+        status: 'completed',
+      }],
+    },
+    createdAt: '2026-05-05T14:36:25.308Z',
+  };
+
+  const { viewMessages, toolResultUpdates } = await prepareHydratedMessages(
+    [jobToolCall, toolResult],
+    { createId: () => 'generated-id' },
+  );
+
+  assert.equal(viewMessages.length, 1);
+  assert.equal(toolResultUpdates.length, 1);
+  assert.equal(viewMessages[0].role, 'assistant');
+  assert.equal(viewMessages[0].sender?.type, 'job');
+  assert.equal(viewMessages[0].sender?.name, 'Test Tool Call Job');
+  assert.equal(viewMessages[0].activity?.items[0].kind, 'tool');
+
+  const mergedMessages = mergePersistedToolResults(viewMessages, toolResultUpdates);
+  assert.deepEqual(mergedMessages[0].activity?.items[0].details?.toolCall, {
+    id: 'tool-1',
+    name: 'kanban',
+    arguments: { action: 'list_cards' },
+    status: 'completed',
+    result: { cards: [] },
+    endTime: new Date('2026-05-05T14:36:25.308Z').getTime(),
+  });
+});
+
 test('live tool events parse to the same tool identity as persisted history', () => {
   const liveCall = extractLiveToolCall({
     toolCall: {

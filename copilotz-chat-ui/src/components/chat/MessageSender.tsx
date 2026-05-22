@@ -23,7 +23,7 @@ export const resolveMessageSenderDisplay = ({
   compactMode?: boolean;
 }): MessageSenderDisplay => {
   const name = sender?.name?.trim() || fallbackName;
-  const isAgentLike = sender?.type === 'agent' || sender?.type === 'tool';
+  const isAgentLike = sender?.type === 'agent' || sender?.type === 'tool' || sender?.type === 'job';
   const color = sender?.color || (isAgentLike && sender?.id ? getAgentColor(sender.id) : undefined);
   const fallbackClassName = color
     ? `${compactMode ? 'text-[10px]' : ''}`

@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/chat-adapter",
-  "version": "0.8.1",
+  "version": "0.8.4",
   "description": "Copilotz chat adapter and API hook",
   "type": "module",
   "module": "./dist/index.js",

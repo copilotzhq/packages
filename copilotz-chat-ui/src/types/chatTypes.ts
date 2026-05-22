@@ -127,7 +127,7 @@ export interface AssistantActivityBlock {
 
 export interface ChatSender {
   /** Copilotz sender type from the message domain. */
-  type: "user" | "agent" | "tool" | "system";
+  type: "user" | "agent" | "tool" | "system" | "job";
   /** Conversational identity: user external id, agent id, or tool owner id. */
   id: string;
   /** Human-readable display label. */

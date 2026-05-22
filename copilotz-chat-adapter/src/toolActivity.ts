@@ -278,7 +278,7 @@ export const prependUniqueMessages = (
 
 export const messageAgentKey = (message: ChatViewMessage): string | null => {
   if (message.role !== 'assistant') return null;
-  if (message.sender?.type === 'agent' || message.sender?.type === 'tool') {
+  if (message.sender?.type === 'agent' || message.sender?.type === 'tool' || message.sender?.type === 'job') {
     return message.sender.agentId ?? message.sender.id;
   }
   return null;
