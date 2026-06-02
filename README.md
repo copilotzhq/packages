@@ -38,3 +38,4 @@ npm version patch --workspace copilotz-chat-ui
 ```
 
 After the change lands on `main`, GitHub Actions builds every workspace and publishes each package version that does not already exist on npm.
+
