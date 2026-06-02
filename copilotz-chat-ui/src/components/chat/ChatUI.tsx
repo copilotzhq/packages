@@ -9,6 +9,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ChatMessage,
   ChatState,
+  ChatThread,
   ChatUserContext,
   ChatV2Props,
   MediaAttachment,
@@ -73,7 +74,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   // Merge configuration with defaults
   const config = useMemo(
     () => mergeConfig(defaultChatConfig, userConfig),
-    [userConfig],
+    [userConfig]
   );
 
   // Mobile detection
@@ -139,14 +140,12 @@ export const ChatUI: React.FC<ChatV2Props> = ({
 
   // Refs
   const scrollAreaRef = useRef<HTMLDivElement>(null);
-  const prependSnapshotRef = useRef<
-    {
-      scrollHeight: number;
-      scrollTop: number;
-      firstMessageId: string | null;
-      messageCount: number;
-    } | null
-  >(null);
+  const prependSnapshotRef = useRef<{
+    scrollHeight: number;
+    scrollTop: number;
+    firstMessageId: string | null;
+    messageCount: number;
+  } | null>(null);
 
   // Refs for state to avoid recreating callbacks on every state change
   const stateRef = useRef(state);
@@ -167,9 +166,10 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   // Mobile custom overlay mount/unmount for smooth transitions
   const [isCustomMounted, setIsCustomMounted] = useState(false);
   const [isCustomVisible, setIsCustomVisible] = useState(false);
-  const groupedMessages = useMemo(() => groupMessagesForRender(messages), [
-    messages,
-  ]);
+  const groupedMessages = useMemo(
+    () => groupMessagesForRender(messages),
+    [messages]
+  );
 
   // Virtualizer — only renders messages visible in the viewport + overscan buffer
   const virtualizer = useVirtualizer({
@@ -183,7 +183,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   // Create state callback helpers - uses refs to avoid recreating on every state change
   const createStateCallback = useCallback(
     (
-      setter?: (value: React.SetStateAction<ChatState>) => void,
+      setter?: (value: React.SetStateAction<ChatState>) => void
     ): StateCallback<ChatState> => ({
       setState: (newState) => setter?.(newState),
       getState: () => ({
@@ -192,7 +192,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
         attachments: attachmentsRef.current,
       }),
     }),
-    [], // No dependencies - uses refs for latest state
+    [] // No dependencies - uses refs for latest state
   );
 
   // Mobile detection effect
@@ -338,17 +338,20 @@ export const ChatUI: React.FC<ChatV2Props> = ({
 
   const requestOlderMessages = useCallback(() => {
     if (
-      !onLoadOlderMessages || !hasMoreMessagesBefore || isLoadingOlderMessages
-    ) return;
+      !onLoadOlderMessages ||
+      !hasMoreMessagesBefore ||
+      isLoadingOlderMessages
+    )
+      return;
 
     const viewport = scrollAreaRef.current;
     prependSnapshotRef.current = viewport
       ? {
-        scrollHeight: viewport.scrollHeight,
-        scrollTop: viewport.scrollTop,
-        firstMessageId: groupedMessages[0]?.id ?? null,
-        messageCount: groupedMessages.length,
-      }
+          scrollHeight: viewport.scrollHeight,
+          scrollTop: viewport.scrollTop,
+          firstMessageId: groupedMessages[0]?.id ?? null,
+          messageCount: groupedMessages.length,
+        }
       : null;
 
     onLoadOlderMessages();
@@ -364,8 +367,8 @@ export const ChatUI: React.FC<ChatV2Props> = ({
 
     setExpandedMessageIds((prev) => {
       const activeIds = Object.keys(prev);
-      const staleIds = activeIds.filter((messageId) =>
-        !validMessageIds.has(messageId)
+      const staleIds = activeIds.filter(
+        (messageId) => !validMessageIds.has(messageId)
       );
 
       if (staleIds.length === 0) {
@@ -381,71 +384,81 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   }, [groupedMessages]);
 
   // Handle scroll position — only update state when the value actually changes
-  const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
-    const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
-    const isNearTop = scrollTop < 120;
+  const handleScroll = useCallback(
+    (e: React.UIEvent<HTMLDivElement>) => {
+      const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+      const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
+      const isNearTop = scrollTop < 120;
 
-    if (isNearTop && hasMoreMessagesBefore && !isLoadingOlderMessages) {
-      requestOlderMessages();
-    }
+      if (isNearTop && hasMoreMessagesBefore && !isLoadingOlderMessages) {
+        requestOlderMessages();
+      }
 
-    setState((prev) => {
-      if (prev.isAtBottom === isAtBottom) return prev;
-      return { ...prev, isAtBottom };
-    });
-  }, [hasMoreMessagesBefore, isLoadingOlderMessages, requestOlderMessages]);
+      setState((prev) => {
+        if (prev.isAtBottom === isAtBottom) return prev;
+        return { ...prev, isAtBottom };
+      });
+    },
+    [hasMoreMessagesBefore, isLoadingOlderMessages, requestOlderMessages]
+  );
 
   // Message handling
-  const handleSendMessage = useCallback((
-    content: string,
-    messageAttachments: MediaAttachment[] = [],
-  ) => {
-    if (!content.trim() && messageAttachments.length === 0) return;
+  const handleSendMessage = useCallback(
+    (content: string, messageAttachments: MediaAttachment[] = []) => {
+      if (!content.trim() && messageAttachments.length === 0) return;
 
-    // Call external callback
-    callbacks.onSendMessage?.(
-      content,
-      messageAttachments,
-      createStateCallback(),
-    );
+      // Call external callback
+      callbacks.onSendMessage?.(
+        content,
+        messageAttachments,
+        createStateCallback()
+      );
 
-    // Mark initial input as consumed when message is sent
-    if (initialInputApplied.current && !initialInputConsumedRef.current) {
-      initialInputConsumedRef.current = true;
-      onInitialInputConsumed?.();
-    }
+      // Mark initial input as consumed when message is sent
+      if (initialInputApplied.current && !initialInputConsumedRef.current) {
+        initialInputConsumedRef.current = true;
+        onInitialInputConsumed?.();
+      }
 
-    // Clear input (using separate state for performance)
-    setInputValue("");
-    setAttachments([]);
-  }, [callbacks, createStateCallback, onInitialInputConsumed]);
+      // Clear input (using separate state for performance)
+      setInputValue("");
+      setAttachments([]);
+    },
+    [callbacks, createStateCallback, onInitialInputConsumed]
+  );
 
   // Message actions
-  const handleMessageAction = useCallback((event: MessageActionEvent) => {
-    const { action, messageId, content } = event;
+  const handleMessageAction = useCallback(
+    (event: MessageActionEvent) => {
+      const { action, messageId, content } = event;
 
-    switch (action) {
-      case "copy":
-        callbacks.onCopyMessage?.(
-          messageId,
-          content || "",
-          createStateCallback(),
-        );
-        break;
-      case "edit":
-        if (content) {
-          callbacks.onEditMessage?.(messageId, content, createStateCallback());
-        }
-        break;
-      case "regenerate":
-        callbacks.onRegenerateMessage?.(messageId, createStateCallback());
-        break;
-      case "delete":
-        callbacks.onDeleteMessage?.(messageId, createStateCallback());
-        break;
-    }
-  }, [callbacks, createStateCallback]);
+      switch (action) {
+        case "copy":
+          callbacks.onCopyMessage?.(
+            messageId,
+            content || "",
+            createStateCallback()
+          );
+          break;
+        case "edit":
+          if (content) {
+            callbacks.onEditMessage?.(
+              messageId,
+              content,
+              createStateCallback()
+            );
+          }
+          break;
+        case "regenerate":
+          callbacks.onRegenerateMessage?.(messageId, createStateCallback());
+          break;
+        case "delete":
+          callbacks.onDeleteMessage?.(messageId, createStateCallback());
+          break;
+      }
+    },
+    [callbacks, createStateCallback]
+  );
 
   const handleToggleMessageExpansion = useCallback((messageId: string) => {
     setExpandedMessageIds((prev) => {
@@ -463,28 +476,51 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   }, []);
 
   // Thread management
-  const handleCreateThread = useCallback((title?: string) => {
-    callbacks.onCreateThread?.(title, createStateCallback());
-  }, [callbacks, createStateCallback]);
+  const handleCreateThread = useCallback(
+    (title?: string) => {
+      callbacks.onCreateThread?.(title, createStateCallback());
+    },
+    [callbacks, createStateCallback]
+  );
 
-  const handleSelectThread = useCallback((threadId: string) => {
-    callbacks.onSelectThread?.(threadId, createStateCallback());
-  }, [callbacks, createStateCallback]);
+  const handleSelectThread = useCallback(
+    (threadId: string) => {
+      callbacks.onSelectThread?.(threadId, createStateCallback());
+    },
+    [callbacks, createStateCallback]
+  );
 
   const handleRenameThread = useCallback(
     (threadId: string, newTitle: string) => {
       callbacks.onRenameThread?.(threadId, newTitle, createStateCallback());
     },
-    [callbacks, createStateCallback],
+    [callbacks, createStateCallback]
   );
 
-  const handleDeleteThread = useCallback((threadId: string) => {
-    callbacks.onDeleteThread?.(threadId, createStateCallback());
-  }, [callbacks, createStateCallback]);
+  const handleDeleteThread = useCallback(
+    (threadId: string) => {
+      callbacks.onDeleteThread?.(threadId, createStateCallback());
+    },
+    [callbacks, createStateCallback]
+  );
 
-  const handleArchiveThread = useCallback((threadId: string) => {
-    callbacks.onArchiveThread?.(threadId, createStateCallback());
-  }, [callbacks, createStateCallback]);
+  const handleArchiveThread = useCallback(
+    (threadId: string) => {
+      callbacks.onArchiveThread?.(threadId, createStateCallback());
+    },
+    [callbacks, createStateCallback]
+  );
+
+  const handleUpdateThreadTags = useCallback(
+    (threadId: string, tags: ChatThread["tags"]) => {
+      callbacks.onUpdateThreadTags?.(
+        threadId,
+        tags ?? [],
+        createStateCallback()
+      );
+    },
+    [callbacks, createStateCallback]
+  );
 
   // Close sidebar handler
   const closeSidebar = useCallback(() => {
@@ -495,32 +531,38 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     setState((prev) => ({ ...prev, showSidebar: !prev.showSidebar }));
   }, []);
 
-  const sidebarUser = useMemo(() =>
-    user
-      ? {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-        avatar: user.avatar,
-      }
-      : null, [user?.id, user?.name, user?.email, user?.avatar]);
+  const sidebarUser = useMemo(
+    () =>
+      user
+        ? {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            avatar: user.avatar,
+          }
+        : null,
+    [user?.id, user?.name, user?.email, user?.avatar]
+  );
 
   const handleViewProfile = useCallback(() => {
     setIsUserProfileOpen(true);
     callbacks.onViewProfile?.();
   }, [callbacks.onViewProfile]);
 
-  const sidebarUserMenuCallbacks = useMemo(() => ({
-    onViewProfile: handleViewProfile,
-    onOpenSettings: callbacks.onOpenSettings,
-    onThemeChange: callbacks.onThemeChange,
-    onLogout: callbacks.onLogout,
-  }), [
-    handleViewProfile,
-    callbacks.onOpenSettings,
-    callbacks.onThemeChange,
-    callbacks.onLogout,
-  ]);
+  const sidebarUserMenuCallbacks = useMemo(
+    () => ({
+      onViewProfile: handleViewProfile,
+      onOpenSettings: callbacks.onOpenSettings,
+      onThemeChange: callbacks.onThemeChange,
+      onLogout: callbacks.onLogout,
+    }),
+    [
+      handleViewProfile,
+      callbacks.onOpenSettings,
+      callbacks.onThemeChange,
+      callbacks.onLogout,
+    ]
+  );
 
   // Render custom component with props if it's a function
   const renderCustomComponent = useCallback(() => {
@@ -566,9 +608,10 @@ export const ChatUI: React.FC<ChatV2Props> = ({
               className="group relative flex items-start gap-3 p-4 text-left rounded-xl border bg-card hover:bg-accent/50 hover:border-accent transition-all duration-200 hover:shadow-sm"
             >
               {(() => {
-                const IconComponent = SuggestionIconComponents[
-                  index % SuggestionIconComponents.length
-                ];
+                const IconComponent =
+                  SuggestionIconComponents[
+                    index % SuggestionIconComponents.length
+                  ];
                 return (
                   <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10 text-primary shrink-0 group-hover:bg-primary/15 transition-colors">
                     <IconComponent className="h-4 w-4" />
@@ -592,7 +635,9 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     const items = messageSuggestions?.[messageId];
     if (!items || items.length === 0) return null;
     const inlineSuggestionOffsetClass = config.ui.showAvatars
-      ? (config.ui.compactMode ? "ml-9" : "ml-11")
+      ? config.ui.compactMode
+        ? "ml-9"
+        : "ml-11"
       : "";
 
     return (
@@ -646,61 +691,65 @@ export const ChatUI: React.FC<ChatV2Props> = ({
 
   // Stable props object for Message components — prevents unnecessary re-renders
   // when the virtualizer re-evaluates which items to show
-  const messageProps = useMemo(() => ({
-    userAvatar: user?.avatar,
-    userName: user?.name,
-    assistantAvatar: assistant?.avatar,
-    assistantName: assistant?.name,
-    showTimestamp: config.ui.showTimestamps,
-    showAvatar: config.ui.showAvatars,
-    enableCopy: config.features.enableMessageCopy,
-    enableEdit: config.features.enableMessageEditing,
-    enableRegenerate: config.features.enableRegeneration,
-    showActivity: config.features.showActivity,
-    showActivityDetails: config.features.showActivityDetails,
-    compactMode: config.ui.compactMode,
-    onAction: handleMessageAction,
-    labels: config.labels,
-    showMoreLabel: config.labels.showMoreMessage,
-    showLessLabel: config.labels.showLessMessage,
-    collapseLongMessages: config.ui.collapseLongMessages,
-    collapseLongMessagesForUserOnly: config.ui.collapseLongMessagesForUserOnly,
-    longMessagePreviewChars: config.ui.longMessagePreviewChars,
-    longMessageChunkChars: config.ui.longMessageChunkChars,
-    renderUserMarkdown: config.ui.renderUserMarkdown,
-    markdown: config.markdown,
-    onToggleExpanded: handleToggleMessageExpansion,
-  }), [
-    user?.avatar,
-    user?.name,
-    assistant?.avatar,
-    assistant?.name,
-    config.ui.showTimestamps,
-    config.ui.showAvatars,
-    config.ui.compactMode,
-    config.features.enableMessageCopy,
-    config.features.enableMessageEditing,
-    config.features.enableRegeneration,
-    config.features.showActivity,
-    config.features.showActivityDetails,
-    config.labels,
-    config.labels.showMoreMessage,
-    config.labels.showLessMessage,
-    config.ui.collapseLongMessages,
-    config.ui.collapseLongMessagesForUserOnly,
-    config.ui.longMessagePreviewChars,
-    config.ui.longMessageChunkChars,
-    config.ui.renderUserMarkdown,
-    config.markdown,
-    handleMessageAction,
-    handleToggleMessageExpansion,
-  ]);
+  const messageProps = useMemo(
+    () => ({
+      userAvatar: user?.avatar,
+      userName: user?.name,
+      assistantAvatar: assistant?.avatar,
+      assistantName: assistant?.name,
+      showTimestamp: config.ui.showTimestamps,
+      showAvatar: config.ui.showAvatars,
+      enableCopy: config.features.enableMessageCopy,
+      enableEdit: config.features.enableMessageEditing,
+      enableRegenerate: config.features.enableRegeneration,
+      showActivity: config.features.showActivity,
+      showActivityDetails: config.features.showActivityDetails,
+      compactMode: config.ui.compactMode,
+      onAction: handleMessageAction,
+      labels: config.labels,
+      showMoreLabel: config.labels.showMoreMessage,
+      showLessLabel: config.labels.showLessMessage,
+      collapseLongMessages: config.ui.collapseLongMessages,
+      collapseLongMessagesForUserOnly:
+        config.ui.collapseLongMessagesForUserOnly,
+      longMessagePreviewChars: config.ui.longMessagePreviewChars,
+      longMessageChunkChars: config.ui.longMessageChunkChars,
+      renderUserMarkdown: config.ui.renderUserMarkdown,
+      markdown: config.markdown,
+      onToggleExpanded: handleToggleMessageExpansion,
+    }),
+    [
+      user?.avatar,
+      user?.name,
+      assistant?.avatar,
+      assistant?.name,
+      config.ui.showTimestamps,
+      config.ui.showAvatars,
+      config.ui.compactMode,
+      config.features.enableMessageCopy,
+      config.features.enableMessageEditing,
+      config.features.enableRegeneration,
+      config.features.showActivity,
+      config.features.showActivityDetails,
+      config.labels,
+      config.labels.showMoreMessage,
+      config.labels.showLessMessage,
+      config.ui.collapseLongMessages,
+      config.ui.collapseLongMessagesForUserOnly,
+      config.ui.longMessagePreviewChars,
+      config.ui.longMessageChunkChars,
+      config.ui.renderUserMarkdown,
+      config.markdown,
+      handleMessageAction,
+      handleToggleMessageExpansion,
+    ]
+  );
 
   const shouldShowAgentSelector = Boolean(
     config.agentSelector?.enabled &&
       agentOptions.length > 0 &&
       (!config.agentSelector?.hideIfSingle || agentOptions.length > 1) &&
-      (isMultiAgentMode ? onParticipantsChange : onSelectAgent),
+      (isMultiAgentMode ? onParticipantsChange : onSelectAgent)
   );
 
   return (
@@ -718,12 +767,13 @@ export const ChatUI: React.FC<ChatV2Props> = ({
             onRenameThread={handleRenameThread}
             onDeleteThread={handleDeleteThread}
             onArchiveThread={handleArchiveThread}
+            onUpdateThreadTags={handleUpdateThreadTags}
             // User menu props
             user={sidebarUser}
             userMenuCallbacks={sidebarUserMenuCallbacks}
-            currentTheme={config.ui.theme === "auto"
-              ? "system"
-              : config.ui.theme}
+            currentTheme={
+              config.ui.theme === "auto" ? "system" : config.ui.theme
+            }
             showThemeOptions={!!callbacks.onThemeChange}
             userMenuSections={userMenuSections}
             userMenuAdditionalItems={userMenuAdditionalItems}
@@ -734,9 +784,9 @@ export const ChatUI: React.FC<ChatV2Props> = ({
               {/* Header */}
               <ChatHeader
                 config={config}
-                currentThreadTitle={threads.find((t) =>
-                  t.id === state.selectedThreadId
-                )?.title}
+                currentThreadTitle={
+                  threads.find((t) => t.id === state.selectedThreadId)?.title
+                }
                 // onSidebarToggle is now handled by SidebarTrigger inside ChatHeader
                 isMobile={isMobile}
                 onCustomComponentToggle={handleCustomComponentToggle}
@@ -765,104 +815,99 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                     <div className="max-w-4xl mx-auto pb-4">
                       {groupedMessages.length > 0 && (
                         <div className="flex justify-center py-2">
-                          {isLoadingOlderMessages
-                            ? (
-                              <span className="text-xs text-muted-foreground">
-                                {config.labels.loadingOlderMessages}
-                              </span>
-                            )
-                            : hasMoreMessagesBefore
-                            ? (
-                              <button
-                                type="button"
-                                onClick={requestOlderMessages}
-                                className="text-xs text-muted-foreground transition-colors hover:text-foreground"
-                              >
-                                {config.labels.loadOlderMessages}
-                              </button>
-                            )
-                            : null}
+                          {isLoadingOlderMessages ? (
+                            <span className="text-xs text-muted-foreground">
+                              {config.labels.loadingOlderMessages}
+                            </span>
+                          ) : hasMoreMessagesBefore ? (
+                            <button
+                              type="button"
+                              onClick={requestOlderMessages}
+                              className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+                            >
+                              {config.labels.loadOlderMessages}
+                            </button>
+                          ) : null}
                         </div>
                       )}
-                      {isMessagesLoading
-                        ? (
-                          renderMessageLoadingSkeleton()
-                        )
-                        : groupedMessages.length === 0
-                        ? (
-                          renderSuggestions()
-                        )
-                        : (
-                          <div
-                            style={{
-                              height: `${virtualizer.getTotalSize()}px`,
-                              width: "100%",
-                              position: "relative",
-                            }}
-                          >
-                            {virtualizer.getVirtualItems().map((virtualRow) => {
-                              const group = groupedMessages[virtualRow.index];
-                              const message = group.message;
+                      {isMessagesLoading ? (
+                        renderMessageLoadingSkeleton()
+                      ) : groupedMessages.length === 0 ? (
+                        renderSuggestions()
+                      ) : (
+                        <div
+                          style={{
+                            height: `${virtualizer.getTotalSize()}px`,
+                            width: "100%",
+                            position: "relative",
+                          }}
+                        >
+                          {virtualizer.getVirtualItems().map((virtualRow) => {
+                            const group = groupedMessages[virtualRow.index];
+                            const message = group.message;
 
-                              return (
+                            return (
+                              <div
+                                key={group.id}
+                                data-index={virtualRow.index}
+                                ref={virtualizer.measureElement}
+                                style={{
+                                  position: "absolute",
+                                  top: 0,
+                                  left: 0,
+                                  width: "100%",
+                                  transform: `translateY(${virtualRow.start}px)`,
+                                }}
+                              >
                                 <div
-                                  key={group.id}
-                                  data-index={virtualRow.index}
-                                  ref={virtualizer.measureElement}
-                                  style={{
-                                    position: "absolute",
-                                    top: 0,
-                                    left: 0,
-                                    width: "100%",
-                                    transform:
-                                      `translateY(${virtualRow.start}px)`,
-                                  }}
+                                  className={
+                                    virtualRow.index === 0 ? "" : "pt-4"
+                                  }
                                 >
-                                  <div
-                                    className={virtualRow.index === 0
-                                      ? ""
-                                      : "pt-4"}
-                                  >
-                                    <Message
-                                      message={message}
-                                      {...messageProps}
-                                      isExpanded={Boolean(
-                                        expandedMessageIds[message.id],
-                                      )}
-                                    />
-                                    {message.role === "assistant" &&
-                                      renderInlineSuggestions(
-                                        group.suggestionMessageId,
-                                      )}
-                                  </div>
+                                  <Message
+                                    message={message}
+                                    {...messageProps}
+                                    isExpanded={Boolean(
+                                      expandedMessageIds[message.id]
+                                    )}
+                                  />
+                                  {message.role === "assistant" &&
+                                    renderInlineSuggestions(
+                                      group.suggestionMessageId
+                                    )}
                                 </div>
-                              );
-                            })}
-                          </div>
-                        )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   </ScrollArea>
 
                   {/* Input */}
                   <div className="bg-background pb-[env(safe-area-inset-bottom)]">
                     {/* Target agent selector for multi-agent mode */}
-                    {isMultiAgentMode && shouldShowAgentSelector &&
+                    {isMultiAgentMode &&
+                      shouldShowAgentSelector &&
                       onTargetAgentChange && (
-                      <div className="px-4 pt-1">
-                        <TargetAgentSelector
-                          agents={participantIds && participantIds.length > 0
-                            ? agentOptions.filter((a) =>
-                              participantIds.includes(a.id)
-                            )
-                            : agentOptions}
-                          targetAgentId={targetAgentId}
-                          onTargetChange={onTargetAgentChange}
-                          placeholder={config.agentSelector?.label ||
-                            "Select agent"}
-                          disabled={isGenerating}
-                        />
-                      </div>
-                    )}
+                        <div className="px-4 pt-1">
+                          <TargetAgentSelector
+                            agents={
+                              participantIds && participantIds.length > 0
+                                ? agentOptions.filter((a) =>
+                                    participantIds.includes(a.id)
+                                  )
+                                : agentOptions
+                            }
+                            targetAgentId={targetAgentId}
+                            onTargetChange={onTargetAgentChange}
+                            placeholder={
+                              config.agentSelector?.label || "Select agent"
+                            }
+                            disabled={isGenerating}
+                          />
+                        </div>
+                      )}
                     <ChatInput
                       value={inputValue}
                       onChange={(value) => {
@@ -884,17 +929,20 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                       isGenerating={isGenerating}
                       onStopGeneration={callbacks.onStopGeneration}
                       enableFileUpload={config.features.enableFileUpload}
-                      enableAudioRecording={config.features
-                        .enableAudioRecording}
+                      enableAudioRecording={
+                        config.features.enableAudioRecording
+                      }
                       maxAttachments={config.features.maxAttachments}
                       maxFileSize={config.features.maxFileSize}
                       acceptedFileTypes={config.features.acceptedFileTypes}
                       config={config}
-                      mentionAgents={participantIds && participantIds.length > 0
-                        ? agentOptions.filter((a) =>
-                          participantIds.includes(a.id)
-                        )
-                        : agentOptions}
+                      mentionAgents={
+                        participantIds && participantIds.length > 0
+                          ? agentOptions.filter((a) =>
+                              participantIds.includes(a.id)
+                            )
+                          : agentOptions
+                      }
                       onTargetAgentChange={onTargetAgentChange}
                     />
                   </div>
@@ -906,7 +954,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                     className="h-full transition-all duration-300 ease-in-out overflow-hidden"
                     style={{
                       width: state.showSidebar
-                        ? (config.customComponent.panelWidth ?? 320)
+                        ? config.customComponent.panelWidth ?? 320
                         : 0,
                     }}
                   >
@@ -956,14 +1004,16 @@ export const ChatUI: React.FC<ChatV2Props> = ({
             <UserProfile
               isOpen={isUserProfileOpen}
               onClose={() => setIsUserProfileOpen(false)}
-              user={user
-                ? {
-                  id: user.id,
-                  name: user.name,
-                  email: user.email,
-                  avatar: user.avatar,
-                }
-                : null}
+              user={
+                user
+                  ? {
+                      id: user.id,
+                      name: user.name,
+                      email: user.email,
+                      avatar: user.avatar,
+                    }
+                  : null
+              }
               customFields={userContext?.customFields}
               memories={userContext?.memories?.items}
               onLogout={callbacks.onLogout}

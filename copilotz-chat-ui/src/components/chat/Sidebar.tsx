@@ -1,5 +1,9 @@
-import React, { useEffect, useRef, useState } from "react";
-import { ChatThread, ChatUserMenuSection } from "../../types/chatTypes";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ChatThread,
+  ChatThreadTag,
+  ChatUserMenuSection,
+} from "../../types/chatTypes";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import {
@@ -48,10 +52,12 @@ import {
   Bot,
   Edit2,
   Filter,
+  Tag,
   MoreHorizontal,
   Plus,
   Search,
   Trash2,
+  X,
 } from "lucide-react";
 import {
   UserMenu,
@@ -76,6 +82,15 @@ export interface SidebarConfig {
     archiveThread?: string;
     unarchiveThread?: string;
     deleteThread?: string;
+    manageTags?: string;
+    tags?: string;
+    addTag?: string;
+    removeTag?: string;
+    tagNamePlaceholder?: string;
+    untagged?: string;
+    groupBy?: string;
+    groupByDate?: string;
+    groupByTag?: string;
     today?: string;
     yesterday?: string;
     createNewThread?: string;
@@ -88,6 +103,15 @@ export interface SidebarConfig {
     logo?: React.ReactNode;
     title?: React.ReactNode;
     subtitle?: React.ReactNode;
+  };
+  features?: {
+    threadTags?: {
+      enabled?: boolean;
+      groupingEnabled?: boolean;
+      defaultGroupBy?: "date" | "tag";
+      allowCreate?: boolean;
+      allowDrag?: boolean;
+    };
   };
   userMenu?: UserMenuConfig;
 }
@@ -102,6 +126,7 @@ export interface SidebarProps
   onRenameThread?: (threadId: string, newTitle: string) => void;
   onDeleteThread?: (threadId: string) => void;
   onArchiveThread?: (threadId: string) => void;
+  onUpdateThreadTags?: (threadId: string, tags: ChatThreadTag[]) => void;
   // User menu props
   user?: UserMenuUser | null;
   userMenuCallbacks?: UserMenuCallbacks;
@@ -150,8 +175,9 @@ const CreateThreadDialog: React.FC<{
         <Input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder={config.labels?.threadNamePlaceholder ||
-            "Conversation name"}
+          placeholder={
+            config.labels?.threadNamePlaceholder || "Conversation name"
+          }
           onKeyDown={(e) => e.key === "Enter" && handleCreate()}
           autoFocus
         />
@@ -169,12 +195,13 @@ const CreateThreadDialog: React.FC<{
 };
 
 const ThreadInitialsIcon = ({ title }: { title: string }) => {
-  const initials = title
-    ?.split(" ")
-    .map((n) => n[0])
-    .slice(0, 2)
-    .join("")
-    .toUpperCase() || "?";
+  const initials =
+    title
+      ?.split(" ")
+      .map((n) => n[0])
+      .slice(0, 2)
+      .join("")
+      .toUpperCase() || "?";
 
   return (
     <div className="flex shrink-0 items-center justify-center rounded bg-muted text-[10px] font-medium">
@@ -182,6 +209,59 @@ const ThreadInitialsIcon = ({ title }: { title: string }) => {
     </div>
   );
 };
+
+type ThreadGroup = {
+  key: string;
+  label: string;
+  tag?: ChatThreadTag;
+  threads: ChatThread[];
+};
+
+function slugTagName(name: string): string {
+  const slug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return slug || "tag";
+}
+
+function createThreadTag(name: string): ChatThreadTag {
+  return {
+    id: `tag_${slugTagName(name)}`,
+    name: name.trim(),
+  };
+}
+
+function mergeThreadTags(
+  tags: ChatThreadTag[],
+  tag: ChatThreadTag
+): ChatThreadTag[] {
+  const nameKey = tag.name.trim().toLowerCase();
+  if (!nameKey) return tags;
+  if (
+    tags.some(
+      (existing) =>
+        existing.id === tag.id || existing.name.trim().toLowerCase() === nameKey
+    )
+  ) {
+    return tags;
+  }
+  return [...tags, tag];
+}
+
+function collectThreadTags(threads: ChatThread[]): ChatThreadTag[] {
+  const tags: ChatThreadTag[] = [];
+  for (const thread of threads) {
+    for (const tag of thread.tags ?? []) {
+      if (!tags.some((existing) => existing.id === tag.id)) {
+        tags.push(tag);
+      }
+    }
+  }
+  return tags.sort((a, b) => a.name.localeCompare(b.name));
+}
 
 export const Sidebar: React.FC<SidebarProps> = ({
   threads,
@@ -192,6 +272,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onRenameThread,
   onDeleteThread,
   onArchiveThread,
+  onUpdateThreadTags,
   // User menu props
   user,
   userMenuCallbacks,
@@ -206,7 +287,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [deleteThreadId, setDeleteThreadId] = useState<string | null>(null);
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
+  const [tagDialogThreadId, setTagDialogThreadId] = useState<string | null>(
+    null
+  );
+  const [newTagName, setNewTagName] = useState("");
+  const [draggingThreadId, setDraggingThreadId] = useState<string | null>(null);
+  const [dragOverTagId, setDragOverTagId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const threadTagsConfig = config.features?.threadTags;
+  const tagsEnabled = !!threadTagsConfig?.enabled;
+  const canUpdateTags = tagsEnabled && !!onUpdateThreadTags;
+  const canDragTags = canUpdateTags && threadTagsConfig?.allowDrag !== false;
+  const [groupBy, setGroupBy] = useState<"date" | "tag">(
+    threadTagsConfig?.defaultGroupBy === "tag" ? "tag" : "date"
+  );
 
   // Use the sidebar context to control expansion
   const { setOpen } = useSidebar();
@@ -221,42 +315,117 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Filter threads based on search and archive filter
   const filteredThreads = threads.filter((thread) => {
     const title = (thread.title ?? "").toString();
-    const matchesSearch = title.toLowerCase().includes(
-      searchQuery.toLowerCase(),
-    );
+    const matchesSearch = title
+      .toLowerCase()
+      .includes(searchQuery.toLowerCase());
     const matchesArchiveFilter = showArchived || !thread.isArchived;
     return matchesSearch && matchesArchiveFilter;
   });
 
-  // Group threads by date
-  const groupedThreads = filteredThreads.reduce((groups, thread) => {
-    const date = new Date(thread.updatedAt);
-    const today = new Date();
-    const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+  const allTags = useMemo(() => collectThreadTags(threads), [threads]);
 
-    let groupKey: string;
-    if (date.toDateString() === today.toDateString()) {
-      groupKey = config.labels?.today || "Today";
-    } else if (date.toDateString() === yesterday.toDateString()) {
-      groupKey = config.labels?.yesterday || "Yesterday";
-    } else {
-      groupKey = date.toLocaleDateString("en-US", {
-        weekday: "long",
-        day: "2-digit",
-        month: "long",
-      });
+  const threadGroups = useMemo((): ThreadGroup[] => {
+    if (tagsEnabled && groupBy === "tag") {
+      const groups = allTags
+        .map((tag) => ({
+          key: tag.id,
+          label: tag.name,
+          tag,
+          threads: filteredThreads.filter((thread) =>
+            (thread.tags ?? []).some((threadTag) => threadTag.id === tag.id)
+          ),
+        }))
+        .filter((group) => group.threads.length > 0);
+      const untagged = filteredThreads.filter(
+        (thread) => (thread.tags ?? []).length === 0
+      );
+      if (untagged.length > 0) {
+        groups.push({
+          key: "untagged",
+          label: config.labels?.untagged || "Untagged",
+          threads: untagged,
+        });
+      }
+      return groups;
     }
 
-    if (!groups[groupKey]) {
-      groups[groupKey] = [];
+    const groups: ThreadGroup[] = [];
+    const groupMap = new Map<string, ThreadGroup>();
+    for (const thread of filteredThreads) {
+      const date = new Date(thread.updatedAt);
+      const today = new Date();
+      const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+
+      let groupKey: string;
+      if (date.toDateString() === today.toDateString()) {
+        groupKey = config.labels?.today || "Today";
+      } else if (date.toDateString() === yesterday.toDateString()) {
+        groupKey = config.labels?.yesterday || "Yesterday";
+      } else {
+        groupKey = date.toLocaleDateString("en-US", {
+          weekday: "long",
+          day: "2-digit",
+          month: "long",
+        });
+      }
+
+      const existing = groupMap.get(groupKey);
+      if (existing) {
+        existing.threads.push(thread);
+      } else {
+        const group = { key: groupKey, label: groupKey, threads: [thread] };
+        groupMap.set(groupKey, group);
+        groups.push(group);
+      }
     }
-    groups[groupKey].push(thread);
     return groups;
-  }, {} as Record<string, ChatThread[]>);
+  }, [
+    allTags,
+    config.labels?.today,
+    config.labels?.untagged,
+    config.labels?.yesterday,
+    filteredThreads,
+    groupBy,
+    tagsEnabled,
+  ]);
+
+  const tagDialogThread = tagDialogThreadId
+    ? threads.find((thread) => thread.id === tagDialogThreadId) ?? null
+    : null;
 
   const handleDeleteThread = (threadId: string) => {
     onDeleteThread?.(threadId);
     setDeleteThreadId(null);
+  };
+
+  const updateThreadTags = (thread: ChatThread, tags: ChatThreadTag[]) => {
+    onUpdateThreadTags?.(thread.id, tags);
+  };
+
+  const addTagToThread = (thread: ChatThread, tag: ChatThreadTag) => {
+    updateThreadTags(thread, mergeThreadTags(thread.tags ?? [], tag));
+  };
+
+  const removeTagFromThread = (thread: ChatThread, tagId: string) => {
+    updateThreadTags(
+      thread,
+      (thread.tags ?? []).filter((tag) => tag.id !== tagId)
+    );
+  };
+
+  const handleCreateTag = () => {
+    if (!tagDialogThread || !newTagName.trim()) return;
+    addTagToThread(tagDialogThread, createThreadTag(newTagName));
+    setNewTagName("");
+  };
+
+  const handleDropOnTag = (tag: ChatThreadTag) => {
+    const thread = draggingThreadId
+      ? threads.find((candidate) => candidate.id === draggingThreadId)
+      : null;
+    if (thread) addTagToThread(thread, tag);
+    setDraggingThreadId(null);
+    setDragOverTagId(null);
   };
 
   const startEditing = (thread: ChatThread) => {
@@ -368,134 +537,210 @@ export const Sidebar: React.FC<SidebarProps> = ({
             >
               <Filter className="mr-2 h-3 w-3" />
               {showArchived
-                ? (config.labels?.hideArchived || "Hide Archived")
-                : (config.labels?.showArchived || "Show Archived")}
+                ? config.labels?.hideArchived || "Hide Archived"
+                : config.labels?.showArchived || "Show Archived"}
             </Button>
           </div>
         )}
 
-        {Object.keys(groupedThreads).length === 0
-          ? (
-            <div className="px-4 py-8 text-center text-muted-foreground group-data-[collapsible=icon]:hidden">
-              <div className="mx-auto h-8 w-8 mb-2 flex items-center justify-center rounded-full bg-muted/50">
-                <Plus className="h-4 w-4 opacity-50" />
+        {tagsEnabled && threadTagsConfig?.groupingEnabled !== false && (
+          <div className="px-4 py-2 group-data-[collapsible=icon]:hidden">
+            <div className="flex items-center justify-between rounded-md border border-sidebar-border bg-sidebar-accent/40 p-1">
+              <span className="px-2 text-[11px] text-muted-foreground">
+                {config.labels?.groupBy || "Group by"}
+              </span>
+              <div className="flex gap-1">
+                <Button
+                  variant={groupBy === "date" ? "secondary" : "ghost"}
+                  size="sm"
+                  onClick={() => setGroupBy("date")}
+                  className="h-6 px-2 text-xs"
+                >
+                  {config.labels?.groupByDate || "Date"}
+                </Button>
+                <Button
+                  variant={groupBy === "tag" ? "secondary" : "ghost"}
+                  size="sm"
+                  onClick={() => setGroupBy("tag")}
+                  className="h-6 px-2 text-xs"
+                >
+                  {config.labels?.groupByTag || "Tag"}
+                </Button>
               </div>
-              <p className="text-xs">
-                {searchQuery
-                  ? (config.labels?.noThreadsFound || "No conversations found")
-                  : (config.labels?.noThreadsYet || "No conversations yet")}
-              </p>
             </div>
-          )
-          : (
-            Object.entries(groupedThreads).map(([group, groupThreads]) => (
-              <SidebarGroup className="mt-2" key={group}>
-                <SidebarGroupLabel className="group-data-[collapsible=icon]:hidden">
-                  {group}
-                </SidebarGroupLabel>
-                <SidebarGroupContent>
-                  <SidebarMenu>
-                    {groupThreads.map((thread) => (
-                      <SidebarMenuItem key={thread.id}>
-                        {editingThreadId === thread.id
-                          ? (
-                            <div className="flex items-center gap-1 px-2 py-1">
-                              <Input
-                                ref={inputRef}
-                                value={editTitle}
-                                onChange={(e) => setEditTitle(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") {
-                                    saveEdit();
-                                  }
-                                  if (e.key === "Escape") {
-                                    cancelEdit();
-                                  }
-                                }}
-                                onBlur={saveEdit}
-                                className="h-7 text-sm"
-                              />
-                            </div>
-                          )
-                          : (
-                            <SidebarMenuButton
-                              isActive={currentThreadId === thread.id}
-                              onClick={() => onSelectThread?.(thread.id)}
-                              tooltip={thread.title}
-                            >
-                              <ThreadInitialsIcon title={thread.title || "?"} />
-                              <div className="flex flex-col items-start gap-0.5 flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
-                                <span className="truncate w-full">
-                                  {thread.title || "New Chat"}
-                                </span>
-                              </div>
-                              {thread.isArchived && (
-                                <Archive className="ml-auto h-3 w-3 opacity-50 group-data-[collapsible=icon]:hidden" />
-                              )}
-                            </SidebarMenuButton>
-                          )}
+          </div>
+        )}
 
-                        {!editingThreadId && (
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <SidebarMenuAction showOnHover>
-                                <MoreHorizontal />
-                                <span className="sr-only">More</span>
-                              </SidebarMenuAction>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent
-                              className="w-48"
-                              side="right"
-                              align="start"
+        {threadGroups.length === 0 ? (
+          <div className="px-4 py-8 text-center text-muted-foreground group-data-[collapsible=icon]:hidden">
+            <div className="mx-auto h-8 w-8 mb-2 flex items-center justify-center rounded-full bg-muted/50">
+              <Plus className="h-4 w-4 opacity-50" />
+            </div>
+            <p className="text-xs">
+              {searchQuery
+                ? config.labels?.noThreadsFound || "No conversations found"
+                : config.labels?.noThreadsYet || "No conversations yet"}
+            </p>
+          </div>
+        ) : (
+          threadGroups.map((group) => (
+            <SidebarGroup
+              className="mt-2"
+              key={group.key}
+              onDragOver={(event) => {
+                if (!canDragTags || !group.tag) return;
+                event.preventDefault();
+                setDragOverTagId(group.tag.id);
+              }}
+              onDragLeave={() => {
+                if (dragOverTagId === group.tag?.id) setDragOverTagId(null);
+              }}
+              onDrop={(event) => {
+                if (!canDragTags || !group.tag) return;
+                event.preventDefault();
+                handleDropOnTag(group.tag);
+              }}
+            >
+              <SidebarGroupLabel
+                className={`group-data-[collapsible=icon]:hidden ${
+                  dragOverTagId === group.tag?.id
+                    ? "rounded-md bg-sidebar-accent text-sidebar-accent-foreground"
+                    : ""
+                }`}
+              >
+                {group.tag && <Tag className="mr-1 h-3 w-3" />}
+                {group.label}
+              </SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {group.threads.map((thread) => (
+                    <SidebarMenuItem key={thread.id}>
+                      {editingThreadId === thread.id ? (
+                        <div className="flex items-center gap-1 px-2 py-1">
+                          <Input
+                            ref={inputRef}
+                            value={editTitle}
+                            onChange={(e) => setEditTitle(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                saveEdit();
+                              }
+                              if (e.key === "Escape") {
+                                cancelEdit();
+                              }
+                            }}
+                            onBlur={saveEdit}
+                            className="h-7 text-sm"
+                          />
+                        </div>
+                      ) : (
+                        <SidebarMenuButton
+                          isActive={currentThreadId === thread.id}
+                          onClick={() => onSelectThread?.(thread.id)}
+                          tooltip={thread.title}
+                          draggable={canDragTags}
+                          onDragStart={() => setDraggingThreadId(thread.id)}
+                          onDragEnd={() => {
+                            setDraggingThreadId(null);
+                            setDragOverTagId(null);
+                          }}
+                        >
+                          <ThreadInitialsIcon title={thread.title || "?"} />
+                          <div className="flex flex-col items-start gap-0.5 flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
+                            <span className="truncate w-full">
+                              {thread.title || "New Chat"}
+                            </span>
+                            {tagsEnabled && (thread.tags ?? []).length > 0 && (
+                              <span className="flex max-w-full flex-wrap gap-1">
+                                {(thread.tags ?? []).slice(0, 2).map((tag) => (
+                                  <span
+                                    key={tag.id}
+                                    className="max-w-20 truncate rounded bg-sidebar-accent px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                                  >
+                                    {tag.name}
+                                  </span>
+                                ))}
+                              </span>
+                            )}
+                          </div>
+                          {thread.isArchived && (
+                            <Archive className="ml-auto h-3 w-3 opacity-50 group-data-[collapsible=icon]:hidden" />
+                          )}
+                        </SidebarMenuButton>
+                      )}
+
+                      {!editingThreadId && (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <SidebarMenuAction showOnHover>
+                              <MoreHorizontal />
+                              <span className="sr-only">More</span>
+                            </SidebarMenuAction>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent
+                            className="w-48"
+                            side="right"
+                            align="start"
+                          >
+                            <DropdownMenuItem
+                              onClick={() => startEditing(thread)}
                             >
+                              <Edit2 className="mr-2 h-4 w-4" />
+                              <span>
+                                {config.labels?.renameThread || "Rename"}
+                              </span>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => onArchiveThread?.(thread.id)}
+                            >
+                              <Archive className="mr-2 h-4 w-4" />
+                              <span>
+                                {thread.isArchived
+                                  ? config.labels?.unarchiveThread ||
+                                    "Unarchive"
+                                  : config.labels?.archiveThread || "Archive"}
+                              </span>
+                            </DropdownMenuItem>
+                            {canUpdateTags && (
                               <DropdownMenuItem
-                                onClick={() => startEditing(thread)}
+                                onClick={() => {
+                                  setTagDialogThreadId(thread.id);
+                                  setNewTagName("");
+                                }}
                               >
-                                <Edit2 className="mr-2 h-4 w-4" />
+                                <Tag className="mr-2 h-4 w-4" />
                                 <span>
-                                  {config.labels?.renameThread || "Rename"}
+                                  {config.labels?.manageTags || "Manage tags"}
                                 </span>
                               </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onClick={() =>
-                                  onArchiveThread?.(thread.id)}
-                              >
-                                <Archive className="mr-2 h-4 w-4" />
-                                <span>
-                                  {thread.isArchived
-                                    ? (config.labels?.unarchiveThread ||
-                                      "Unarchive")
-                                    : (config.labels?.archiveThread ||
-                                      "Archive")}
-                                </span>
-                              </DropdownMenuItem>
-                              <DropdownMenuSeparator />
-                              <DropdownMenuItem
-                                onClick={() => setDeleteThreadId(thread.id)}
-                                className="text-destructive focus:text-destructive"
-                              >
-                                <Trash2 className="mr-2 h-4 w-4" />
-                                <span>
-                                  {config.labels?.deleteThread || "Delete"}
-                                </span>
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        )}
-                      </SidebarMenuItem>
-                    ))}
-                  </SidebarMenu>
-                </SidebarGroupContent>
-              </SidebarGroup>
-            ))
-          )}
+                            )}
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              onClick={() => setDeleteThreadId(thread.id)}
+                              className="text-destructive focus:text-destructive"
+                            >
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              <span>
+                                {config.labels?.deleteThread || "Delete"}
+                              </span>
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      )}
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          ))
+        )}
       </SidebarContent>
 
-    <SidebarFooter>
-      <UserMenu
-        user={user}
-        config={config.userMenu}
-        callbacks={userMenuCallbacks}
+      <SidebarFooter>
+        <UserMenu
+          user={user}
+          config={config.userMenu}
+          callbacks={userMenuCallbacks}
           currentTheme={currentTheme}
           showThemeOptions={showThemeOptions}
           sections={userMenuSections}
@@ -504,6 +749,115 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </SidebarFooter>
 
       <SidebarRail />
+
+      {tagDialogThread && (
+        <Dialog
+          open={!!tagDialogThread}
+          onOpenChange={(open) => {
+            if (!open) {
+              setTagDialogThreadId(null);
+              setNewTagName("");
+            }
+          }}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>
+                {config.labels?.manageTags || "Manage tags"}
+              </DialogTitle>
+              <DialogDescription>
+                {tagDialogThread.title || "New Chat"}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <div className="text-sm font-medium">
+                  {config.labels?.tags || "Tags"}
+                </div>
+                {(tagDialogThread.tags ?? []).length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    {config.labels?.untagged || "Untagged"}
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {(tagDialogThread.tags ?? []).map((tag) => (
+                      <span
+                        key={tag.id}
+                        className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-sm"
+                      >
+                        {tag.name}
+                        <button
+                          type="button"
+                          className="rounded hover:bg-background"
+                          onClick={() =>
+                            removeTagFromThread(tagDialogThread, tag.id)
+                          }
+                          aria-label={config.labels?.removeTag || "Remove tag"}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {allTags.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-sm font-medium">
+                    {config.labels?.addTag || "Add tag"}
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {allTags.map((tag) => {
+                      const assigned = (tagDialogThread.tags ?? []).some(
+                        (threadTag) => threadTag.id === tag.id
+                      );
+                      return (
+                        <Button
+                          key={tag.id}
+                          type="button"
+                          variant={assigned ? "secondary" : "outline"}
+                          size="sm"
+                          disabled={assigned}
+                          onClick={() => addTagToThread(tagDialogThread, tag)}
+                        >
+                          {tag.name}
+                        </Button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {threadTagsConfig?.allowCreate !== false && (
+                <div className="flex gap-2">
+                  <Input
+                    value={newTagName}
+                    onChange={(event) => setNewTagName(event.target.value)}
+                    placeholder={
+                      config.labels?.tagNamePlaceholder || "Tag name"
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        handleCreateTag();
+                      }
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    onClick={handleCreateTag}
+                    disabled={!newTagName.trim()}
+                  >
+                    {config.labels?.addTag || "Add tag"}
+                  </Button>
+                </div>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {/* Delete confirmation dialog - only render when needed to avoid Radix focus conflicts */}
       {deleteThreadId && (
@@ -527,7 +881,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </AlertDialogCancel>
               <AlertDialogAction
                 onClick={() =>
-                  deleteThreadId && handleDeleteThread(deleteThreadId)}
+                  deleteThreadId && handleDeleteThread(deleteThreadId)
+                }
                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               >
                 {config.labels?.deleteThread || "Delete"}

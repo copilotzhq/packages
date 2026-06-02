@@ -1,66 +1,47 @@
 // deno-lint-ignore-file no-explicit-any
 import { useState, useCallback, useRef, useEffect } from 'react';
-import {
-  runCopilotzStream,
-  fetchThreads,
-  fetchThreadMessagesPage,
-  updateThread as updateThreadApi,
-  deleteThread as deleteThreadApi,
-} from './copilotzService';
+import { runCopilotzStream, fetchThreads, fetchThreadMessagesPage, updateThread as updateThreadApi, deleteThread as deleteThreadApi } from './copilotzService';
 import { getAttachmentKindFromMimeType, getMimeTypeFromDataUrl } from '@copilotz/chat-ui';
-import type {
-  AgentOption,
-  AssistantActivityBlock,
-  ChatMessage as ChatViewMessage,
-  ChatSender,
-  ChatThread,
-  MediaAttachment,
-  ChatUserContext,
-} from '@copilotz/chat-ui';
+import type { AgentOption, AssistantActivityBlock, ChatMessage as ChatViewMessage, ChatSender, ChatThread, ChatThreadTag, MediaAttachment, ChatUserContext } from '@copilotz/chat-ui';
 import { useUrlState } from './useUrlState';
 import type { EventInterceptor, RunErrorInterceptor, SpecialChatState } from './specialState';
 import type { RequestHeadersProvider, RestMessage, RestMessagePageInfo } from './copilotzService';
-import {
-  appendAssistantToolCall,
-  closeAssistantMessage,
-  finalizeAssistantMessage,
-  hasVisibleAssistantOutput,
-  type InternalChatMessage,
-  updateAssistantMessageToken,
-  toPublicChatMessage,
-} from './activity';
-import {
-  resolveAgentSender,
-  resolveAssistantFallbackSender,
-  resolveLiveEventSender,
-  resolveUserSender,
-  type SenderResolutionOptions,
-} from './senders';
-import {
-  convertServerMessage,
-  isInternalMessageMetadata,
-  prepareHydratedMessages,
-} from './messageContract';
-import {
-  applyToolResultUpdateToMessages,
-  canAttachToStreamingAssistant,
-  extractLiveToolCall,
-  extractLiveToolResultUpdate,
-  mergePersistedToolResults,
-  messageAgentKey,
-  matchesToolResultUpdate,
-  prependUniqueMessages,
-  type ToolResultUpdate,
-} from './toolActivity';
+import { appendAssistantToolCall, closeAssistantMessage, finalizeAssistantMessage, hasVisibleAssistantOutput, type InternalChatMessage, updateAssistantMessageToken, toPublicChatMessage } from './activity';
+import { resolveAgentSender, resolveAssistantFallbackSender, resolveLiveEventSender, resolveUserSender, type SenderResolutionOptions } from './senders';
+import { convertServerMessage, isInternalMessageMetadata, prepareHydratedMessages } from './messageContract';
+import { applyToolResultUpdateToMessages, canAttachToStreamingAssistant, extractLiveToolCall, extractLiveToolResultUpdate, mergePersistedToolResults, messageAgentKey, matchesToolResultUpdate, prependUniqueMessages, type ToolResultUpdate } from './toolActivity';
 
 const nowTs = () => Date.now();
-const generateId = () =>
-  (globalThis.crypto?.randomUUID?.() ?? `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`) as string;
-const isAbortError = (error: unknown) => (
-  error instanceof DOMException && error.name === 'AbortError'
-) || (typeof error === 'object' && error !== null && 'name' in error && (error as { name?: string }).name === 'AbortError');
+const generateId = () => (globalThis.crypto?.randomUUID?.() ?? `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`) as string;
+const isAbortError = (error: unknown) => (error instanceof DOMException && error.name === 'AbortError') || (typeof error === 'object' && error !== null && 'name' in error && (error as { name?: string }).name === 'AbortError');
 const getEventPayload = (event: any) => event?.payload ?? event;
 const getEventSenderType = (payload: any): string | undefined => payload?.senderType || payload?.sender?.type;
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const normalizeThreadTag = (value: unknown): ChatThreadTag | null => {
+  if (!isRecord(value)) return null;
+  const id = typeof value.id === 'string' ? value.id.trim() : '';
+  const name = typeof value.name === 'string' ? value.name.trim() : '';
+  const color = typeof value.color === 'string' && value.color.trim() ? value.color.trim() : undefined;
+  if (!id || !name) return null;
+  return color ? { id, name, color } : { id, name };
+};
+
+const getThreadTagsFromMetadata = (metadata: unknown): ChatThreadTag[] => {
+  if (!isRecord(metadata) || !isRecord(metadata.public)) return [];
+  const tags = metadata.public.tags;
+  if (!Array.isArray(tags)) return [];
+  return tags.map(normalizeThreadTag).filter((tag): tag is ChatThreadTag => !!tag);
+};
+
+const patchMetadataPublicTags = (metadata: Record<string, unknown> | undefined, tags: ChatThreadTag[]): Record<string, unknown> => ({
+  ...(metadata ?? {}),
+  public: {
+    ...(isRecord(metadata?.public) ? metadata.public : {}),
+    tags,
+  },
+});
 
 type ServerThread = Awaited<ReturnType<typeof fetchThreads>>[number];
 type ServerMessage = RestMessage;
@@ -74,18 +55,17 @@ const createEmptyMessagePageInfo = (): RestMessagePageInfo => ({
 });
 
 const createPendingAssistantActivity = (): AssistantActivityBlock => ({
-  items: [{
-    id: 'thinking',
-    kind: 'thinking',
-    status: 'active',
-    startedAt: nowTs(),
-  }],
+  items: [
+    {
+      id: 'thinking',
+      kind: 'thinking',
+      status: 'active',
+      startedAt: nowTs(),
+    },
+  ],
 });
 
-const getCurrentUserDisplayName = (
-  explicitName: string | undefined,
-  fallbackId: string,
-): string => explicitName?.trim() || fallbackId;
+const getCurrentUserDisplayName = (explicitName: string | undefined, fallbackId: string): string => explicitName?.trim() || fallbackId;
 
 export interface UseCopilotzOptions {
   userId: string | null;
@@ -110,29 +90,9 @@ export interface UseCopilotzOptions {
   runErrorInterceptor?: RunErrorInterceptor;
 }
 
-export function useCopilotz({
-  userId,
-  userName,
-  userAvatar,
-  assistantName,
-  agentOptions = [],
-  initialContext,
-  bootstrap,
-  defaultThreadName,
-  onToolOutput,
-  preferredAgentName,
-  participants,
-  targetAgentName,
-  getRequestHeaders,
-  eventInterceptor,
-  runErrorInterceptor,
-}: UseCopilotzOptions) {
+export function useCopilotz({ userId, userName, userAvatar, assistantName, agentOptions = [], initialContext, bootstrap, defaultThreadName, onToolOutput, preferredAgentName, participants, targetAgentName, getRequestHeaders, eventInterceptor, runErrorInterceptor }: UseCopilotzOptions) {
   // URL state — thread ID is synced to/from URL by default
-  const {
-    state: urlState,
-    setThreadId: setUrlThreadId,
-    isEnabled: isUrlSyncEnabled,
-  } = useUrlState();
+  const { state: urlState, setThreadId: setUrlThreadId, isEnabled: isUrlSyncEnabled } = useUrlState();
 
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [threadMetadataMap, setThreadMetadataMap] = useState<Record<string, Record<string, unknown> | undefined>>({});
@@ -202,59 +162,64 @@ export function useCopilotz({
     }
   }, [initialContext]);
 
-  const processToolOutput = useCallback((output: Record<string, unknown>) => {
-    if (!output) return;
+  const processToolOutput = useCallback(
+    (output: Record<string, unknown>) => {
+      if (!output) return;
 
-    const contextPatch: Partial<ChatUserContext> = {};
+      const contextPatch: Partial<ChatUserContext> = {};
 
-    // Generic merge of userContext from output if present
-    if (output.userContext && typeof output.userContext === 'object') {
-      Object.assign(contextPatch, output.userContext as Partial<ChatUserContext>);
-    }
+      // Generic merge of userContext from output if present
+      if (output.userContext && typeof output.userContext === 'object') {
+        Object.assign(contextPatch, output.userContext as Partial<ChatUserContext>);
+      }
 
-    if (Object.keys(contextPatch).length > 0) {
-      setUserContextSeed((prev) => ({ ...prev, ...contextPatch }));
-    }
+      if (Object.keys(contextPatch).length > 0) {
+        setUserContextSeed((prev) => ({ ...prev, ...contextPatch }));
+      }
 
-    onToolOutput?.(output);
-  }, [onToolOutput]);
+      onToolOutput?.(output);
+    },
+    [onToolOutput]
+  );
 
   const clearSpecialState = useCallback(() => {
     setSpecialState(null);
   }, []);
 
-  const applyEventInterceptor = useCallback((event: unknown) => {
-    if (!eventInterceptor) return undefined;
-    try {
-      const result = eventInterceptor(event);
-      if (result?.specialState) {
-        setSpecialState(result.specialState);
+  const applyEventInterceptor = useCallback(
+    (event: unknown) => {
+      if (!eventInterceptor) return undefined;
+      try {
+        const result = eventInterceptor(event);
+        if (result?.specialState) {
+          setSpecialState(result.specialState);
+        }
+        return result;
+      } catch (error) {
+        console.error('Error in Copilotz event interceptor', error);
+        return undefined;
       }
-      return result;
-    } catch (error) {
-      console.error('Error in Copilotz event interceptor', error);
-      return undefined;
-    }
-  }, [eventInterceptor]);
+    },
+    [eventInterceptor]
+  );
 
-  const getSpecialStateFromError = useCallback((error: unknown) => {
-    if (!runErrorInterceptor) return null;
-    try {
-      return runErrorInterceptor(error) ?? null;
-    } catch (interceptorError) {
-      console.error('Error in Copilotz run error interceptor', interceptorError);
-      return null;
-    }
-  }, [runErrorInterceptor]);
+  const getSpecialStateFromError = useCallback(
+    (error: unknown) => {
+      if (!runErrorInterceptor) return null;
+      try {
+        return runErrorInterceptor(error) ?? null;
+      } catch (interceptorError) {
+        console.error('Error in Copilotz run error interceptor', interceptorError);
+        return null;
+      }
+    },
+    [runErrorInterceptor]
+  );
 
   const handleStreamMessageEvent = useCallback((event: any) => {
     const payload = getEventPayload(event);
     if (!payload) return;
-    const liveMetadata = (
-      event?.metadata && typeof event.metadata === 'object'
-        ? event.metadata
-        : payload?.metadata
-    ) as Record<string, unknown> | undefined;
+    const liveMetadata = (event?.metadata && typeof event.metadata === 'object' ? event.metadata : payload?.metadata) as Record<string, unknown> | undefined;
     if (isInternalMessageMetadata(liveMetadata)) {
       return;
     }
@@ -317,10 +282,9 @@ export function useCopilotz({
         title: thread.name || 'Chat',
         createdAt,
         updatedAt,
-        messageCount: typeof thread.metadata?.messageCount === 'number'
-          ? thread.metadata!.messageCount as number
-          : 0,
+        messageCount: typeof thread.metadata?.messageCount === 'number' ? (thread.metadata!.messageCount as number) : 0,
         isArchived: thread.status === 'archived',
+        tags: getThreadTagsFromMetadata(thread.metadata),
         metadata: thread.metadata ?? undefined,
       } as ChatThread;
     });
@@ -359,59 +323,64 @@ export function useCopilotz({
     return nextThreadId;
   }, []); // No dependencies needed now as we use refs for reading current state
 
-  const fetchAndSetThreadsState = useCallback(async (uid: string, preferredExternalId?: string | null) => {
-    try {
-      const rawThreads = await fetchThreads(uid, getRequestHeaders);
-      return updateThreadsState(rawThreads, preferredExternalId);
-    } catch (error) {
-      if (isAbortError(error)) return;
-      console.error('Error loading threads', error);
-      return null;
-    }
-  }, [updateThreadsState, getRequestHeaders]);
-
-  const prepareThreadMessages = useCallback(async (rawMessages: ServerMessage[]) => {
-    return prepareHydratedMessages(rawMessages, {
-      senderOptions: senderOptionsRef.current,
-      createId: generateId,
-      now: nowTs,
-      onToolOutput: processToolOutput,
-      getRequestHeaders,
-    });
-  }, [getRequestHeaders, processToolOutput]);
-
-  const loadThreadMessages = useCallback(async (threadId: string) => {
-    const requestId = messagesRequestRef.current + 1;
-    messagesRequestRef.current = requestId;
-    setIsMessagesLoading(true);
-    setIsLoadingOlderMessages(false);
-    setMessagePageInfo(createEmptyMessagePageInfo());
-    persistedToolUpdatesRef.current = [];
-    liveToolUpdatesRef.current = [];
-    try {
-      const page = await fetchThreadMessagesPage(
-        threadId,
-        { limit: THREAD_MESSAGES_PAGE_SIZE },
-        getRequestHeaders,
-      );
-      const { viewMessages, toolResultUpdates } = await prepareThreadMessages(page.data);
-      if (messagesRequestRef.current !== requestId) return;
-
-      persistedToolUpdatesRef.current = toolResultUpdates;
-      const hydratedMessages = mergePersistedToolResults(viewMessages, persistedToolUpdatesRef.current);
-      setMessages(hydratedMessages);
-      setMessagePageInfo(page.pageInfo);
-    } catch (error) {
-      if (isAbortError(error)) return;
-      console.error(`Error loading messages for thread ${threadId}`, error);
-      persistedToolUpdatesRef.current = [];
-      setMessagePageInfo(createEmptyMessagePageInfo());
-    } finally {
-      if (messagesRequestRef.current === requestId) {
-        setIsMessagesLoading(false);
+  const fetchAndSetThreadsState = useCallback(
+    async (uid: string, preferredExternalId?: string | null) => {
+      try {
+        const rawThreads = await fetchThreads(uid, getRequestHeaders);
+        return updateThreadsState(rawThreads, preferredExternalId);
+      } catch (error) {
+        if (isAbortError(error)) return;
+        console.error('Error loading threads', error);
+        return null;
       }
-    }
-  }, [getRequestHeaders, prepareThreadMessages]);
+    },
+    [updateThreadsState, getRequestHeaders]
+  );
+
+  const prepareThreadMessages = useCallback(
+    async (rawMessages: ServerMessage[]) => {
+      return prepareHydratedMessages(rawMessages, {
+        senderOptions: senderOptionsRef.current,
+        createId: generateId,
+        now: nowTs,
+        onToolOutput: processToolOutput,
+        getRequestHeaders,
+      });
+    },
+    [getRequestHeaders, processToolOutput]
+  );
+
+  const loadThreadMessages = useCallback(
+    async (threadId: string) => {
+      const requestId = messagesRequestRef.current + 1;
+      messagesRequestRef.current = requestId;
+      setIsMessagesLoading(true);
+      setIsLoadingOlderMessages(false);
+      setMessagePageInfo(createEmptyMessagePageInfo());
+      persistedToolUpdatesRef.current = [];
+      liveToolUpdatesRef.current = [];
+      try {
+        const page = await fetchThreadMessagesPage(threadId, { limit: THREAD_MESSAGES_PAGE_SIZE }, getRequestHeaders);
+        const { viewMessages, toolResultUpdates } = await prepareThreadMessages(page.data);
+        if (messagesRequestRef.current !== requestId) return;
+
+        persistedToolUpdatesRef.current = toolResultUpdates;
+        const hydratedMessages = mergePersistedToolResults(viewMessages, persistedToolUpdatesRef.current);
+        setMessages(hydratedMessages);
+        setMessagePageInfo(page.pageInfo);
+      } catch (error) {
+        if (isAbortError(error)) return;
+        console.error(`Error loading messages for thread ${threadId}`, error);
+        persistedToolUpdatesRef.current = [];
+        setMessagePageInfo(createEmptyMessagePageInfo());
+      } finally {
+        if (messagesRequestRef.current === requestId) {
+          setIsMessagesLoading(false);
+        }
+      }
+    },
+    [getRequestHeaders, prepareThreadMessages]
+  );
 
   const loadOlderMessages = useCallback(async () => {
     const threadId = currentThreadIdRef.current;
@@ -426,23 +395,13 @@ export function useCopilotz({
     setIsLoadingOlderMessages(true);
 
     try {
-      const page = await fetchThreadMessagesPage(
-        threadId,
-        { limit: THREAD_MESSAGES_PAGE_SIZE, before },
-        getRequestHeaders,
-      );
+      const page = await fetchThreadMessagesPage(threadId, { limit: THREAD_MESSAGES_PAGE_SIZE, before }, getRequestHeaders);
       const { viewMessages, toolResultUpdates } = await prepareThreadMessages(page.data);
       if (messagesRequestRef.current !== requestId) return;
 
-      persistedToolUpdatesRef.current = [
-        ...toolResultUpdates,
-        ...persistedToolUpdatesRef.current,
-      ];
+      persistedToolUpdatesRef.current = [...toolResultUpdates, ...persistedToolUpdatesRef.current];
 
-      setMessages((prev) => mergePersistedToolResults(
-        prependUniqueMessages(viewMessages, prev),
-        persistedToolUpdatesRef.current,
-      ));
+      setMessages((prev) => mergePersistedToolResults(prependUniqueMessages(viewMessages, prev), persistedToolUpdatesRef.current));
       setMessagePageInfo(page.pageInfo);
     } catch (error) {
       if (isAbortError(error)) return;
@@ -454,16 +413,19 @@ export function useCopilotz({
     }
   }, [getRequestHeaders, prepareThreadMessages]);
 
-  const handleSelectThread = useCallback(async (threadId: string) => {
-    setCurrentThreadId(threadId);
-    setMessages([]);
-    setMessagePageInfo(createEmptyMessagePageInfo());
-    persistedToolUpdatesRef.current = [];
-    // Use ref for external map to avoid re-creation
-    const extMap = threadExternalIdMapRef.current;
-    setCurrentThreadExternalId(extMap[threadId] ?? null);
-    await loadThreadMessages(threadId);
-  }, [loadThreadMessages]);
+  const handleSelectThread = useCallback(
+    async (threadId: string) => {
+      setCurrentThreadId(threadId);
+      setMessages([]);
+      setMessagePageInfo(createEmptyMessagePageInfo());
+      persistedToolUpdatesRef.current = [];
+      // Use ref for external map to avoid re-creation
+      const extMap = threadExternalIdMapRef.current;
+      setCurrentThreadExternalId(extMap[threadId] ?? null);
+      await loadThreadMessages(threadId);
+    },
+    [loadThreadMessages]
+  );
 
   const handleCreateThread = useCallback((title?: string) => {
     messagesRequestRef.current += 1;
@@ -481,7 +443,10 @@ export function useCopilotz({
     };
 
     setThreads((prev) => [newThread, ...prev]);
-    setThreadMetadataMap((prev) => ({ ...prev, [id]: { pendingTitle: title?.trim() || undefined } }));
+    setThreadMetadataMap((prev) => ({
+      ...prev,
+      [id]: { pendingTitle: title?.trim() || undefined },
+    }));
     setThreadExternalIdMap((prev) => ({ ...prev, [id]: id }));
     setCurrentThreadId(id);
     setCurrentThreadExternalId(id);
@@ -490,114 +455,146 @@ export function useCopilotz({
     persistedToolUpdatesRef.current = [];
   }, []);
 
-  const handleRenameThread = useCallback(async (threadId: string, newTitle: string) => {
-    const trimmedTitle = newTitle.trim();
-    if (!trimmedTitle) return;
+  const handleRenameThread = useCallback(
+    async (threadId: string, newTitle: string) => {
+      const trimmedTitle = newTitle.trim();
+      if (!trimmedTitle) return;
 
-    // Update local state immediately
-    setThreads((prev) =>
-      prev.map((t) => (t.id === threadId ? { ...t, title: trimmedTitle, updatedAt: nowTs() } : t))
-    );
+      // Update local state immediately
+      setThreads((prev) => prev.map((t) => (t.id === threadId ? { ...t, title: trimmedTitle, updatedAt: nowTs() } : t)));
 
-    // Check if this is a placeholder thread (not yet persisted)
-    const extMap = threadExternalIdMapRef.current;
-    const isPlaceholder = extMap[threadId] === threadId;
+      // Check if this is a placeholder thread (not yet persisted)
+      const extMap = threadExternalIdMapRef.current;
+      const isPlaceholder = extMap[threadId] === threadId;
 
-    if (isPlaceholder) {
-      // Store title in metadata for when thread is created
+      if (isPlaceholder) {
+        // Store title in metadata for when thread is created
+        setThreadMetadataMap((prev) => ({
+          ...prev,
+          [threadId]: { ...prev[threadId], pendingTitle: trimmedTitle },
+        }));
+      } else {
+        // Persist to backend
+        try {
+          await updateThreadApi(threadId, { name: trimmedTitle }, getRequestHeaders);
+        } catch (error) {
+          console.error('Failed to rename thread:', error);
+          // Revert on error - refetch threads
+          if (userId) {
+            await fetchAndSetThreadsState(userId, currentThreadExternalIdRef.current);
+          }
+        }
+      }
+    },
+    [userId, fetchAndSetThreadsState, getRequestHeaders]
+  );
+
+  const handleArchiveThread = useCallback(
+    async (threadId: string) => {
+      // Find current archive status
+      const thread = threadsRef.current.find((t) => t.id === threadId);
+      if (!thread) return;
+
+      const newArchivedStatus = !thread.isArchived;
+
+      // Update local state immediately
+      setThreads((prev) => prev.map((t) => (t.id === threadId ? { ...t, isArchived: newArchivedStatus, updatedAt: nowTs() } : t)));
+
+      // Check if this is a placeholder thread
+      const extMap = threadExternalIdMapRef.current;
+      const isPlaceholder = extMap[threadId] === threadId;
+
+      if (!isPlaceholder) {
+        try {
+          await updateThreadApi(threadId, { status: newArchivedStatus ? 'archived' : 'active' }, getRequestHeaders);
+        } catch (error) {
+          console.error('Failed to archive thread:', error);
+          // Revert on error
+          if (userId) {
+            await fetchAndSetThreadsState(userId, currentThreadExternalIdRef.current);
+          }
+        }
+      }
+    },
+    [userId, fetchAndSetThreadsState, getRequestHeaders]
+  );
+
+  const handleUpdateThreadTags = useCallback(
+    async (threadId: string, tags: ChatThreadTag[]) => {
+      const extMap = threadExternalIdMapRef.current;
+      const currentMetadata = threadMetadataMapRef.current[threadId];
+      const nextMetadata = patchMetadataPublicTags(currentMetadata, tags);
+
+      setThreads((prev) => prev.map((thread) => (thread.id === threadId ? { ...thread, tags, metadata: nextMetadata, updatedAt: nowTs() } : thread)));
       setThreadMetadataMap((prev) => ({
         ...prev,
-        [threadId]: { ...prev[threadId], pendingTitle: trimmedTitle },
+        [threadId]: nextMetadata,
       }));
-    } else {
-      // Persist to backend
+
+      const isPlaceholder = extMap[threadId] === threadId;
+      if (isPlaceholder) return;
+
       try {
-        await updateThreadApi(threadId, { name: trimmedTitle }, getRequestHeaders);
+        await updateThreadApi(threadId, { metadata: nextMetadata }, getRequestHeaders);
       } catch (error) {
-        console.error('Failed to rename thread:', error);
-        // Revert on error - refetch threads
+        console.error('Failed to update thread tags:', error);
         if (userId) {
           await fetchAndSetThreadsState(userId, currentThreadExternalIdRef.current);
         }
       }
-    }
-  }, [userId, fetchAndSetThreadsState, getRequestHeaders]);
+    },
+    [userId, fetchAndSetThreadsState, getRequestHeaders]
+  );
 
-  const handleArchiveThread = useCallback(async (threadId: string) => {
-    // Find current archive status
-    const thread = threadsRef.current.find((t) => t.id === threadId);
-    if (!thread) return;
+  const handleDeleteThread = useCallback(
+    async (threadId: string) => {
+      // Check if this is a placeholder thread
+      const extMap = threadExternalIdMapRef.current;
+      const isPlaceholder = extMap[threadId] === threadId;
 
-    const newArchivedStatus = !thread.isArchived;
+      // Remove from local state immediately
+      setThreads((prev) => prev.filter((t) => t.id !== threadId));
+      setThreadMetadataMap((prev) => {
+        const next = { ...prev };
+        delete next[threadId];
+        return next;
+      });
+      setThreadExternalIdMap((prev) => {
+        const next = { ...prev };
+        delete next[threadId];
+        return next;
+      });
 
-    // Update local state immediately
-    setThreads((prev) =>
-      prev.map((t) => (t.id === threadId ? { ...t, isArchived: newArchivedStatus, updatedAt: nowTs() } : t))
-    );
-
-    // Check if this is a placeholder thread
-    const extMap = threadExternalIdMapRef.current;
-    const isPlaceholder = extMap[threadId] === threadId;
-
-    if (!isPlaceholder) {
-      try {
-        await updateThreadApi(threadId, { status: newArchivedStatus ? 'archived' : 'active' }, getRequestHeaders);
-      } catch (error) {
-        console.error('Failed to archive thread:', error);
-        // Revert on error
-        if (userId) {
-          await fetchAndSetThreadsState(userId, currentThreadExternalIdRef.current);
+      // If deleting current thread, switch to another
+      if (currentThreadIdRef.current === threadId) {
+        const remaining = threadsRef.current.filter((t) => t.id !== threadId);
+        if (remaining.length > 0) {
+          setCurrentThreadId(remaining[0].id);
+          setCurrentThreadExternalId(extMap[remaining[0].id] ?? null);
+          await loadThreadMessages(remaining[0].id);
+        } else {
+          setCurrentThreadId(null);
+          setCurrentThreadExternalId(null);
+          setMessages([]);
+          setMessagePageInfo(createEmptyMessagePageInfo());
+          persistedToolUpdatesRef.current = [];
         }
       }
-    }
-  }, [userId, fetchAndSetThreadsState, getRequestHeaders]);
 
-  const handleDeleteThread = useCallback(async (threadId: string) => {
-    // Check if this is a placeholder thread
-    const extMap = threadExternalIdMapRef.current;
-    const isPlaceholder = extMap[threadId] === threadId;
-
-    // Remove from local state immediately
-    setThreads((prev) => prev.filter((t) => t.id !== threadId));
-    setThreadMetadataMap((prev) => {
-      const next = { ...prev };
-      delete next[threadId];
-      return next;
-    });
-    setThreadExternalIdMap((prev) => {
-      const next = { ...prev };
-      delete next[threadId];
-      return next;
-    });
-
-    // If deleting current thread, switch to another
-    if (currentThreadIdRef.current === threadId) {
-      const remaining = threadsRef.current.filter((t) => t.id !== threadId);
-      if (remaining.length > 0) {
-        setCurrentThreadId(remaining[0].id);
-        setCurrentThreadExternalId(extMap[remaining[0].id] ?? null);
-        await loadThreadMessages(remaining[0].id);
-      } else {
-        setCurrentThreadId(null);
-        setCurrentThreadExternalId(null);
-        setMessages([]);
-        setMessagePageInfo(createEmptyMessagePageInfo());
-        persistedToolUpdatesRef.current = [];
-      }
-    }
-
-    if (!isPlaceholder) {
-      try {
-        await deleteThreadApi(threadId, getRequestHeaders);
-      } catch (error) {
-        console.error('Failed to delete thread:', error);
-        // Refetch to restore state on error
-        if (userId) {
-          await fetchAndSetThreadsState(userId, currentThreadExternalIdRef.current);
+      if (!isPlaceholder) {
+        try {
+          await deleteThreadApi(threadId, getRequestHeaders);
+        } catch (error) {
+          console.error('Failed to delete thread:', error);
+          // Refetch to restore state on error
+          if (userId) {
+            await fetchAndSetThreadsState(userId, currentThreadExternalIdRef.current);
+          }
         }
       }
-    }
-  }, [userId, fetchAndSetThreadsState, loadThreadMessages, getRequestHeaders]);
+    },
+    [userId, fetchAndSetThreadsState, loadThreadMessages, getRequestHeaders]
+  );
 
   const handleStop = useCallback(() => {
     abortControllerRef.current?.abort();
@@ -627,688 +624,646 @@ export function useCopilotz({
       ...(typeof payload.size === 'number' ? { size: payload.size } : {}),
     };
 
-    setMessages((prev) => prev.map((msg) => (msg.id === assistantMessageId
-      ? {
-        ...msg,
-        attachments: [...(msg.attachments || []), mediaAttachment],
-      }
-      : msg)));
+    setMessages((prev) =>
+      prev.map((msg) =>
+        msg.id === assistantMessageId
+          ? {
+              ...msg,
+              attachments: [...(msg.attachments || []), mediaAttachment],
+            }
+          : msg
+      )
+    );
   }, []);
 
-  const sendCopilotzMessage = useCallback(async (
-    params: {
-      threadId?: string | null;
-      threadExternalId?: string | null;
-      content: string;
-      attachments?: MediaAttachment[];
-      metadata?: Record<string, unknown>;
-      threadMetadata?: Record<string, unknown>;
-      toolCalls?: Array<{ name: string; args: Record<string, unknown> }>;
-      userId: string;
-      userName?: string;
-      userMetadata?: Record<string, unknown>;
-      agentName?: string | null;
-      assistantMessageId?: string;
-      assistantSender?: ChatSender;
-      onBeforeStart?: (assistantMessageId: string) => void;
-    },
-  ) => {
-    // Track the current live assistant message so one sender streak stays in one bubble.
-    let currentAssistantId = params.assistantMessageId ?? generateId();
-    let currentAssistantSender: ChatSender | undefined = params.assistantSender;
-    params.onBeforeStart?.(currentAssistantId);
+  const sendCopilotzMessage = useCallback(
+    async (params: { threadId?: string | null; threadExternalId?: string | null; content: string; attachments?: MediaAttachment[]; metadata?: Record<string, unknown>; threadMetadata?: Record<string, unknown>; toolCalls?: Array<{ name: string; args: Record<string, unknown> }>; userId: string; userName?: string; userMetadata?: Record<string, unknown>; agentName?: string | null; assistantMessageId?: string; assistantSender?: ChatSender; onBeforeStart?: (assistantMessageId: string) => void }) => {
+      // Track the current live assistant message so one sender streak stays in one bubble.
+      let currentAssistantId = params.assistantMessageId ?? generateId();
+      let currentAssistantSender: ChatSender | undefined = params.assistantSender;
+      params.onBeforeStart?.(currentAssistantId);
 
-    let hasStreamProgress = false;
+      let hasStreamProgress = false;
 
-    // Combined function to ensure bubble exists AND update content in a single setMessages call
-    const updateStreamingMessage = (
-      partial: string,
-      opts?: {
-        isReasoning?: boolean;
-        agent?: { id?: string | null; name?: string | null } | null;
-      },
-    ) => {
-      if (partial && partial.length > 0) {
-        hasStreamProgress = true;
-      }
-
-      const isReasoning = opts?.isReasoning ?? false;
-      const nextSender = opts?.agent
-        ? resolveAgentSender(opts.agent, senderOptionsRef.current)
-        : currentAssistantSender;
-      if (nextSender) {
-        currentAssistantSender = nextSender;
-      }
-      const nextAgentKey = currentAssistantSender?.agentId ?? currentAssistantSender?.id ?? null;
-
-      const applyUpdate = (msg: InternalChatMessage): InternalChatMessage => {
-        return {
-          ...updateAssistantMessageToken(msg, {
-            partial,
-            isReasoning,
-          }),
-          ...(currentAssistantSender ? { sender: currentAssistantSender } : {}),
-        };
-      };
-      
-      setMessages((prev) => {
-        const idx = prev.findIndex((m) => m.id === currentAssistantId);
-        if (idx >= 0 && canAttachToStreamingAssistant(prev[idx], nextAgentKey)) {
-          const msg = prev[idx];
-          const next = applyUpdate(msg);
-          if (msg.content === next.content && msg.activity === next.activity && msg.isStreaming === next.isStreaming && msg.isComplete === next.isComplete) {
-            return prev;
-          }
-          const updated = [...prev];
-          updated[idx] = next;
-          return updated;
+      // Combined function to ensure bubble exists AND update content in a single setMessages call
+      const updateStreamingMessage = (
+        partial: string,
+        opts?: {
+          isReasoning?: boolean;
+          agent?: { id?: string | null; name?: string | null } | null;
         }
-        
-        const last = prev[prev.length - 1];
-        if (canAttachToStreamingAssistant(last, nextAgentKey)) {
-          currentAssistantId = last.id;
-          const next = applyUpdate(last);
-          if (last.content === next.content && last.activity === next.activity && last.isStreaming === next.isStreaming && last.isComplete === next.isComplete) {
-            return prev;
-          }
-          const updated = [...prev];
-          updated[prev.length - 1] = next;
-          return updated;
+      ) => {
+        if (partial && partial.length > 0) {
+          hasStreamProgress = true;
         }
-        
-        const lastStreamingBelongsToDifferentAgent =
-          Boolean(nextAgentKey) &&
-          last?.role === 'assistant' &&
-          last.isStreaming &&
-          Boolean(messageAgentKey(last)) &&
-          messageAgentKey(last) !== nextAgentKey;
 
-        if (
-          !prev.length ||
-          (prev[prev.length - 1].role !== 'assistant' || !prev[prev.length - 1].isStreaming) ||
-          lastStreamingBelongsToDifferentAgent
-        ) {
-          const newId = generateId();
-          currentAssistantId = newId;
-          const base: InternalChatMessage = {
-            id: newId,
-            role: 'assistant' as const,
-            content: '',
-            timestamp: nowTs(),
-            isStreaming: true,
-            isComplete: false,
+        const isReasoning = opts?.isReasoning ?? false;
+        const nextSender = opts?.agent ? resolveAgentSender(opts.agent, senderOptionsRef.current) : currentAssistantSender;
+        if (nextSender) {
+          currentAssistantSender = nextSender;
+        }
+        const nextAgentKey = currentAssistantSender?.agentId ?? currentAssistantSender?.id ?? null;
+
+        const applyUpdate = (msg: InternalChatMessage): InternalChatMessage => {
+          return {
+            ...updateAssistantMessageToken(msg, {
+              partial,
+              isReasoning,
+            }),
             ...(currentAssistantSender ? { sender: currentAssistantSender } : {}),
           };
-          return [...prev, applyUpdate(base)];
-        }
-        
-        return prev;
-      });
-    };
+        };
 
-    const finalizeCurrentAssistantBubble = () => {
-      setMessages((prev) => {
-        const idx = prev.findIndex((m) => m.id === currentAssistantId);
-        if (idx < 0) return prev;
-        const msg = prev[idx];
-        // Skip update if already finalized
-        if (!msg.isStreaming && msg.isComplete) return prev;
-        const updated = [...prev];
-        updated[idx] = closeAssistantMessage(msg);
-        return updated;
-      });
-    };
-
-    // Using Refs for accessing current state inside callback
-    const curThreadId = currentThreadIdRef.current;
-
-    const applyLiveToolResultUpdate = (update: ToolResultUpdate) => {
-      let matched = false;
-      setMessages((prev) => {
-        const next = applyToolResultUpdateToMessages(prev, update, {
-          isStreaming: true,
-          isComplete: false,
-        });
-        matched = next.matched;
-        return next.matched ? next.messages : prev;
-      });
-
-      if (!matched) {
-        liveToolUpdatesRef.current.push(update);
-      }
-    };
-
-    const finalizeActiveAssistantTurn = (finalAnswer?: string) => {
-      setMessages((prev) => {
-        const currentIdx = prev.findIndex((message) => (
-          message.id === currentAssistantId &&
-          message.role === 'assistant'
-        ));
-        const fallbackIdx = currentIdx >= 0
-          ? currentIdx
-          : (() => {
-            for (let i = prev.length - 1; i >= 0; i--) {
-                if (prev[i].role === 'assistant' && prev[i].isStreaming) {
-                  return i;
-                }
+        setMessages((prev) => {
+          const idx = prev.findIndex((m) => m.id === currentAssistantId);
+          if (idx >= 0 && canAttachToStreamingAssistant(prev[idx], nextAgentKey)) {
+            const msg = prev[idx];
+            const next = applyUpdate(msg);
+            if (msg.content === next.content && msg.activity === next.activity && msg.isStreaming === next.isStreaming && msg.isComplete === next.isComplete) {
+              return prev;
             }
-            return -1;
-          })();
+            const updated = [...prev];
+            updated[idx] = next;
+            return updated;
+          }
 
-        if (fallbackIdx < 0) return prev;
+          const last = prev[prev.length - 1];
+          if (canAttachToStreamingAssistant(last, nextAgentKey)) {
+            currentAssistantId = last.id;
+            const next = applyUpdate(last);
+            if (last.content === next.content && last.activity === next.activity && last.isStreaming === next.isStreaming && last.isComplete === next.isComplete) {
+              return prev;
+            }
+            const updated = [...prev];
+            updated[prev.length - 1] = next;
+            return updated;
+          }
 
-        const message = prev[fallbackIdx];
-        const nextMessage = finalizeAssistantMessage(message, finalAnswer);
+          const lastStreamingBelongsToDifferentAgent = Boolean(nextAgentKey) && last?.role === 'assistant' && last.isStreaming && Boolean(messageAgentKey(last)) && messageAgentKey(last) !== nextAgentKey;
 
-        if (
-          message.content === nextMessage.content &&
-          message.isStreaming === nextMessage.isStreaming &&
-          message.isComplete === nextMessage.isComplete &&
-          message.activity === nextMessage.activity
-        ) {
+          if (!prev.length || prev[prev.length - 1].role !== 'assistant' || !prev[prev.length - 1].isStreaming || lastStreamingBelongsToDifferentAgent) {
+            const newId = generateId();
+            currentAssistantId = newId;
+            const base: InternalChatMessage = {
+              id: newId,
+              role: 'assistant' as const,
+              content: '',
+              timestamp: nowTs(),
+              isStreaming: true,
+              isComplete: false,
+              ...(currentAssistantSender ? { sender: currentAssistantSender } : {}),
+            };
+            return [...prev, applyUpdate(base)];
+          }
+
           return prev;
+        });
+      };
+
+      const finalizeCurrentAssistantBubble = () => {
+        setMessages((prev) => {
+          const idx = prev.findIndex((m) => m.id === currentAssistantId);
+          if (idx < 0) return prev;
+          const msg = prev[idx];
+          // Skip update if already finalized
+          if (!msg.isStreaming && msg.isComplete) return prev;
+          const updated = [...prev];
+          updated[idx] = closeAssistantMessage(msg);
+          return updated;
+        });
+      };
+
+      // Using Refs for accessing current state inside callback
+      const curThreadId = currentThreadIdRef.current;
+
+      const applyLiveToolResultUpdate = (update: ToolResultUpdate) => {
+        let matched = false;
+        setMessages((prev) => {
+          const next = applyToolResultUpdateToMessages(prev, update, {
+            isStreaming: true,
+            isComplete: false,
+          });
+          matched = next.matched;
+          return next.matched ? next.messages : prev;
+        });
+
+        if (!matched) {
+          liveToolUpdatesRef.current.push(update);
+        }
+      };
+
+      const finalizeActiveAssistantTurn = (finalAnswer?: string) => {
+        setMessages((prev) => {
+          const currentIdx = prev.findIndex((message) => message.id === currentAssistantId && message.role === 'assistant');
+          const fallbackIdx =
+            currentIdx >= 0
+              ? currentIdx
+              : (() => {
+                  for (let i = prev.length - 1; i >= 0; i--) {
+                    if (prev[i].role === 'assistant' && prev[i].isStreaming) {
+                      return i;
+                    }
+                  }
+                  return -1;
+                })();
+
+          if (fallbackIdx < 0) return prev;
+
+          const message = prev[fallbackIdx];
+          const nextMessage = finalizeAssistantMessage(message, finalAnswer);
+
+          if (message.content === nextMessage.content && message.isStreaming === nextMessage.isStreaming && message.isComplete === nextMessage.isComplete && message.activity === nextMessage.activity) {
+            return prev;
+          }
+
+          const updated = [...prev];
+          updated[fallbackIdx] = nextMessage;
+          currentAssistantId = nextMessage.id;
+          return updated;
+        });
+      };
+
+      // Build a ServerMessage-like object from selected streaming artifact events.
+      const toServerMessageFromEvent = async (event: any): Promise<ServerMessage | null> => {
+        if (!event) return null;
+        const type = (event?.type as string) || '';
+        const payload = event?.payload ?? event;
+
+        // TOOL_CALL bubble
+        if (type === 'TOOL_CALL') {
+          const parsedToolCall = extractLiveToolCall(payload);
+
+          return {
+            id: generateId(),
+            threadId: curThreadId ?? '',
+            senderType: 'tool',
+            content: '',
+            toolCalls: [
+              {
+                id: parsedToolCall.id ?? generateId(),
+                name: parsedToolCall.name,
+                args: parsedToolCall.arguments,
+                ...(parsedToolCall.result !== undefined ? { output: parsedToolCall.result } : {}),
+                status: parsedToolCall.status,
+              },
+            ] as Array<Record<string, unknown>>,
+          } as unknown as ServerMessage;
         }
 
-        const updated = [...prev];
-        updated[fallbackIdx] = nextMessage;
-        currentAssistantId = nextMessage.id;
-        return updated;
-      });
-    };
+        return null;
+      };
 
-    // Build a ServerMessage-like object from selected streaming artifact events.
-    const toServerMessageFromEvent = async (event: any): Promise<ServerMessage | null> => {
-      if (!event) return null;
-      const type = (event?.type as string) || '';
-      const payload = event?.payload ?? event;
+      const abortController = new AbortController();
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = abortController;
+      setIsStreaming(true);
+      // Reset the live tool-result buffer at the start of every stream so
+      // stale updates from a previous run can't leak into this one.
+      liveToolUpdatesRef.current = [];
 
-      // TOOL_CALL bubble
-      if (type === 'TOOL_CALL') {
-        const parsedToolCall = extractLiveToolCall(payload);
+      try {
+        const normalizedUserMetadata = params.userMetadata ? (JSON.parse(JSON.stringify(params.userMetadata)) as Record<string, unknown>) : undefined;
 
-        return {
-          id: generateId(),
-          threadId: curThreadId ?? '',
-          senderType: 'tool',
-          content: '',
-          toolCalls: [{
-            id: parsedToolCall.id ?? generateId(),
-            name: parsedToolCall.name,
-            args: parsedToolCall.arguments,
-            ...(parsedToolCall.result !== undefined ? { output: parsedToolCall.result } : {}),
-            status: parsedToolCall.status,
-          }] as Array<Record<string, unknown>>,
-        } as unknown as ServerMessage;
-      }
+        const contextSeed = userContextSeedRef.current;
+        const contextMetadata = contextSeed ? (JSON.parse(JSON.stringify(contextSeed)) as Record<string, unknown>) : undefined;
+        const requestContent = params.content && params.content.length > 0 ? params.content : '';
 
-      return null;
-    };
+        const metadataKey = params.threadId ?? params.threadExternalId ?? undefined;
+        // Read from ref to avoid dependency on threadMetadataMap
+        const currentThreadMetadataMap = threadMetadataMapRef.current;
+        const messageMetadata = metadataKey ? (currentThreadMetadataMap[metadataKey]?.userContext as Record<string, unknown> | undefined) : undefined;
+        const threadMetadata = metadataKey ? currentThreadMetadataMap[metadataKey] : undefined;
 
-    const abortController = new AbortController();
-    abortControllerRef.current?.abort();
-    abortControllerRef.current = abortController;
-    setIsStreaming(true);
-    // Reset the live tool-result buffer at the start of every stream so
-    // stale updates from a previous run can't leak into this one.
-    liveToolUpdatesRef.current = [];
+        const mergedMetadata = {
+          ...(messageMetadata ?? {}),
+          ...(params.metadata ?? {}),
+        } as Record<string, unknown>;
 
-    try {
-      const normalizedUserMetadata = params.userMetadata
-        ? JSON.parse(JSON.stringify(params.userMetadata)) as Record<string, unknown>
-        : undefined;
+        const finalMetadata = Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined;
 
-      const contextSeed = userContextSeedRef.current;
-      const contextMetadata = contextSeed
-        ? JSON.parse(JSON.stringify(contextSeed)) as Record<string, unknown>
-        : undefined;
-      const requestContent = params.content && params.content.length > 0 ? params.content : '';
-
-      const metadataKey = params.threadId ?? params.threadExternalId ?? undefined;
-      // Read from ref to avoid dependency on threadMetadataMap
-      const currentThreadMetadataMap = threadMetadataMapRef.current;
-      const messageMetadata = metadataKey ? currentThreadMetadataMap[metadataKey]?.userContext as Record<string, unknown> | undefined : undefined;
-      const threadMetadata = metadataKey ? currentThreadMetadataMap[metadataKey] : undefined;
-
-      const mergedMetadata = {
-        ...(messageMetadata ?? {}),
-        ...(params.metadata ?? {}),
-      } as Record<string, unknown>;
-
-      const finalMetadata = Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined;
-
-      await runCopilotzStream({
-        threadId: params.threadId ?? undefined,
-        threadExternalId: params.threadExternalId ?? undefined,
-        content: requestContent,
-        user: {
-          externalId: params.userId,
-          name: params.userName ?? params.userId,
-          metadata: {
-            ...(contextMetadata ? contextMetadata : {}),
-            ...(normalizedUserMetadata ?? {}),
+        await runCopilotzStream({
+          threadId: params.threadId ?? undefined,
+          threadExternalId: params.threadExternalId ?? undefined,
+          content: requestContent,
+          user: {
+            externalId: params.userId,
+            name: params.userName ?? params.userId,
+            metadata: {
+              ...(contextMetadata ? contextMetadata : {}),
+              ...(normalizedUserMetadata ?? {}),
+            },
           },
-        },
-        attachments: params.attachments,
-        metadata: finalMetadata,
-        threadMetadata: params.threadMetadata ?? threadMetadata,
-        toolCalls: params.toolCalls,
-        selectedAgent: params.agentName ?? preferredAgentRef.current ?? null,
-        participants: participantsRef.current,
-        targetAgent: targetAgentNameRef.current,
-        getRequestHeaders,
-        onToken: (token, _isComplete, raw, opts) => updateStreamingMessage(token, {
-          ...opts,
-          agent: raw?.payload?.agent ?? raw?.agent ?? null,
-        }),
-        onMessageEvent: async (event: any) => {
-          const intercepted = applyEventInterceptor(event);
-          if (intercepted?.handled) {
-            return;
-          }
-
-          const type = (event?.type as string) || '';
-          const payload = getEventPayload(event);
-
-          if (type === 'TOOL_RESULT') {
-            processToolOutput((payload ?? {}) as Record<string, unknown>);
-            applyLiveToolResultUpdate(extractLiveToolResultUpdate(
-              (payload ?? {}) as Record<string, unknown>,
-            ));
-            return;
-          }
-
-          if (type === 'LLM_RESULT') {
-            const finalAnswer = typeof payload?.answer === 'string' ? payload.answer : undefined;
-            finalizeActiveAssistantTurn(finalAnswer);
-            return;
-          }
-
-          if (type === 'MESSAGE' || type === 'NEW_MESSAGE') {
-            return;
-          }
-
-          // TOOL_CALL events: render inside current assistant bubble.
-          // NOTE: This branch stays synchronous so any immediately following
-          // TOOL_RESULT can reconcile against the rendered tool call.
-          if (type === 'TOOL_CALL') {
-            const parsedToolCall = extractLiveToolCall(
-              (payload ?? {}) as Record<string, unknown>,
-            );
-            const eventSender = resolveLiveEventSender(event, senderOptionsRef.current);
-            currentAssistantSender = eventSender;
-            const eventAgentKey = currentAssistantSender.agentId ?? currentAssistantSender.id;
-            const callId = parsedToolCall.id ?? generateId();
-            const toolName = parsedToolCall.name;
-
-            // Drain any tool-result updates that arrived before this TOOL_CALL.
-            const bufferedUpdates = liveToolUpdatesRef.current;
-            const matchingUpdateIndex = bufferedUpdates.findIndex((upd) => (
-              matchesToolResultUpdate({ id: callId, name: toolName }, upd)
-            ));
-            const bufferedUpdate = matchingUpdateIndex >= 0 ? bufferedUpdates[matchingUpdateIndex] : undefined;
-            if (matchingUpdateIndex >= 0) {
-              bufferedUpdates.splice(matchingUpdateIndex, 1);
+          attachments: params.attachments,
+          metadata: finalMetadata,
+          threadMetadata: params.threadMetadata ?? threadMetadata,
+          toolCalls: params.toolCalls,
+          selectedAgent: params.agentName ?? preferredAgentRef.current ?? null,
+          participants: participantsRef.current,
+          targetAgent: targetAgentNameRef.current,
+          getRequestHeaders,
+          onToken: (token, _isComplete, raw, opts) =>
+            updateStreamingMessage(token, {
+              ...opts,
+              agent: raw?.payload?.agent ?? raw?.agent ?? null,
+            }),
+          onMessageEvent: async (event: any) => {
+            const intercepted = applyEventInterceptor(event);
+            if (intercepted?.handled) {
+              return;
             }
 
-            const initialStatus: 'pending' | 'running' | 'completed' | 'failed' =
-              bufferedUpdate ? bufferedUpdate.status : parsedToolCall.status;
-            const initialResult = bufferedUpdate && bufferedUpdate.result !== undefined
-              ? bufferedUpdate.result
-              : parsedToolCall.result;
-            const endTime = bufferedUpdate?.endTime;
+            const type = (event?.type as string) || '';
+            const payload = getEventPayload(event);
 
-            setMessages((prev) =>
-              (() => {
-                const canHostActivity = (message: ChatViewMessage | undefined) => {
-                  if (!message) return false;
-                  return message.role === 'assistant' &&
-                    message.isStreaming &&
-                    message.content.trim().length === 0 &&
-                    !message.attachments?.length;
-                };
-                const appendToolCall = (msg: ChatViewMessage) => ({
-                  ...appendAssistantToolCall(msg, {
-                    id: callId,
-                    name: toolName,
-                    arguments: parsedToolCall.arguments,
-                    ...(initialResult !== undefined ? { result: initialResult } : {}),
-                    status: initialStatus,
-                    startTime: Date.now(),
-                    ...(endTime !== undefined ? { endTime } : {}),
-                  }),
-                });
+            if (type === 'TOOL_RESULT') {
+              processToolOutput((payload ?? {}) as Record<string, unknown>);
+              applyLiveToolResultUpdate(extractLiveToolResultUpdate((payload ?? {}) as Record<string, unknown>));
+              return;
+            }
 
-                const currentIdx = prev.findIndex((message) => (
-                  message.id === currentAssistantId &&
-                  message.role === 'assistant' &&
-                  message.isStreaming &&
-                  canHostActivity(message)
-                ));
-                if (currentIdx >= 0) {
-                  const next = [...prev];
-                  next[currentIdx] = appendToolCall({
-                    ...next[currentIdx],
-                    isStreaming: true,
-                    isComplete: false,
-                    ...(currentAssistantSender ? { sender: currentAssistantSender } : {}),
+            if (type === 'LLM_RESULT') {
+              const finalAnswer = typeof payload?.answer === 'string' ? payload.answer : undefined;
+              finalizeActiveAssistantTurn(finalAnswer);
+              return;
+            }
+
+            if (type === 'MESSAGE' || type === 'NEW_MESSAGE') {
+              return;
+            }
+
+            // TOOL_CALL events: render inside current assistant bubble.
+            // NOTE: This branch stays synchronous so any immediately following
+            // TOOL_RESULT can reconcile against the rendered tool call.
+            if (type === 'TOOL_CALL') {
+              const parsedToolCall = extractLiveToolCall((payload ?? {}) as Record<string, unknown>);
+              const eventSender = resolveLiveEventSender(event, senderOptionsRef.current);
+              currentAssistantSender = eventSender;
+              const eventAgentKey = currentAssistantSender.agentId ?? currentAssistantSender.id;
+              const callId = parsedToolCall.id ?? generateId();
+              const toolName = parsedToolCall.name;
+
+              // Drain any tool-result updates that arrived before this TOOL_CALL.
+              const bufferedUpdates = liveToolUpdatesRef.current;
+              const matchingUpdateIndex = bufferedUpdates.findIndex((upd) => matchesToolResultUpdate({ id: callId, name: toolName }, upd));
+              const bufferedUpdate = matchingUpdateIndex >= 0 ? bufferedUpdates[matchingUpdateIndex] : undefined;
+              if (matchingUpdateIndex >= 0) {
+                bufferedUpdates.splice(matchingUpdateIndex, 1);
+              }
+
+              const initialStatus: 'pending' | 'running' | 'completed' | 'failed' = bufferedUpdate ? bufferedUpdate.status : parsedToolCall.status;
+              const initialResult = bufferedUpdate && bufferedUpdate.result !== undefined ? bufferedUpdate.result : parsedToolCall.result;
+              const endTime = bufferedUpdate?.endTime;
+
+              setMessages((prev) =>
+                (() => {
+                  const canHostActivity = (message: ChatViewMessage | undefined) => {
+                    if (!message) return false;
+                    return message.role === 'assistant' && message.isStreaming && message.content.trim().length === 0 && !message.attachments?.length;
+                  };
+                  const appendToolCall = (msg: ChatViewMessage) => ({
+                    ...appendAssistantToolCall(msg, {
+                      id: callId,
+                      name: toolName,
+                      arguments: parsedToolCall.arguments,
+                      ...(initialResult !== undefined ? { result: initialResult } : {}),
+                      status: initialStatus,
+                      startTime: Date.now(),
+                      ...(endTime !== undefined ? { endTime } : {}),
+                    }),
                   });
-                  return next;
-                }
 
-                const last = prev[prev.length - 1];
-                if (canHostActivity(last) && canAttachToStreamingAssistant(
-                  last,
-                  eventAgentKey,
-                )) {
-                  currentAssistantId = last.id;
-                  const next = [...prev];
-                  next[prev.length - 1] = appendToolCall({
-                    ...last,
-                    isStreaming: true,
-                    isComplete: false,
-                    ...(currentAssistantSender ? { sender: currentAssistantSender } : {}),
-                  });
-                  return next;
-                }
+                  const currentIdx = prev.findIndex((message) => message.id === currentAssistantId && message.role === 'assistant' && message.isStreaming && canHostActivity(message));
+                  if (currentIdx >= 0) {
+                    const next = [...prev];
+                    next[currentIdx] = appendToolCall({
+                      ...next[currentIdx],
+                      isStreaming: true,
+                      isComplete: false,
+                      ...(currentAssistantSender ? { sender: currentAssistantSender } : {}),
+                    });
+                    return next;
+                  }
 
-                // No assistant message yet – create one to host the tool call
-                const newId = generateId();
-                currentAssistantId = newId;
-                return [
-                  ...prev,
-                  appendToolCall({
-                    id: newId,
-                    role: 'assistant',
-                    content: '',
-                    timestamp: nowTs(),
-                    isStreaming: true,
-                    isComplete: false,
-                    ...(currentAssistantSender ? { sender: currentAssistantSender } : {}),
-                  }),
-                ];
-              })(),
-            );
-            hasStreamProgress = true;
-            return;
-          }
+                  const last = prev[prev.length - 1];
+                  if (canHostActivity(last) && canAttachToStreamingAssistant(last, eventAgentKey)) {
+                    currentAssistantId = last.id;
+                    const next = [...prev];
+                    next[prev.length - 1] = appendToolCall({
+                      ...last,
+                      isStreaming: true,
+                      isComplete: false,
+                      ...(currentAssistantSender ? { sender: currentAssistantSender } : {}),
+                    });
+                    return next;
+                  }
 
-          // Other event types (ASSET_CREATED, etc.) should render as their own bubbles
-          const sm = await toServerMessageFromEvent(event);
-          if (sm) {
-            const viewMsg = convertServerMessage(sm, {
-              senderOptions: senderOptionsRef.current,
-              createId: generateId,
-              now: nowTs,
+                  // No assistant message yet – create one to host the tool call
+                  const newId = generateId();
+                  currentAssistantId = newId;
+                  return [
+                    ...prev,
+                    appendToolCall({
+                      id: newId,
+                      role: 'assistant',
+                      content: '',
+                      timestamp: nowTs(),
+                      isStreaming: true,
+                      isComplete: false,
+                      ...(currentAssistantSender ? { sender: currentAssistantSender } : {}),
+                    }),
+                  ];
+                })()
+              );
+              hasStreamProgress = true;
+              return;
+            }
+
+            // Other event types (ASSET_CREATED, etc.) should render as their own bubbles
+            const sm = await toServerMessageFromEvent(event);
+            if (sm) {
+              const viewMsg = convertServerMessage(sm, {
+                senderOptions: senderOptionsRef.current,
+                createId: generateId,
+                now: nowTs,
+              });
+              finalizeCurrentAssistantBubble();
+              setMessages((prev) => [...prev, viewMsg]);
+              return;
+            }
+
+            // Fallback for unknown events
+            handleStreamMessageEvent(event);
+          },
+          onAssetEvent: async (payload: any) => {
+            const intercepted = applyEventInterceptor({
+              type: 'ASSET_CREATED',
+              payload,
             });
-            finalizeCurrentAssistantBubble();
-            setMessages((prev) => [...prev, viewMsg]);
-            return;
-          }
+            if (intercepted?.handled) {
+              return;
+            }
 
-          // Fallback for unknown events
-          handleStreamMessageEvent(event);
-        },
-        onAssetEvent: async (payload: any) => {
-          const intercepted = applyEventInterceptor({ type: 'ASSET_CREATED', payload });
-          if (intercepted?.handled) {
-            return;
-          }
-
-          // Treat as ASSET_CREATED event in unified handler
-          await (async () => {
-            if (!hasStreamProgress) return;
-            handleStreamAssetEvent(payload, currentAssistantId);
-          })();
-        },
-        signal: abortController.signal,
-      });
-    } finally {
-      setIsStreaming(false);
-      setMessages((prev) => {
-        const hasStreaming = prev.some((msg) => msg.isStreaming);
-        if (!hasStreaming) return prev;
-        return prev.map((msg) => (msg.isStreaming
-          ? closeAssistantMessage(msg)
-          : msg));
-      });
-      abortControllerRef.current = null;
-    }
-
-    return currentAssistantId;
-  }, [applyEventInterceptor, handleStreamMessageEvent, handleStreamAssetEvent, getRequestHeaders]);
-
-  const handleSendMessage = useCallback(async (content: string, attachments: MediaAttachment[] = []) => {
-    if (!content.trim() && attachments.length === 0) return;
-    if (!userId) return;
-
-    const timestamp = nowTs();
-    const curThreadId = currentThreadIdRef.current;
-    const curThreadExtId = currentThreadExternalIdRef.current;
-
-    const existingThreadId = curThreadId ?? undefined;
-    // Use Ref to check without adding dependency
-    const extMap = threadExternalIdMapRef.current;
-    const isPlaceholderThread = existingThreadId
-      ? extMap[existingThreadId] === existingThreadId
-      : false;
-
-    const threadIdForSend = isPlaceholderThread ? undefined : existingThreadId;
-
-    let effectiveThreadExternalId = curThreadExtId ?? (isPlaceholderThread ? existingThreadId : undefined);
-
-    if (!threadIdForSend) {
-      if (!effectiveThreadExternalId) {
-        effectiveThreadExternalId = generateId();
+            // Treat as ASSET_CREATED event in unified handler
+            await (async () => {
+              if (!hasStreamProgress) return;
+              handleStreamAssetEvent(payload, currentAssistantId);
+            })();
+          },
+          signal: abortController.signal,
+        });
+      } finally {
+        setIsStreaming(false);
+        setMessages((prev) => {
+          const hasStreaming = prev.some((msg) => msg.isStreaming);
+          if (!hasStreaming) return prev;
+          return prev.map((msg) => (msg.isStreaming ? closeAssistantMessage(msg) : msg));
+        });
+        abortControllerRef.current = null;
       }
-      setCurrentThreadExternalId(effectiveThreadExternalId);
-    } else if (curThreadExtId !== (effectiveThreadExternalId ?? null)) {
-      setCurrentThreadExternalId(effectiveThreadExternalId ?? null);
-    }
 
-    const conversationKey = threadIdForSend ?? effectiveThreadExternalId!;
+      return currentAssistantId;
+    },
+    [applyEventInterceptor, handleStreamMessageEvent, handleStreamAssetEvent, getRequestHeaders]
+  );
 
-    // Get pending title for new threads if any
-    const currentMetadata = threadMetadataMapRef.current[conversationKey];
-    const pendingTitle = currentMetadata?.pendingTitle as string | undefined;
+  const handleSendMessage = useCallback(
+    async (content: string, attachments: MediaAttachment[] = []) => {
+      if (!content.trim() && attachments.length === 0) return;
+      if (!userId) return;
 
-    const userMessage: ChatViewMessage = {
-      id: generateId(),
-      role: 'user',
-      content,
-      timestamp,
-      attachments: attachments.length > 0 ? attachments : undefined,
-      isComplete: true,
-      sender: resolveUserSender({
-        id: userId,
-        name: getCurrentUserDisplayName(userName, userId),
-      }),
-    };
+      const timestamp = nowTs();
+      const curThreadId = currentThreadIdRef.current;
+      const curThreadExtId = currentThreadExternalIdRef.current;
 
-    const assistantSender = targetAgentNameRef.current
-      ? resolveAgentSender(
-        { id: targetAgentNameRef.current, name: targetAgentNameRef.current },
-        senderOptionsRef.current,
-      )
-      : preferredAgentRef.current
+      const existingThreadId = curThreadId ?? undefined;
+      // Use Ref to check without adding dependency
+      const extMap = threadExternalIdMapRef.current;
+      const isPlaceholderThread = existingThreadId ? extMap[existingThreadId] === existingThreadId : false;
+
+      const threadIdForSend = isPlaceholderThread ? undefined : existingThreadId;
+
+      let effectiveThreadExternalId = curThreadExtId ?? (isPlaceholderThread ? existingThreadId : undefined);
+
+      if (!threadIdForSend) {
+        if (!effectiveThreadExternalId) {
+          effectiveThreadExternalId = generateId();
+        }
+        setCurrentThreadExternalId(effectiveThreadExternalId);
+      } else if (curThreadExtId !== (effectiveThreadExternalId ?? null)) {
+        setCurrentThreadExternalId(effectiveThreadExternalId ?? null);
+      }
+
+      const conversationKey = threadIdForSend ?? effectiveThreadExternalId!;
+
+      // Get pending title for new threads if any
+      const currentMetadata = threadMetadataMapRef.current[conversationKey];
+      const pendingTitle = currentMetadata?.pendingTitle as string | undefined;
+
+      const userMessage: ChatViewMessage = {
+        id: generateId(),
+        role: 'user',
+        content,
+        timestamp,
+        attachments: attachments.length > 0 ? attachments : undefined,
+        isComplete: true,
+        sender: resolveUserSender({
+          id: userId,
+          name: getCurrentUserDisplayName(userName, userId),
+        }),
+      };
+
+      const assistantSender = targetAgentNameRef.current
         ? resolveAgentSender(
-          { id: preferredAgentRef.current, name: preferredAgentRef.current },
-          senderOptionsRef.current,
-        )
+            {
+              id: targetAgentNameRef.current,
+              name: targetAgentNameRef.current,
+            },
+            senderOptionsRef.current
+          )
+        : preferredAgentRef.current
+        ? resolveAgentSender({ id: preferredAgentRef.current, name: preferredAgentRef.current }, senderOptionsRef.current)
         : resolveAssistantFallbackSender(senderOptionsRef.current);
 
-    // Create an assistant message placeholder with streaming state for typewriter effect
-    const assistantPlaceholder: ChatViewMessage = {
-      id: generateId(),
-      role: 'assistant',
-      content: '',
-      timestamp: timestamp + 1,
-      isStreaming: true,
-      isComplete: false,
-      sender: assistantSender,
-      activity: createPendingAssistantActivity(),
-    };
-
-    // Add user message and assistant placeholder for typewriter loading effect
-    setMessages((prev) => [...prev, userMessage as InternalChatMessage, assistantPlaceholder as InternalChatMessage]);
-    setSpecialState(null);
-
-    // Use ref for threads check
-    if (!threadsRef.current.some(t => t.id === conversationKey)) {
-      const newThread: ChatThread = {
-        id: conversationKey,
-        title: content.slice(0, 40) || 'Nova conversa',
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        messageCount: 0,
+      // Create an assistant message placeholder with streaming state for typewriter effect
+      const assistantPlaceholder: ChatViewMessage = {
+        id: generateId(),
+        role: 'assistant',
+        content: '',
+        timestamp: timestamp + 1,
+        isStreaming: true,
+        isComplete: false,
+        sender: assistantSender,
+        activity: createPendingAssistantActivity(),
       };
-      setThreads(prev => [newThread, ...prev]);
-      setThreadMetadataMap(prev => ({ ...prev, [conversationKey]: {} }));
-      setThreadExternalIdMap(prev => ({ ...prev, [conversationKey]: effectiveThreadExternalId ?? null }));
-    }
 
-    try {
-      await sendCopilotzMessage({
-        threadId: threadIdForSend,
-        threadExternalId: effectiveThreadExternalId,
-        content,
-        attachments,
-        userId,
-        userName: getCurrentUserDisplayName(userName, userId),
-        agentName: preferredAgentRef.current,
-        assistantMessageId: assistantPlaceholder.id,
-        assistantSender,
-        // Include pending title for new threads
-        threadMetadata: pendingTitle ? { name: pendingTitle } : undefined,
-      });
+      // Add user message and assistant placeholder for typewriter loading effect
+      setMessages((prev) => [...prev, userMessage as InternalChatMessage, assistantPlaceholder as InternalChatMessage]);
+      setSpecialState(null);
 
-      // Wait to ensure the assistant message is persisted before refreshing
-      await new Promise((r) => setTimeout(r, 1000));
-      // Refresh threads list to update metadata (message count, timestamps, etc.)
-      // Don't reload messages since we already have them from streaming
-      await fetchAndSetThreadsState(userId, effectiveThreadExternalId ?? existingThreadId ?? null);
-    } catch (error) {
-      if (isAbortError(error)) return;
-      console.error('Error sending Copilotz message', error);
-      const nextSpecialState = getSpecialStateFromError(error);
-      if (nextSpecialState) {
-        setSpecialState(nextSpecialState);
-        setMessages((prev) => prev.filter((msg) => !msg.isStreaming));
-        return;
+      // Use ref for threads check
+      if (!threadsRef.current.some((t) => t.id === conversationKey)) {
+        const newThread: ChatThread = {
+          id: conversationKey,
+          title: content.slice(0, 40) || 'Nova conversa',
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          messageCount: 0,
+        };
+        setThreads((prev) => [newThread, ...prev]);
+        setThreadMetadataMap((prev) => ({ ...prev, [conversationKey]: {} }));
+        setThreadExternalIdMap((prev) => ({
+          ...prev,
+          [conversationKey]: effectiveThreadExternalId ?? null,
+        }));
       }
-      setMessages((prev) => {
-        const finalized = prev.map((msg) => (
-          msg.isStreaming
-            ? closeAssistantMessage(msg)
-            : msg
-        ));
 
-        if (finalized.some(hasVisibleAssistantOutput)) {
-          return finalized;
+      try {
+        await sendCopilotzMessage({
+          threadId: threadIdForSend,
+          threadExternalId: effectiveThreadExternalId,
+          content,
+          attachments,
+          userId,
+          userName: getCurrentUserDisplayName(userName, userId),
+          agentName: preferredAgentRef.current,
+          assistantMessageId: assistantPlaceholder.id,
+          assistantSender,
+          // Include pending title for new threads
+          threadMetadata: pendingTitle ? { name: pendingTitle } : undefined,
+        });
+
+        // Wait to ensure the assistant message is persisted before refreshing
+        await new Promise((r) => setTimeout(r, 1000));
+        // Refresh threads list to update metadata (message count, timestamps, etc.)
+        // Don't reload messages since we already have them from streaming
+        await fetchAndSetThreadsState(userId, effectiveThreadExternalId ?? existingThreadId ?? null);
+      } catch (error) {
+        if (isAbortError(error)) return;
+        console.error('Error sending Copilotz message', error);
+        const nextSpecialState = getSpecialStateFromError(error);
+        if (nextSpecialState) {
+          setSpecialState(nextSpecialState);
+          setMessages((prev) => prev.filter((msg) => !msg.isStreaming));
+          return;
         }
+        setMessages((prev) => {
+          const finalized = prev.map((msg) => (msg.isStreaming ? closeAssistantMessage(msg) : msg));
 
-        for (let i = finalized.length - 1; i >= 0; i--) {
-          const message = finalized[i];
-          if (message.role !== 'assistant') continue;
+          if (finalized.some(hasVisibleAssistantOutput)) {
+            return finalized;
+          }
 
-          const updated = [...finalized];
-          updated[i] = {
-            ...message,
-            content: 'Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente novamente.',
-            isStreaming: false,
-            isComplete: true,
-            sender: message.sender ?? resolveAssistantFallbackSender(senderOptionsRef.current),
-          };
-          return updated;
+          for (let i = finalized.length - 1; i >= 0; i--) {
+            const message = finalized[i];
+            if (message.role !== 'assistant') continue;
+
+            const updated = [...finalized];
+            updated[i] = {
+              ...message,
+              content: 'Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente novamente.',
+              isStreaming: false,
+              isComplete: true,
+              sender: message.sender ?? resolveAssistantFallbackSender(senderOptionsRef.current),
+            };
+            return updated;
+          }
+
+          return [
+            ...finalized,
+            {
+              id: generateId(),
+              role: 'assistant',
+              content: 'Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente novamente.',
+              timestamp: nowTs(),
+              isStreaming: false,
+              isComplete: true,
+              sender: resolveAssistantFallbackSender(senderOptionsRef.current),
+            },
+          ];
+        });
+      }
+    },
+    [userId, fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage, getSpecialStateFromError]
+  );
+
+  const bootstrapConversation = useCallback(
+    async (uid: string) => {
+      if (!bootstrap?.initialToolCalls && !bootstrap?.initialMessage) return;
+
+      const bootstrapThreadExternalId = generateId();
+      setCurrentThreadId(bootstrapThreadExternalId);
+      setCurrentThreadExternalId(bootstrapThreadExternalId);
+      setThreadExternalIdMap((prev) => ({
+        ...prev,
+        [bootstrapThreadExternalId]: bootstrapThreadExternalId,
+      }));
+      setThreadMetadataMap((prev) => ({
+        ...prev,
+        [bootstrapThreadExternalId]: {},
+      }));
+      const assistantSender = preferredAgentRef.current ? resolveAgentSender({ id: preferredAgentRef.current, name: preferredAgentRef.current }, senderOptionsRef.current) : resolveAssistantFallbackSender(senderOptionsRef.current);
+      const assistantMessageId = generateId();
+      setMessages([
+        {
+          id: assistantMessageId,
+          role: 'assistant',
+          content: '',
+          timestamp: nowTs(),
+          isStreaming: true,
+          isComplete: false,
+          sender: assistantSender,
+          activity: createPendingAssistantActivity(),
+        } as InternalChatMessage,
+      ]);
+      setMessagePageInfo(createEmptyMessagePageInfo());
+      persistedToolUpdatesRef.current = [];
+      setSpecialState(null);
+
+      try {
+        await sendCopilotzMessage({
+          threadExternalId: bootstrapThreadExternalId,
+          content: bootstrap.initialMessage || '',
+          toolCalls: bootstrap.initialToolCalls,
+          userId: uid,
+          userName: getCurrentUserDisplayName(userName, uid),
+          agentName: preferredAgentRef.current,
+          assistantMessageId,
+          assistantSender,
+          threadMetadata: {
+            name: defaultThreadName || 'Main Thread',
+          },
+        });
+
+        // Give the backend time to persist tool outputs/messages before refresh
+        await new Promise((r) => setTimeout(r, 1000));
+
+        // Refresh threads list to update metadata
+        // Don't reload messages since we already have them from streaming
+        await fetchAndSetThreadsState(uid, bootstrapThreadExternalId);
+      } catch (error) {
+        if (isAbortError(error)) return;
+        console.error('Error bootstrapping conversation', error);
+        const nextSpecialState = getSpecialStateFromError(error);
+        if (nextSpecialState) {
+          setSpecialState(nextSpecialState);
+          setMessages([]);
+          return;
         }
-
-        return [
-          ...finalized,
+        setMessages([
           {
             id: generateId(),
             role: 'assistant',
-            content: 'Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente novamente.',
+            content: 'Não foi possível iniciar a conversa. Tente novamente mais tarde.',
             timestamp: nowTs(),
             isStreaming: false,
             isComplete: true,
             sender: resolveAssistantFallbackSender(senderOptionsRef.current),
           },
-        ];
-      });
-    }
-  }, [userId, fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage, getSpecialStateFromError]);
-
-  const bootstrapConversation = useCallback(async (uid: string) => {
-    if (!bootstrap?.initialToolCalls && !bootstrap?.initialMessage) return;
-
-    const bootstrapThreadExternalId = generateId();
-    setCurrentThreadId(bootstrapThreadExternalId);
-    setCurrentThreadExternalId(bootstrapThreadExternalId);
-    setThreadExternalIdMap((prev) => ({ ...prev, [bootstrapThreadExternalId]: bootstrapThreadExternalId }));
-    setThreadMetadataMap((prev) => ({ ...prev, [bootstrapThreadExternalId]: {} }));
-    const assistantSender = preferredAgentRef.current
-      ? resolveAgentSender(
-        { id: preferredAgentRef.current, name: preferredAgentRef.current },
-        senderOptionsRef.current,
-      )
-      : resolveAssistantFallbackSender(senderOptionsRef.current);
-    const assistantMessageId = generateId();
-    setMessages([{
-      id: assistantMessageId,
-      role: 'assistant',
-      content: '',
-      timestamp: nowTs(),
-      isStreaming: true,
-      isComplete: false,
-      sender: assistantSender,
-      activity: createPendingAssistantActivity(),
-    } as InternalChatMessage]);
-    setMessagePageInfo(createEmptyMessagePageInfo());
-    persistedToolUpdatesRef.current = [];
-    setSpecialState(null);
-
-    try {
-      await sendCopilotzMessage({
-        threadExternalId: bootstrapThreadExternalId,
-        content: bootstrap.initialMessage || '',
-        toolCalls: bootstrap.initialToolCalls,
-        userId: uid,
-        userName: getCurrentUserDisplayName(userName, uid),
-        agentName: preferredAgentRef.current,
-        assistantMessageId,
-        assistantSender,
-        threadMetadata: {
-          name: defaultThreadName || 'Main Thread',
-        },
-      });
-
-      // Give the backend time to persist tool outputs/messages before refresh
-      await new Promise((r) => setTimeout(r, 1000));
-
-      // Refresh threads list to update metadata
-      // Don't reload messages since we already have them from streaming
-      await fetchAndSetThreadsState(uid, bootstrapThreadExternalId);
-    } catch (error) {
-      if (isAbortError(error)) return;
-      console.error('Error bootstrapping conversation', error);
-      const nextSpecialState = getSpecialStateFromError(error);
-      if (nextSpecialState) {
-        setSpecialState(nextSpecialState);
-        setMessages([]);
-        return;
+        ]);
       }
-      setMessages([
-        {
-          id: generateId(),
-          role: 'assistant',
-          content: 'Não foi possível iniciar a conversa. Tente novamente mais tarde.',
-          timestamp: nowTs(),
-          isStreaming: false,
-          isComplete: true,
-          sender: resolveAssistantFallbackSender(senderOptionsRef.current),
-        },
-      ]);
-    }
-  }, [fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage, bootstrap, defaultThreadName, getSpecialStateFromError]);
+    },
+    [fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage, bootstrap, defaultThreadName, getSpecialStateFromError]
+  );
 
   const reset = useCallback(() => {
     messagesRequestRef.current += 1;
@@ -1352,10 +1307,10 @@ export function useCopilotz({
       initializationRef.current = { userId: null, started: false };
       reset();
     }
-  // urlState.threadId intentionally excluded: only needed on first init (captured
-  // by the lazy initializer in useUrlState). Including it would re-trigger the
-  // effect when the thread-sync effect writes back to the URL.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // urlState.threadId intentionally excluded: only needed on first init (captured
+    // by the lazy initializer in useUrlState). Including it would re-trigger the
+    // effect when the thread-sync effect writes back to the URL.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, fetchAndSetThreadsState, loadThreadMessages, bootstrapConversation, reset, bootstrap, isUrlSyncEnabled]);
 
   // Sync currentThreadExternalId to URL when it changes
@@ -1363,7 +1318,7 @@ export function useCopilotz({
     if (!isUrlSyncEnabled) return;
     // Only sync after initial load is complete
     if (!initializationRef.current.started) return;
-    
+
     setUrlThreadId(currentThreadExternalId);
   }, [currentThreadExternalId, isUrlSyncEnabled, setUrlThreadId]);
 
@@ -1374,7 +1329,10 @@ export function useCopilotz({
     if (!metadata) return;
 
     if (metadata.userContext && typeof metadata.userContext === 'object') {
-      setUserContextSeed((prev) => ({ ...prev, ...(metadata.userContext as Partial<ChatUserContext>) }));
+      setUserContextSeed((prev) => ({
+        ...prev,
+        ...(metadata.userContext as Partial<ChatUserContext>),
+      }));
     }
   }, [currentThreadId, threadMetadataMap]);
 
@@ -1394,6 +1352,7 @@ export function useCopilotz({
     selectThread: handleSelectThread,
     renameThread: handleRenameThread,
     archiveThread: handleArchiveThread,
+    updateThreadTags: handleUpdateThreadTags,
     deleteThread: handleDeleteThread,
     stopGeneration: handleStop,
     fetchAndSetThreadsState,

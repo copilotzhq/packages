@@ -9,36 +9,36 @@ export type MediaAttachmentKind = "image" | "audio" | "video" | "file";
 
 export type MediaAttachment =
   | {
-    kind: "image";
-    dataUrl: string;
-    mimeType: string;
-    fileName?: string;
-    size?: number;
-  }
+      kind: "image";
+      dataUrl: string;
+      mimeType: string;
+      fileName?: string;
+      size?: number;
+    }
   | {
-    kind: "audio";
-    dataUrl: string;
-    mimeType: string;
-    durationMs?: number;
-    fileName?: string;
-    size?: number;
-  }
+      kind: "audio";
+      dataUrl: string;
+      mimeType: string;
+      durationMs?: number;
+      fileName?: string;
+      size?: number;
+    }
   | {
-    kind: "video";
-    dataUrl: string;
-    mimeType: string;
-    durationMs?: number;
-    fileName?: string;
-    size?: number;
-    poster?: string;
-  }
+      kind: "video";
+      dataUrl: string;
+      mimeType: string;
+      durationMs?: number;
+      fileName?: string;
+      size?: number;
+      poster?: string;
+    }
   | {
-    kind: "file";
-    dataUrl: string;
-    mimeType: string;
-    fileName?: string;
-    size?: number;
-  };
+      kind: "file";
+      dataUrl: string;
+      mimeType: string;
+      fileName?: string;
+      size?: number;
+    };
 
 export type AudioAttachment = Extract<MediaAttachment, { kind: "audio" }>;
 
@@ -89,7 +89,7 @@ export interface VoiceProvider {
 
 export type CreateVoiceProvider = (
   handlers: VoiceProviderHandlers,
-  options?: VoiceProviderOptions,
+  options?: VoiceProviderOptions
 ) => VoiceProvider | Promise<VoiceProvider>;
 
 // Tool Calls for Agent Actions
@@ -163,6 +163,12 @@ export interface ChatMessage {
 }
 
 // Thread Management
+export interface ChatThreadTag {
+  id: string;
+  name: string;
+  color?: string;
+}
+
 export interface ChatThread {
   id: string;
   title: string;
@@ -170,6 +176,7 @@ export interface ChatThread {
   updatedAt: number;
   messageCount: number;
   isArchived?: boolean;
+  tags?: ChatThreadTag[];
   metadata?: Record<string, any>;
 }
 
@@ -252,6 +259,15 @@ export interface ChatConfig {
     renameThread?: string;
     archiveThread?: string;
     unarchiveThread?: string;
+    manageTags?: string;
+    tags?: string;
+    addTag?: string;
+    removeTag?: string;
+    tagNamePlaceholder?: string;
+    untagged?: string;
+    groupBy?: string;
+    groupByDate?: string;
+    groupByTag?: string;
     today?: string;
     yesterday?: string;
     createNewThread?: string;
@@ -285,6 +301,13 @@ export interface ChatConfig {
     enableRegeneration?: boolean;
     showActivity?: boolean;
     showActivityDetails?: boolean;
+    threadTags?: {
+      enabled?: boolean;
+      groupingEnabled?: boolean;
+      defaultGroupBy?: "date" | "tag";
+      allowCreate?: boolean;
+      allowDrag?: boolean;
+    };
     maxAttachments?: number;
     maxFileSize?: number; // in bytes
     acceptedFileTypes?: string[];
@@ -363,51 +386,56 @@ export interface ChatCallbacks {
   onSendMessage?: (
     content: string,
     attachments?: MediaAttachment[],
-    callback?: StateCallback<ChatState>,
+    callback?: StateCallback<ChatState>
   ) => void;
   onEditMessage?: (
     messageId: string,
     newContent: string,
-    callback?: StateCallback<ChatState>,
+    callback?: StateCallback<ChatState>
   ) => void;
   onDeleteMessage?: (
     messageId: string,
-    callback?: StateCallback<ChatState>,
+    callback?: StateCallback<ChatState>
   ) => void;
   onRegenerateMessage?: (
     messageId: string,
-    callback?: StateCallback<ChatState>,
+    callback?: StateCallback<ChatState>
   ) => void;
   onStopGeneration?: (callback?: StateCallback<ChatState>) => void;
   onCreateThread?: (
     title?: string,
-    callback?: StateCallback<ChatState>,
+    callback?: StateCallback<ChatState>
   ) => void;
   onSelectThread?: (
     threadId: string,
-    callback?: StateCallback<ChatState>,
+    callback?: StateCallback<ChatState>
   ) => void;
   onRenameThread?: (
     threadId: string,
     newTitle: string,
-    callback?: StateCallback<ChatState>,
+    callback?: StateCallback<ChatState>
   ) => void;
   onDeleteThread?: (
     threadId: string,
-    callback?: StateCallback<ChatState>,
+    callback?: StateCallback<ChatState>
   ) => void;
   onArchiveThread?: (
     threadId: string,
-    callback?: StateCallback<ChatState>,
+    callback?: StateCallback<ChatState>
+  ) => void;
+  onUpdateThreadTags?: (
+    threadId: string,
+    tags: ChatThreadTag[],
+    callback?: StateCallback<ChatState>
   ) => void;
   onCopyMessage?: (
     messageId: string,
     content: string,
-    callback?: StateCallback<ChatState>,
+    callback?: StateCallback<ChatState>
   ) => void;
   onAttachmentRemove?: (
     attachmentIndex: number,
-    callback?: StateCallback<ChatState>,
+    callback?: StateCallback<ChatState>
   ) => void;
   // User menu callbacks
   onViewProfile?: () => void;
@@ -516,12 +544,7 @@ export interface AgentOption {
 }
 
 // Message Actions
-export type MessageAction =
-  | "copy"
-  | "edit"
-  | "delete"
-  | "regenerate"
-  | "retry";
+export type MessageAction = "copy" | "edit" | "delete" | "regenerate" | "retry";
 
 export interface MessageActionEvent {
   action: MessageAction;
