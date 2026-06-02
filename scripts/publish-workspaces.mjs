@@ -47,7 +47,16 @@ for (const workspace of workspaces) {
     continue;
   }
 
-  if (await isPublished(name, version)) {
+  const publishState = getPublishState(name, version);
+
+  if (publishState === "missing-package") {
+    console.log(
+      `Skipping ${name}@${version}; package does not exist on npm yet. Create it and its trusted publisher before enabling automatic publishes.`,
+    );
+    continue;
+  }
+
+  if (publishState === "published") {
     console.log(`Skipping ${name}@${version}; it is already published.`);
     continue;
   }
@@ -56,19 +65,22 @@ for (const workspace of workspaces) {
   execFileSync("npm", args, { cwd: root, stdio: "inherit" });
 }
 
-async function isPublished(name, version) {
-  const result = spawnNpm(["view", `${name}@${version}`, "version", "--json"]);
-
-  if (result.ok) {
-    return true;
-  }
+function getPublishState(name, version) {
+  const result = spawnNpm(["view", name, "versions", "--json"]);
 
   const output = `${result.stdout}\n${result.stderr}`;
-  if (output.includes("E404")) {
-    return false;
+  if (!result.ok) {
+    if (output.includes("E404")) {
+      return "missing-package";
+    }
+
+    throw new Error(`Failed to check ${name} on npm:\n${output}`);
   }
 
-  throw new Error(`Failed to check ${name}@${version} on npm:\n${output}`);
+  const versions = JSON.parse(result.stdout);
+  const publishedVersions = Array.isArray(versions) ? versions : [versions];
+
+  return publishedVersions.includes(version) ? "published" : "unpublished-version";
 }
 
 function spawnNpm(args) {
