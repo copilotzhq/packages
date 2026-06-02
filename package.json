@@ -13,6 +13,7 @@
     "build": "npm -w copilotz-admin run build && npm -w copilotz-chat-ui run build && npm -w copilotz-chat-adapter run build && npm -w copilotz-chat-voice-moonshine run build && npm -w copilotz-chat-voice-vad run build",
     "build:css": "npm -w copilotz-chat-ui run build:css",
     "dev": "npm -w copilotz-admin run dev & npm -w copilotz-chat-ui run dev & npm -w copilotz-chat-adapter run dev & npm -w copilotz-chat-voice-moonshine run dev & npm -w copilotz-chat-voice-vad run dev",
+    "publish:workspaces": "node scripts/publish-workspaces.mjs",
     "release": "changeset publish",
     "version-packages": "changeset version"
   },

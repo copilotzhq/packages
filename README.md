@@ -29,12 +29,12 @@ cd ../copilotz-chat-adapter
 npm run dev
 ```
 
-## Releases
+## Publishing
 
-Create a changeset for any package change that should ship:
+Update the package version for any package change that should ship:
 
 ```bash
-npm run changeset
+npm version patch --workspace copilotz-chat-ui
 ```
 
-After the change lands on `main`, GitHub Actions will open or update a release PR. Merging that PR will publish the changed packages to npm.
+After the change lands on `main`, GitHub Actions builds every workspace and publishes each package version that does not already exist on npm.
