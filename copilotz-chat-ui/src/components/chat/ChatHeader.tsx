@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 import { ReactNode } from 'react';
 import { SidebarTrigger } from '../ui/sidebar';
-import type { AgentOption } from '../../types/chatTypes';
+import type { AgentOption, ChatHeaderMenuItem } from '../../types/chatTypes';
 import { ParticipantsSelector } from './AgentSelectors';
 
 export interface ChatHeaderConfig {
@@ -58,6 +58,8 @@ export interface ChatHeaderConfig {
   };
   /** Additional actions to render in the header (before the settings menu) */
   headerActions?: ReactNode;
+  /** Additional items to render in the header ellipsis menu */
+  headerMenuItems?: ChatHeaderMenuItem[];
 }
 
 export interface ChatHeaderProps {
@@ -303,6 +305,22 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                   </>
+                )}
+
+                {config.headerMenuItems?.map((item) => (
+                  <DropdownMenuItem
+                    key={item.id}
+                    onClick={item.onSelect}
+                    disabled={item.disabled}
+                    variant={item.variant}
+                  >
+                    {item.icon ? <span className="h-4 w-4 mr-2 flex items-center justify-center">{item.icon}</span> : null}
+                    {item.label}
+                  </DropdownMenuItem>
+                ))}
+
+                {config.headerMenuItems && config.headerMenuItems.length > 0 && (
+                  <DropdownMenuSeparator />
                 )}
 
                 {onExportData && (

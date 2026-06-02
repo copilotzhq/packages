@@ -144,6 +144,7 @@ export const defaultChatConfig: Required<ChatConfig> = {
   
   customComponent: {},
   headerActions: null,
+  headerMenuItems: [],
 };
 
 // Deep merge function for configurations
@@ -181,5 +182,6 @@ export function mergeConfig(_baseConfig: ChatConfig, userConfig?: Partial<ChatCo
     },
     customComponent: userConfig.customComponent || defaultChatConfig.customComponent,
     headerActions: userConfig.headerActions || defaultChatConfig.headerActions,
+    headerMenuItems: userConfig.headerMenuItems || defaultChatConfig.headerMenuItems,
   };
 }

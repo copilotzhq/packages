@@ -324,6 +324,17 @@ export interface ChatConfig {
   };
   /** Additional actions to render in the header */
   headerActions?: ReactNode;
+  /** Additional items to render in the header ellipsis menu */
+  headerMenuItems?: ChatHeaderMenuItem[];
+}
+
+export interface ChatHeaderMenuItem {
+  id: string;
+  label: string;
+  icon?: ReactNode;
+  onSelect?: () => void;
+  variant?: "default" | "destructive";
+  disabled?: boolean;
 }
 
 export interface ChatUserMenuItem {
