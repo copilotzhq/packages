@@ -1,0 +1,2 @@
+# @copilotz/chat-adapter
+

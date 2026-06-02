@@ -23,7 +23,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@copilotz/chat-ui": "^0.1.36",
+    "@copilotz/chat-ui": "^0.8.0",
     "@moonshine-ai/moonshine-js": "^0.1.29"
   },
   "devDependencies": {
