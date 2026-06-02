@@ -50,3 +50,29 @@ test('live stream event resolves to the same agent sender as hydrated history', 
     color: '#84cc16',
   });
 });
+
+test('hydrated current-user message prefers current user display name over storage id', () => {
+  const sender = resolveHydratedMessageSender({
+    senderType: 'user',
+    senderId: 'node-1',
+    senderUserId: '01KREXBE25ZSKRHP9RDJC72YD0:ig:patiputz',
+    metadata: {
+      senderExternalId: '01KREXBE25ZSKRHP9RDJC72YD0:ig:patiputz',
+      senderDisplayName: '01KREXBE25ZSKRHP9RDJC72YD0:ig:patiputz',
+      senderParticipantId: '01KREXBE25ZSKRHP9RDJC72YD0:ig:patiputz',
+    },
+  }, {
+    user: {
+      id: '01KREXBE25ZSKRHP9RDJC72YD0:ig:patiputz',
+      name: '@patiputz',
+    },
+  });
+
+  assert.deepEqual(sender, {
+    type: 'user',
+    id: '01KREXBE25ZSKRHP9RDJC72YD0:ig:patiputz',
+    externalId: '01KREXBE25ZSKRHP9RDJC72YD0:ig:patiputz',
+    name: '@patiputz',
+    participantId: '01KREXBE25ZSKRHP9RDJC72YD0:ig:patiputz',
+  });
+});

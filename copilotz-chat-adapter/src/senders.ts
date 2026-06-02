@@ -136,11 +136,16 @@ export const resolveHydratedMessageSender = (
   }
 
   if (type === 'user') {
+    const isCurrentUser = options.user?.id === externalId ||
+      options.user?.id === participantId ||
+      options.user?.id === storedId;
+    const currentUserName = isCurrentUser ? clean(options.user?.name) : undefined;
+
     return defined({
       type: 'user',
       id: externalId,
       externalId,
-      name: displayName,
+      name: currentUserName ?? displayName,
       avatarUrl: clean(options.user?.avatarUrl),
       participantId: participantId ?? storedId,
     });

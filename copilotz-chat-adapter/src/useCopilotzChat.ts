@@ -82,6 +82,11 @@ const createPendingAssistantActivity = (): AssistantActivityBlock => ({
   }],
 });
 
+const getCurrentUserDisplayName = (
+  explicitName: string | undefined,
+  fallbackId: string,
+): string => explicitName?.trim() || fallbackId;
+
 export interface UseCopilotzOptions {
   userId: string | null;
   userName?: string;
@@ -1115,7 +1120,7 @@ export function useCopilotz({
       isComplete: true,
       sender: resolveUserSender({
         id: userId,
-        name: (userContextSeedRef.current?.profile as any)?.full_name ?? userId,
+        name: getCurrentUserDisplayName(userName, userId),
       }),
     };
 
@@ -1168,8 +1173,7 @@ export function useCopilotz({
         content,
         attachments,
         userId,
-        // userName can be anything, but let's try to find it in context or just fallback
-        userName: (userContextSeedRef.current?.profile as any)?.full_name ?? userId,
+        userName: getCurrentUserDisplayName(userName, userId),
         agentName: preferredAgentRef.current,
         assistantMessageId: assistantPlaceholder.id,
         assistantSender,
@@ -1268,6 +1272,7 @@ export function useCopilotz({
         content: bootstrap.initialMessage || '',
         toolCalls: bootstrap.initialToolCalls,
         userId: uid,
+        userName: getCurrentUserDisplayName(userName, uid),
         agentName: preferredAgentRef.current,
         assistantMessageId,
         assistantSender,
