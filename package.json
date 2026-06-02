@@ -1,5 +1,6 @@
 {
   "name": "copilotz-packages",
+  "version": "0.9.0",
   "private": true,
   "workspaces": [
     "copilotz-admin",
@@ -12,8 +13,11 @@
     "changeset": "changeset",
     "build": "npm -w copilotz-admin run build && npm -w copilotz-chat-ui run build && npm -w copilotz-chat-adapter run build && npm -w copilotz-chat-voice-moonshine run build && npm -w copilotz-chat-voice-vad run build",
     "build:css": "npm -w copilotz-chat-ui run build:css",
+    "check:versions": "node scripts/sync-versions.mjs --check",
     "dev": "npm -w copilotz-admin run dev & npm -w copilotz-chat-ui run dev & npm -w copilotz-chat-adapter run dev & npm -w copilotz-chat-voice-moonshine run dev & npm -w copilotz-chat-voice-vad run dev",
     "publish:workspaces": "node scripts/publish-workspaces.mjs",
+    "version": "node scripts/sync-versions.mjs",
+    "version:sync": "node scripts/sync-versions.mjs",
     "release": "changeset publish",
     "version-packages": "changeset version"
   },

@@ -3,6 +3,8 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 const root = process.cwd();
+execFileSync("node", ["scripts/sync-versions.mjs", "--check"], { cwd: root, stdio: "inherit" });
+
 const rootPackage = readJson(path.join(root, "package.json"));
 const workspaces = rootPackage.workspaces ?? [];
 const dryRun = process.env.DRY_RUN === "1";

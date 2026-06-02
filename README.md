@@ -31,11 +31,20 @@ npm run dev
 
 ## Publishing
 
-Update the package version for any package change that should ship:
+All workspace packages ship in lockstep from the root `package.json` version.
+Update every package version together before merging a package change:
 
 ```bash
-npm version patch --workspace copilotz-chat-ui
+npm run version:sync -- patch
 ```
 
-After the change lands on `main`, GitHub Actions builds every workspace and publishes each package version that does not already exist on npm.
+You can also use npm's standard version command or set an explicit version:
 
+```bash
+npm version patch --no-git-tag-version
+npm run version:sync -- 0.9.1
+```
+
+Both commands rewrite every workspace package version and every internal package dependency, including `@copilotz/chat-adapter`'s peer dependency on `@copilotz/chat-ui`.
+
+GitHub Actions checks that every workspace package and internal package dependency uses the same version, then builds every workspace and publishes each package version that does not already exist on npm.

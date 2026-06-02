@@ -2,7 +2,15 @@
   "$schema": "https://unpkg.com/@changesets/config@3.1.1/schema.json",
   "changelog": "@changesets/cli/changelog",
   "commit": false,
-  "fixed": [],
+  "fixed": [
+    [
+      "@copilotz/admin",
+      "@copilotz/chat-ui",
+      "@copilotz/chat-adapter",
+      "@copilotz/chat-voice-moonshine",
+      "@copilotz/chat-voice-vad"
+    ]
+  ],
   "linked": [],
   "access": "public",
   "baseBranch": "main",
