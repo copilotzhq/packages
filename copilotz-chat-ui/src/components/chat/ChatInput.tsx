@@ -423,6 +423,21 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
 
   const isMentionMenuOpen = filteredMentionAgents.length > 0;
 
+  const resizeTextarea = useCallback(() => {
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    const viewportWidth = typeof window === 'undefined' ? 1024 : window.innerWidth;
+    const maxHeight = viewportWidth > 768 ? 240 : 190;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, maxHeight)}px`;
+    textarea.style.overflowY = textarea.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }, []);
+
+  useEffect(() => {
+    resizeTextarea();
+  }, [resizeTextarea, value]);
+
   const syncMentionState = useCallback((nextValue: string, nextCaret?: number) => {
     const caret = typeof nextCaret === 'number'
       ? nextCaret
@@ -1016,8 +1031,8 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
       {/* <Card className={`border-t py-0 bg-transparent ${className}`}> */}
       {/* <CardContent className="p-4 pb-1 space-y-4 bg-transparent"> */}
       {/* Upload progress */}
-      <div className={`border-t py-0 bg-transparent ${className}`}>
-        <div className="px-0 md:p-2 pb-1 space-y-4 bg-transparent">
+      <div className={`border-t bg-background/95 py-2 ${className}`}>
+        <div className="mx-auto w-full max-w-3xl space-y-3 px-3 md:px-2">
           {uploadProgress.size > 0 && (
             <div className="space-y-2">
               {Array.from(uploadProgress.entries()).map(([id, progress]) => (
@@ -1093,53 +1108,21 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
               />
             </div>
           ) : (
-            <form onSubmit={handleSubmit} className="mb-1 flex justify-center">
+            <form onSubmit={handleSubmit} className="mb-1">
               <div
-                className="flex  items-end gap-2 p-3 border rounded-lg bg-background w-full md:min-w-3xl max-w-3xl"
+                className="group/composer flex w-full flex-col gap-2 rounded-3xl border border-border/80 bg-card/95 p-2.5 shadow-sm transition-[border-color,box-shadow,background-color] focus-within:border-ring/60 focus-within:bg-card focus-within:shadow-md focus-within:ring-2 focus-within:ring-ring/15"
                 onDrop={handleDrop}
                 onDragOver={handleDragOver}
               >
-                {/* File upload */}
-                {enableFileUpload && canAddMoreAttachments && (
-                  <>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      multiple
-                      accept={acceptedFileTypes.length > 0 ? acceptedFileTypes.join(',') : undefined}
-                      onChange={handleFileSelect}
-                      className="hidden"
-                    />
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon"
-                          className="h-10 w-10"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            fileInputRef.current?.click();
-                          }}
-                          disabled={disabled}
-                        >
-                          <Paperclip className="h-4 w-4" />
-                        </Button>
-                      </TooltipTrigger>
-                      <TooltipContent>{config?.labels?.attachFileTooltip}</TooltipContent>
-                    </Tooltip>
-                  </>
-                )}
-
                 {/* Text input */}
-                <div className="relative flex-1">
+                <div className="relative min-w-0">
                   <Textarea
                     ref={textareaRef}
                     value={value}
                     onChange={(e) => {
                       onChange(e.target.value);
                       syncMentionState(e.target.value, e.target.selectionStart ?? e.target.value.length);
+                      requestAnimationFrame(resizeTextarea);
                     }}
                     onSelect={(e) => {
                       const target = e.target as HTMLTextAreaElement;
@@ -1152,7 +1135,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                     onKeyDown={handleKeyDown}
                     placeholder={placeholder}
                     disabled={disabled}
-                    className="max-h-[120px] resize-none border-0 bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0"
+                    className="min-h-11 resize-none overflow-hidden rounded-2xl border-0 bg-transparent px-3 py-2.5 text-base leading-6 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 md:text-sm"
                     rows={1}
                   />
                   {isMentionMenuOpen && (
@@ -1183,62 +1166,101 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                   )}
                 </div>
 
-                {/* Voice compose entry */}
-                {enableAudioRecording && canAddMoreAttachments && !value.trim() && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="icon"
-                        className="h-10 w-10"
-                        onClick={() => {
-                          void startVoiceCapture();
-                        }}
-                        disabled={disabled || isGenerating}
-                      >
-                        <Mic className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>{config?.labels?.voiceEnter}</TooltipContent>
-                  </Tooltip>
-                )}
+                <div className="flex min-h-10 items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-1">
+                    {/* File upload */}
+                    {enableFileUpload && canAddMoreAttachments && (
+                      <>
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          multiple
+                          accept={acceptedFileTypes.length > 0 ? acceptedFileTypes.join(',') : undefined}
+                          onChange={handleFileSelect}
+                          className="hidden"
+                        />
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-9 w-9 rounded-full text-muted-foreground hover:text-foreground"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                fileInputRef.current?.click();
+                              }}
+                              disabled={disabled}
+                            >
+                              <Paperclip className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{config?.labels?.attachFileTooltip}</TooltipContent>
+                        </Tooltip>
+                      </>
+                    )}
+                  </div>
 
-                {/* Submit/Stop button */}
-                {isGenerating ? (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="icon"
-                        className="h-10 w-10"
-                        onClick={onStopGeneration}
-                      >
-                        <Square className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>{config?.labels?.stopGenerationTooltip}</TooltipContent>
-                  </Tooltip>
-                ) : (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="submit"
-                        size="icon"
-                        className="h-10 w-10"
-                        disabled={disabled || (!value.trim() && attachments.length === 0)}
-                      >
-                        {disabled ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Send className="h-4 w-4" />
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>{config?.labels?.sendMessageTooltip}</TooltipContent>
-                  </Tooltip>
-                )}
+                  <div className="flex shrink-0 items-center gap-1">
+                    {/* Voice compose entry */}
+                    {enableAudioRecording && canAddMoreAttachments && !value.trim() && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-9 w-9 rounded-full text-muted-foreground hover:text-foreground"
+                            onClick={() => {
+                              void startVoiceCapture();
+                            }}
+                            disabled={disabled || isGenerating}
+                          >
+                            <Mic className="h-4 w-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>{config?.labels?.voiceEnter}</TooltipContent>
+                      </Tooltip>
+                    )}
+
+                    {/* Submit/Stop button */}
+                    {isGenerating ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="icon"
+                            className="h-9 w-9 rounded-full"
+                            onClick={onStopGeneration}
+                          >
+                            <Square className="h-4 w-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>{config?.labels?.stopGenerationTooltip}</TooltipContent>
+                      </Tooltip>
+                    ) : (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            type="submit"
+                            size="icon"
+                            className="h-9 w-9 rounded-full"
+                            disabled={disabled || (!value.trim() && attachments.length === 0)}
+                          >
+                            {disabled ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Send className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>{config?.labels?.sendMessageTooltip}</TooltipContent>
+                      </Tooltip>
+                    )}
+                  </div>
+                </div>
               </div>
             </form>
           )}
