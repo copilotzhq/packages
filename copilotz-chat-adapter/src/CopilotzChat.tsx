@@ -85,7 +85,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({ userId, userName, us
     return targetAgentId;
   }, [targetAgentId]);
 
-  const { messages, isMessagesLoading, isLoadingOlderMessages, messagePageInfo, threads, currentThreadId, isStreaming, specialState, clearSpecialState, userContextSeed, sendMessage, createThread, selectThread, renameThread, archiveThread, updateThreadTags, deleteThread, stopGeneration, loadOlderMessages } = useCopilotz({
+  const { messages, isMessagesLoading, isLoadingOlderMessages, messagePageInfo, threads, currentThreadId, isStreaming, specialState, clearSpecialState, userContextSeed, sendMessage, createThread, selectThread, renameThread, archiveThread, updateThreadTags, editMessage, deleteThread, stopGeneration, loadOlderMessages } = useCopilotz({
     userId,
     userName,
     userAvatar,
@@ -108,7 +108,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({ userId, userName, us
   }, [currentThreadId, onCurrentThreadIdChange]);
 
   const chatCallbacks: ChatCallbacks = useMemo(() => {
-    const { onSendMessage: _1, onStopGeneration: _2, onCreateThread: _3, onSelectThread: _4, onRenameThread: _5, onArchiveThread: _6, onDeleteThread: _7, onUpdateThreadTags: _8, onCopyMessage: _9, ...restUserCallbacks } = userCallbacks || {};
+    const { onSendMessage: _1, onStopGeneration: _2, onCreateThread: _3, onSelectThread: _4, onRenameThread: _5, onArchiveThread: _6, onDeleteThread: _7, onUpdateThreadTags: _8, onCopyMessage: _9, onEditMessage: _10, ...restUserCallbacks } = userCallbacks || {};
 
     return {
       ...restUserCallbacks,
@@ -145,17 +145,16 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({ userId, userName, us
         userCallbacks?.onDeleteThread?.(threadId);
       },
       onCopyMessage: async (messageId: string, content: string) => {
-        try {
-          await navigator.clipboard.writeText(content);
-          userCallbacks?.onCopyMessage?.(messageId, content);
-        } catch (error) {
-          console.error('Failed to copy message', error);
-        }
+        userCallbacks?.onCopyMessage?.(messageId, content);
+      },
+      onEditMessage: (messageId: string, content: string) => {
+        void editMessage(messageId, content);
+        userCallbacks?.onEditMessage?.(messageId, content);
       },
       onLogout,
       onViewProfile,
     };
-  }, [sendMessage, stopGeneration, createThread, selectThread, renameThread, archiveThread, updateThreadTags, deleteThread, userCallbacks, onLogout, onViewProfile]);
+  }, [sendMessage, stopGeneration, createThread, selectThread, renameThread, archiveThread, updateThreadTags, editMessage, deleteThread, userCallbacks, onLogout, onViewProfile]);
 
   const mergedConfig: ChatConfig = useMemo(() => {
     const base = userConfig || {};

@@ -928,6 +928,33 @@ export async function updateThread(
   return data?.data ?? data?.body ?? data;
 }
 
+export async function editThreadMessage(
+  threadId: string,
+  messageId: string,
+  content: string,
+  getRequestHeaders?: RequestHeadersProvider,
+) {
+  const res = await fetch(
+    apiUrl(`/v1/threads/${threadId}/messages/${messageId}/edit`),
+    {
+      method: "POST",
+      headers: await withAuthHeaders({
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      }, getRequestHeaders),
+      body: JSON.stringify({ content }),
+    },
+  );
+
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => res.statusText);
+    throw new Error(errorText || `Failed to edit message (${res.status})`);
+  }
+
+  const data = await res.json();
+  return data?.data ?? data?.body ?? data;
+}
+
 export async function deleteThread(
   threadId: string,
   getRequestHeaders?: RequestHeadersProvider,
@@ -957,5 +984,6 @@ export const copilotzService = {
   fetchThreads,
   fetchThreadMessages,
   updateThread,
+  editThreadMessage,
   deleteThread,
 };

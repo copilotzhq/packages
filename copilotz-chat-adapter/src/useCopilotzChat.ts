@@ -1,6 +1,6 @@
 // deno-lint-ignore-file no-explicit-any
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { runCopilotzStream, fetchThreads, fetchThreadMessagesPage, updateThread as updateThreadApi, deleteThread as deleteThreadApi } from './copilotzService';
+import { runCopilotzStream, fetchThreads, fetchThreadMessagesPage, updateThread as updateThreadApi, editThreadMessage, deleteThread as deleteThreadApi } from './copilotzService';
 import { getAttachmentKindFromMimeType, getMimeTypeFromDataUrl } from '@copilotz/chat-ui';
 import type { AgentOption, AssistantActivityBlock, ChatMessage as ChatViewMessage, ChatSender, ChatThread, ChatThreadTag, MediaAttachment, ChatUserContext } from '@copilotz/chat-ui';
 import { useUrlState } from './useUrlState';
@@ -544,6 +544,26 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       }
     },
     [userId, fetchAndSetThreadsState, getRequestHeaders]
+  );
+
+  const handleEditMessage = useCallback(
+    async (messageId: string, content: string) => {
+      const threadId = currentThreadIdRef.current;
+      if (!threadId || !content.trim()) return;
+
+      try {
+        await editThreadMessage(
+          threadId,
+          messageId,
+          content,
+          getRequestHeaders,
+        );
+        await loadThreadMessages(threadId);
+      } catch (error) {
+        console.error('Failed to edit message:', error);
+      }
+    },
+    [getRequestHeaders, loadThreadMessages]
   );
 
   const handleDeleteThread = useCallback(
@@ -1353,6 +1373,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     renameThread: handleRenameThread,
     archiveThread: handleArchiveThread,
     updateThreadTags: handleUpdateThreadTags,
+    editMessage: handleEditMessage,
     deleteThread: handleDeleteThread,
     stopGeneration: handleStop,
     fetchAndSetThreadsState,

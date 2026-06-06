@@ -22,7 +22,6 @@ import { MessageSenderAvatar, resolveMessageSenderDisplay } from './MessageSende
 import {
   Copy,
   Edit,
-  RotateCcw,
   Check,
   X,
   Download,
@@ -546,6 +545,7 @@ export const Message: React.FC<MessageProps> = memo(({
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(message.content);
   const [showActions, setShowActions] = useState(false);
+  const [actionsFocused, setActionsFocused] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const messageIsUser = isUser ?? message.role === 'user';
@@ -561,7 +561,6 @@ export const Message: React.FC<MessageProps> = memo(({
     compactMode,
   });
   const canEdit = enableEdit && messageIsUser;
-  const canRegenerate = enableRegenerate && !messageIsUser;
   const normalizedPreviewChars = Math.max(longMessagePreviewChars, 1);
   const normalizedChunkChars = Math.max(longMessageChunkChars, 1);
   const previewOverride = typeof message.metadata?.previewContent === 'string'
@@ -611,10 +610,6 @@ export const Message: React.FC<MessageProps> = memo(({
     setIsEditing(false);
   };
 
-  const handleRegenerate = () => {
-    onAction?.({ action: 'regenerate', messageId: message.id });
-  };
-
   const handleToggleExpanded = () => {
     onToggleExpanded?.(message.id);
   };
@@ -631,6 +626,12 @@ export const Message: React.FC<MessageProps> = memo(({
         className={`flex w-full flex-col ${className} max-w-[800px] mx-auto`}
         onMouseEnter={() => setShowActions(true)}
         onMouseLeave={() => setShowActions(false)}
+        onFocusCapture={() => setActionsFocused(true)}
+        onBlurCapture={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            setActionsFocused(false);
+          }
+        }}
       >
 
         <div className={`flex gap-3 ${messageIsUser ? 'flex-row-reverse' : 'flex-row'} w-full mb-1`}>
@@ -739,69 +740,57 @@ export const Message: React.FC<MessageProps> = memo(({
             )}
 
             {/* Action Buttons */}
-            {!isEditing && (showActions || copied) && (
-              <div className={`absolute -top-2 flex gap-1 ${messageIsUser ? '-left-2' : '-right-2'
-                }`}>
-                {enableCopy && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="secondary"
-                        size="icon"
-                        className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                        onClick={handleCopy}
-                      >
-                        {copied ? (
-                          <Check className="h-3 w-3 text-green-500" />
-                        ) : (
-                          <Copy className="h-3 w-3" />
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      {copied ? 'Copiado!' : 'Copiar'}
-                    </TooltipContent>
-                  </Tooltip>
-                )}
-
-                {canEdit && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="secondary"
-                        size="icon"
-                        className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                        onClick={handleEdit}
-                      >
-                        <Edit className="h-3 w-3" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      Editar
-                    </TooltipContent>
-                  </Tooltip>
-                )}
-
-                {canRegenerate && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="secondary"
-                        size="icon"
-                        className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                        onClick={handleRegenerate}
-                      >
-                        <RotateCcw className="h-3 w-3" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      Regenerar
-                    </TooltipContent>
-                  </Tooltip>
-                )}
-              </div>
-            )}
           </div>
+
+          {!isEditing && (showActions || actionsFocused || copied) && (enableCopy || canEdit) && (
+            <div
+              className={`mt-1 flex items-center gap-1 text-muted-foreground transition-opacity ${
+                messageIsUser ? 'justify-end' : 'justify-start'
+              }`}
+            >
+              {canEdit && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={handleEdit}
+                    >
+                      <Edit className="h-3.5 w-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {labels?.editMessage || 'Edit'}
+                  </TooltipContent>
+                </Tooltip>
+              )}
+
+              {enableCopy && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={handleCopy}
+                    >
+                      {copied ? (
+                        <Check className="h-3.5 w-3.5 text-green-500" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5" />
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {copied ? 'Copied' : labels?.copyMessage || 'Copy'}
+                  </TooltipContent>
+                </Tooltip>
+              )}
+            </div>
+          )}
         </div>
       </div>
   );
