@@ -21,7 +21,6 @@ import { Message } from "./Message";
 import { Sidebar } from "./Sidebar";
 import { ChatHeader } from "./ChatHeader";
 import { ChatInput } from "./ChatInput";
-import { TargetAgentSelector } from "./AgentSelectors";
 import { UserProfile } from "./UserProfile";
 import { useChatUserContext } from "./UserContext";
 import { groupMessagesForRender } from "../../lib/messageGrouping";
@@ -888,29 +887,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                   </ScrollArea>
 
                   {/* Input */}
-                  <div className="bg-background pb-[env(safe-area-inset-bottom)]">
-                    {/* Target agent selector for multi-agent mode */}
-                    {isMultiAgentMode &&
-                      shouldShowAgentSelector &&
-                      onTargetAgentChange && (
-                        <div className="px-4 pt-1">
-                          <TargetAgentSelector
-                            agents={
-                              participantIds && participantIds.length > 0
-                                ? agentOptions.filter((a) =>
-                                    participantIds.includes(a.id)
-                                  )
-                                : agentOptions
-                            }
-                            targetAgentId={targetAgentId}
-                            onTargetChange={onTargetAgentChange}
-                            placeholder={
-                              config.agentSelector?.label || "Select agent"
-                            }
-                            disabled={isGenerating}
-                          />
-                        </div>
-                      )}
+                  <div className="-mt-8 bg-gradient-to-t from-background via-background/95 to-transparent px-0 pb-[env(safe-area-inset-bottom)] pt-10">
                     <ChatInput
                       value={inputValue}
                       onChange={(value) => {
@@ -945,6 +922,15 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                               participantIds.includes(a.id)
                             )
                           : agentOptions
+                      }
+                      targetAgentId={targetAgentId}
+                      showTargetAgentSelector={Boolean(
+                        isMultiAgentMode &&
+                          shouldShowAgentSelector &&
+                          onTargetAgentChange
+                      )}
+                      targetAgentSelectorPlaceholder={
+                        config.agentSelector?.label || "Select agent"
                       }
                       onTargetAgentChange={onTargetAgentChange}
                     />

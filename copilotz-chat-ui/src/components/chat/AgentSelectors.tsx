@@ -165,6 +165,8 @@ interface TargetAgentSelectorProps {
   placeholder?: string;
   /** Disabled state */
   disabled?: boolean;
+  /** Compact visual treatment for composer/toolbars */
+  compact?: boolean;
 }
 
 /**
@@ -177,6 +179,7 @@ export const TargetAgentSelector: React.FC<TargetAgentSelectorProps> = memo(({
   label = 'Target',
   placeholder = 'Select agent',
   disabled = false,
+  compact = false,
 }) => {
   // Assign colors to agents
   const agentsWithColors = useMemo(() => assignAgentColors(agents), [agents]);
@@ -192,7 +195,11 @@ export const TargetAgentSelector: React.FC<TargetAgentSelectorProps> = memo(({
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
-          className="h-9 px-3 gap-1.5 font-medium text-base hover:bg-accent/50"
+          className={`gap-1.5 font-medium hover:bg-accent/50 ${
+            compact
+              ? 'h-9 rounded-full px-2 text-sm text-muted-foreground hover:text-foreground'
+              : 'h-9 px-3 text-base'
+          }`}
           disabled={disabled}
         >
           <AtSign className="h-4 w-4 text-muted-foreground" />

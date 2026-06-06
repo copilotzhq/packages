@@ -19,6 +19,7 @@ import { Badge } from '../ui/badge';
 import { Progress } from '../ui/progress';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 import { VoiceComposer } from './VoiceComposer';
+import { TargetAgentSelector } from './AgentSelectors';
 import {
   Send,
   Paperclip,
@@ -51,6 +52,9 @@ interface ChatInputProps {
   className?: string;
   config?: ChatConfig;
   mentionAgents?: AgentOption[];
+  targetAgentId?: string | null;
+  showTargetAgentSelector?: boolean;
+  targetAgentSelectorPlaceholder?: string;
   onTargetAgentChange?: (agentId: string | null) => void;
 }
 
@@ -365,6 +369,9 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   className = '',
   config,
   mentionAgents = [],
+  targetAgentId = null,
+  showTargetAgentSelector = false,
+  targetAgentSelectorPlaceholder,
   onTargetAgentChange,
 }: ChatInputProps) {
   const voiceDefaultMode = config?.voiceCompose?.defaultMode ?? 'text';
@@ -1031,7 +1038,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
       {/* <Card className={`border-t py-0 bg-transparent ${className}`}> */}
       {/* <CardContent className="p-4 pb-1 space-y-4 bg-transparent"> */}
       {/* Upload progress */}
-      <div className={`border-t bg-background/95 py-2 ${className}`}>
+      <div className={`bg-transparent py-0 ${className}`}>
         <div className="mx-auto w-full max-w-3xl space-y-3 px-3 md:px-2">
           {uploadProgress.size > 0 && (
             <div className="space-y-2">
@@ -1199,6 +1206,16 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                           <TooltipContent>{config?.labels?.attachFileTooltip}</TooltipContent>
                         </Tooltip>
                       </>
+                    )}
+                    {showTargetAgentSelector && onTargetAgentChange && mentionAgents.length > 0 && (
+                      <TargetAgentSelector
+                        agents={mentionAgents}
+                        targetAgentId={targetAgentId}
+                        onTargetChange={onTargetAgentChange}
+                        placeholder={targetAgentSelectorPlaceholder || 'Select agent'}
+                        disabled={disabled || isGenerating}
+                        compact
+                      />
                     )}
                   </div>
 
