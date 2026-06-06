@@ -79,7 +79,7 @@ export const defaultChatConfig: Required<ChatConfig> = {
     addTag: "Add tag",
     removeTag: "Remove tag",
     tagNamePlaceholder: "Tag name",
-    untagged: "Untagged",
+    untagged: "No tag",
     groupBy: "Group by",
     groupByDate: "Date",
     groupByTag: "Tag",

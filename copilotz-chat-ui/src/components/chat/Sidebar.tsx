@@ -6,6 +6,12 @@ import {
 } from "../../types/chatTypes";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Badge } from "../ui/badge";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "../ui/collapsible";
 import {
   Sidebar as ShadcnSidebar,
   SidebarContent,
@@ -50,12 +56,13 @@ import {
 import {
   Archive,
   Bot,
+  ChevronRight,
   Edit2,
   Filter,
-  Tag,
   MoreHorizontal,
   Plus,
   Search,
+  Tag,
   Trash2,
   X,
 } from "lucide-react";
@@ -204,7 +211,7 @@ const ThreadInitialsIcon = ({ title }: { title: string }) => {
       .toUpperCase() || "?";
 
   return (
-    <div className="flex shrink-0 items-center justify-center rounded bg-muted text-[10px] font-medium">
+    <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded bg-muted text-[10px] font-medium text-muted-foreground">
       {initials}
     </div>
   );
@@ -215,7 +222,17 @@ type ThreadGroup = {
   label: string;
   tag?: ChatThreadTag;
   threads: ChatThread[];
+  muted?: boolean;
 };
+
+const TAG_COLOR_CLASSES = [
+  "bg-sky-500",
+  "bg-emerald-500",
+  "bg-violet-500",
+  "bg-amber-500",
+  "bg-rose-500",
+  "bg-cyan-500",
+] as const;
 
 function slugTagName(name: string): string {
   const slug = name
@@ -263,6 +280,31 @@ function collectThreadTags(threads: ChatThread[]): ChatThreadTag[] {
   return tags.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function tagColorIndex(tag: ChatThreadTag): number {
+  let hash = 0;
+  for (const char of tag.id || tag.name) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+  return hash % TAG_COLOR_CLASSES.length;
+}
+
+const TagDot = ({ tag }: { tag: ChatThreadTag }) => (
+  <span
+    aria-hidden="true"
+    className={`h-2 w-2 shrink-0 rounded-full ${TAG_COLOR_CLASSES[tagColorIndex(tag)]}`}
+  />
+);
+
+const ThreadTagBadge = ({ tag }: { tag: ChatThreadTag }) => (
+  <Badge
+    variant="secondary"
+    className="h-4 max-w-24 gap-1 rounded px-1.5 py-0 text-[10px] font-normal text-muted-foreground"
+  >
+    <TagDot tag={tag} />
+    <span className="truncate">{tag.name}</span>
+  </Badge>
+);
+
 export const Sidebar: React.FC<SidebarProps> = ({
   threads,
   currentThreadId,
@@ -293,6 +335,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [newTagName, setNewTagName] = useState("");
   const [draggingThreadId, setDraggingThreadId] = useState<string | null>(null);
   const [dragOverTagId, setDragOverTagId] = useState<string | null>(null);
+  const [collapsedGroups, setCollapsedGroups] = useState<
+    Record<string, boolean>
+  >({});
   const inputRef = useRef<HTMLInputElement>(null);
   const threadTagsConfig = config.features?.threadTags;
   const tagsEnabled = !!threadTagsConfig?.enabled;
@@ -342,8 +387,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
       if (untagged.length > 0) {
         groups.push({
           key: "untagged",
-          label: config.labels?.untagged || "Untagged",
+          label: config.labels?.untagged || "No tag",
           threads: untagged,
+          muted: true,
         });
       }
       return groups;
@@ -392,6 +438,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const tagDialogThread = tagDialogThreadId
     ? threads.find((thread) => thread.id === tagDialogThreadId) ?? null
     : null;
+
+  const toggleGroup = (groupKey: string, open: boolean) => {
+    setCollapsedGroups((current) => ({
+      ...current,
+      [groupKey]: !open,
+    }));
+  };
 
   const handleDeleteThread = (threadId: string) => {
     onDeleteThread?.(threadId);
@@ -544,29 +597,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
 
         {tagsEnabled && threadTagsConfig?.groupingEnabled !== false && (
-          <div className="px-4 py-2 group-data-[collapsible=icon]:hidden">
-            <div className="flex items-center justify-between rounded-md border border-sidebar-border bg-sidebar-accent/40 p-1">
-              <span className="px-2 text-[11px] text-muted-foreground">
-                {config.labels?.groupBy || "Group by"}
-              </span>
-              <div className="flex gap-1">
-                <Button
-                  variant={groupBy === "date" ? "secondary" : "ghost"}
-                  size="sm"
-                  onClick={() => setGroupBy("date")}
-                  className="h-6 px-2 text-xs"
-                >
-                  {config.labels?.groupByDate || "Date"}
-                </Button>
-                <Button
-                  variant={groupBy === "tag" ? "secondary" : "ghost"}
-                  size="sm"
-                  onClick={() => setGroupBy("tag")}
-                  className="h-6 px-2 text-xs"
-                >
-                  {config.labels?.groupByTag || "Tag"}
-                </Button>
-              </div>
+          <div className="px-2 py-2 group-data-[collapsible=icon]:hidden">
+            <div className="grid grid-cols-2 gap-1 rounded-md bg-sidebar-accent/50 p-1">
+              <Button
+                variant={groupBy === "date" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setGroupBy("date")}
+                className="h-7 px-2 text-xs"
+              >
+                {config.labels?.groupByDate || "Date"}
+              </Button>
+              <Button
+                variant={groupBy === "tag" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => setGroupBy("tag")}
+                className="h-7 px-2 text-xs"
+              >
+                {config.labels?.groupByTag || "Tag"}
+              </Button>
             </div>
           </div>
         )}
@@ -583,156 +631,206 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </p>
           </div>
         ) : (
-          threadGroups.map((group) => (
-            <SidebarGroup
-              className="mt-2"
-              key={group.key}
-              onDragOver={(event) => {
-                if (!canDragTags || !group.tag) return;
-                event.preventDefault();
-                setDragOverTagId(group.tag.id);
-              }}
-              onDragLeave={() => {
-                if (dragOverTagId === group.tag?.id) setDragOverTagId(null);
-              }}
-              onDrop={(event) => {
-                if (!canDragTags || !group.tag) return;
-                event.preventDefault();
-                handleDropOnTag(group.tag);
-              }}
-            >
-              <SidebarGroupLabel
-                className={`group-data-[collapsible=icon]:hidden ${
-                  dragOverTagId === group.tag?.id
-                    ? "rounded-md bg-sidebar-accent text-sidebar-accent-foreground"
-                    : ""
-                }`}
+          threadGroups.map((group) => {
+            const isOpen = !collapsedGroups[group.key];
+            return (
+              <Collapsible
+                key={group.key}
+                open={isOpen}
+                onOpenChange={(open) => toggleGroup(group.key, open)}
               >
-                {group.tag && <Tag className="mr-1 h-3 w-3" />}
-                {group.label}
-              </SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {group.threads.map((thread) => (
-                    <SidebarMenuItem key={thread.id}>
-                      {editingThreadId === thread.id ? (
-                        <div className="flex items-center gap-1 px-2 py-1">
-                          <Input
-                            ref={inputRef}
-                            value={editTitle}
-                            onChange={(e) => setEditTitle(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                saveEdit();
-                              }
-                              if (e.key === "Escape") {
-                                cancelEdit();
-                              }
-                            }}
-                            onBlur={saveEdit}
-                            className="h-7 text-sm"
-                          />
-                        </div>
-                      ) : (
-                        <SidebarMenuButton
-                          isActive={currentThreadId === thread.id}
-                          onClick={() => onSelectThread?.(thread.id)}
-                          tooltip={thread.title}
-                          draggable={canDragTags}
-                          onDragStart={() => setDraggingThreadId(thread.id)}
-                          onDragEnd={() => {
-                            setDraggingThreadId(null);
-                            setDragOverTagId(null);
-                          }}
-                        >
-                          <ThreadInitialsIcon title={thread.title || "?"} />
-                          <div className="flex flex-col items-start gap-0.5 flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
-                            <span className="truncate w-full">
-                              {thread.title || "New Chat"}
-                            </span>
-                            {tagsEnabled && (thread.tags ?? []).length > 0 && (
-                              <span className="flex max-w-full flex-wrap gap-1">
-                                {(thread.tags ?? []).slice(0, 2).map((tag) => (
-                                  <span
-                                    key={tag.id}
-                                    className="max-w-20 truncate rounded bg-sidebar-accent px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                                  >
-                                    {tag.name}
-                                  </span>
-                                ))}
-                              </span>
-                            )}
-                          </div>
-                          {thread.isArchived && (
-                            <Archive className="ml-auto h-3 w-3 opacity-50 group-data-[collapsible=icon]:hidden" />
-                          )}
-                        </SidebarMenuButton>
-                      )}
+                <SidebarGroup
+                  className="mt-1 py-1"
+                  onDragOver={(event) => {
+                    if (!canDragTags || !group.tag) return;
+                    event.preventDefault();
+                    setDragOverTagId(group.tag.id);
+                  }}
+                  onDragLeave={() => {
+                    if (dragOverTagId === group.tag?.id) {
+                      setDragOverTagId(null);
+                    }
+                  }}
+                  onDrop={(event) => {
+                    if (!canDragTags || !group.tag) return;
+                    event.preventDefault();
+                    handleDropOnTag(group.tag);
+                  }}
+                >
+                  <SidebarGroupLabel
+                    asChild
+                    className={`h-7 group-data-[collapsible=icon]:hidden ${
+                      dragOverTagId === group.tag?.id
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                        : ""
+                    }`}
+                  >
+                    <CollapsibleTrigger className="group/trigger w-full">
+                      <ChevronRight
+                        className={`mr-1 h-3.5 w-3.5 transition-transform ${
+                          isOpen ? "rotate-90" : ""
+                        }`}
+                      />
+                      {group.tag ? (
+                        <TagDot tag={group.tag} />
+                      ) : group.muted ? (
+                        <Tag className="mr-1 h-3.5 w-3.5 opacity-50" />
+                      ) : null}
+                      <span
+                        className={`min-w-0 flex-1 truncate ${
+                          group.muted ? "text-muted-foreground" : ""
+                        }`}
+                      >
+                        {group.label}
+                      </span>
+                      <span className="ml-auto rounded px-1.5 text-[10px] text-muted-foreground">
+                        {group.threads.length}
+                      </span>
+                    </CollapsibleTrigger>
+                  </SidebarGroupLabel>
+                  <CollapsibleContent>
+                    <SidebarGroupContent>
+                      <SidebarMenu>
+                        {group.threads.map((thread) => {
+                          const visibleTags = tagsEnabled
+                            ? (thread.tags ?? [])
+                                .filter((tag) => tag.id !== group.tag?.id)
+                                .slice(0, 2)
+                            : [];
+                          return (
+                            <SidebarMenuItem key={thread.id}>
+                              {editingThreadId === thread.id ? (
+                                <div className="flex items-center gap-1 px-2 py-1">
+                                  <Input
+                                    ref={inputRef}
+                                    value={editTitle}
+                                    onChange={(e) =>
+                                      setEditTitle(e.target.value)
+                                    }
+                                    onKeyDown={(e) => {
+                                      if (e.key === "Enter") {
+                                        saveEdit();
+                                      }
+                                      if (e.key === "Escape") {
+                                        cancelEdit();
+                                      }
+                                    }}
+                                    onBlur={saveEdit}
+                                    className="h-7 text-sm"
+                                  />
+                                </div>
+                              ) : (
+                                <SidebarMenuButton
+                                  isActive={currentThreadId === thread.id}
+                                  onClick={() => onSelectThread?.(thread.id)}
+                                  tooltip={thread.title}
+                                  draggable={canDragTags}
+                                  className="h-auto min-h-9 items-start py-1.5"
+                                  onDragStart={() =>
+                                    setDraggingThreadId(thread.id)}
+                                  onDragEnd={() => {
+                                    setDraggingThreadId(null);
+                                    setDragOverTagId(null);
+                                  }}
+                                >
+                                  <ThreadInitialsIcon
+                                    title={thread.title || "?"}
+                                  />
+                                  <div className="flex min-w-0 flex-1 flex-col items-start gap-1 group-data-[collapsible=icon]:hidden">
+                                    <span className="w-full truncate leading-5">
+                                      {thread.title || "New Chat"}
+                                    </span>
+                                    {visibleTags.length > 0 && (
+                                      <span className="flex max-w-full flex-wrap gap-1">
+                                        {visibleTags.map((tag) => (
+                                          <ThreadTagBadge
+                                            key={tag.id}
+                                            tag={tag}
+                                          />
+                                        ))}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {thread.isArchived && (
+                                    <Archive className="ml-auto mt-1 h-3 w-3 opacity-50 group-data-[collapsible=icon]:hidden" />
+                                  )}
+                                </SidebarMenuButton>
+                              )}
 
-                      {!editingThreadId && (
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <SidebarMenuAction showOnHover>
-                              <MoreHorizontal />
-                              <span className="sr-only">More</span>
-                            </SidebarMenuAction>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent
-                            className="w-48"
-                            side="right"
-                            align="start"
-                          >
-                            <DropdownMenuItem
-                              onClick={() => startEditing(thread)}
-                            >
-                              <Edit2 className="mr-2 h-4 w-4" />
-                              <span>
-                                {config.labels?.renameThread || "Rename"}
-                              </span>
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => onArchiveThread?.(thread.id)}
-                            >
-                              <Archive className="mr-2 h-4 w-4" />
-                              <span>
-                                {thread.isArchived
-                                  ? config.labels?.unarchiveThread ||
-                                    "Unarchive"
-                                  : config.labels?.archiveThread || "Archive"}
-                              </span>
-                            </DropdownMenuItem>
-                            {canUpdateTags && (
-                              <DropdownMenuItem
-                                onClick={() => {
-                                  setTagDialogThreadId(thread.id);
-                                  setNewTagName("");
-                                }}
-                              >
-                                <Tag className="mr-2 h-4 w-4" />
-                                <span>
-                                  {config.labels?.manageTags || "Manage tags"}
-                                </span>
-                              </DropdownMenuItem>
-                            )}
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              onClick={() => setDeleteThreadId(thread.id)}
-                              className="text-destructive focus:text-destructive"
-                            >
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              <span>
-                                {config.labels?.deleteThread || "Delete"}
-                              </span>
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      )}
-                    </SidebarMenuItem>
-                  ))}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
-          ))
+                              {!editingThreadId && (
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <SidebarMenuAction showOnHover>
+                                      <MoreHorizontal />
+                                      <span className="sr-only">More</span>
+                                    </SidebarMenuAction>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent
+                                    className="w-48"
+                                    side="right"
+                                    align="start"
+                                  >
+                                    <DropdownMenuItem
+                                      onClick={() => startEditing(thread)}
+                                    >
+                                      <Edit2 className="mr-2 h-4 w-4" />
+                                      <span>
+                                        {config.labels?.renameThread ||
+                                          "Rename"}
+                                      </span>
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      onClick={() =>
+                                        onArchiveThread?.(thread.id)}
+                                    >
+                                      <Archive className="mr-2 h-4 w-4" />
+                                      <span>
+                                        {thread.isArchived
+                                          ? config.labels?.unarchiveThread ||
+                                            "Unarchive"
+                                          : config.labels?.archiveThread ||
+                                            "Archive"}
+                                      </span>
+                                    </DropdownMenuItem>
+                                    {canUpdateTags && (
+                                      <DropdownMenuItem
+                                        onClick={() => {
+                                          setTagDialogThreadId(thread.id);
+                                          setNewTagName("");
+                                        }}
+                                      >
+                                        <Tag className="mr-2 h-4 w-4" />
+                                        <span>
+                                          {config.labels?.manageTags ||
+                                            "Manage tags"}
+                                        </span>
+                                      </DropdownMenuItem>
+                                    )}
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem
+                                      onClick={() =>
+                                        setDeleteThreadId(thread.id)}
+                                      className="text-destructive focus:text-destructive"
+                                    >
+                                      <Trash2 className="mr-2 h-4 w-4" />
+                                      <span>
+                                        {config.labels?.deleteThread ||
+                                          "Delete"}
+                                      </span>
+                                    </DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              )}
+                            </SidebarMenuItem>
+                          );
+                        })}
+                      </SidebarMenu>
+                    </SidebarGroupContent>
+                  </CollapsibleContent>
+                </SidebarGroup>
+              </Collapsible>
+            );
+          })
         )}
       </SidebarContent>
 
@@ -782,14 +880,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 ) : (
                   <div className="flex flex-wrap gap-2">
                     {(tagDialogThread.tags ?? []).map((tag) => (
-                      <span
+                      <Badge
                         key={tag.id}
-                        className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-sm"
+                        variant="secondary"
+                        className="gap-1 rounded-md py-1 text-sm font-normal"
                       >
+                        <TagDot tag={tag} />
                         {tag.name}
                         <button
                           type="button"
-                          className="rounded hover:bg-background"
+                          className="rounded-sm hover:bg-background/80"
                           onClick={() =>
                             removeTagFromThread(tagDialogThread, tag.id)
                           }
@@ -797,7 +897,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         >
                           <X className="h-3 w-3" />
                         </button>
-                      </span>
+                      </Badge>
                     ))}
                   </div>
                 )}

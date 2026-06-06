@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/chat-adapter",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "Copilotz chat adapter and API hook",
   "type": "module",
   "module": "./dist/index.js",
@@ -22,12 +22,12 @@
     "prepack": "npm run build"
   },
   "peerDependencies": {
-    "@copilotz/chat-ui": "0.9.1",
+    "@copilotz/chat-ui": "0.9.2",
     "react": ">=18",
     "react-dom": ">=18"
   },
   "devDependencies": {
-    "@copilotz/chat-ui": "0.9.1",
+    "@copilotz/chat-ui": "0.9.2",
     "@types/react": "^19.1.10",
     "@types/react-dom": "^19.1.7",
     "tsup": "^8.3.5",
