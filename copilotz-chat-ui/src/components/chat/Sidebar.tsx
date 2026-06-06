@@ -408,6 +408,36 @@ const ThreadTagEditorBadge = ({
   );
 };
 
+const ThreadTagOptionButton = ({
+  tag,
+  assigned,
+  onClick,
+}: {
+  tag: ChatThreadTag;
+  assigned: boolean;
+  onClick: () => void;
+}) => {
+  const color = tagColor(tag);
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      disabled={assigned}
+      className="gap-1.5 border font-medium disabled:opacity-70"
+      style={{
+        backgroundColor: color.background,
+        borderColor: color.border,
+        color: color.accent,
+      }}
+      onClick={onClick}
+    >
+      <TagDot tag={tag} />
+      {tag.name}
+    </Button>
+  );
+};
+
 export const Sidebar: React.FC<SidebarProps> = ({
   threads,
   currentThreadId,
@@ -1007,16 +1037,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         (threadTag) => threadTag.id === tag.id
                       );
                       return (
-                        <Button
+                        <ThreadTagOptionButton
                           key={tag.id}
-                          type="button"
-                          variant={assigned ? "secondary" : "outline"}
-                          size="sm"
-                          disabled={assigned}
+                          tag={tag}
+                          assigned={assigned}
                           onClick={() => addTagToThread(tagDialogThread, tag)}
-                        >
-                          {tag.name}
-                        </Button>
+                        />
                       );
                     })}
                   </div>

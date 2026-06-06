@@ -672,7 +672,9 @@ export const Message: React.FC<MessageProps> = memo(({
 
           {/* Message Body */}
           <div className={`relative overflow-hidden text-left ${messageIsUser
-            ? 'ml-auto inline-flex max-w-[85%] flex-col rounded-lg bg-primary p-3 text-primary-foreground'
+            ? isEditing
+              ? 'ml-auto flex w-full max-w-[min(42rem,85%)] flex-col rounded-xl border bg-background p-2 text-foreground shadow-sm'
+              : 'ml-auto inline-flex max-w-[85%] flex-col rounded-lg bg-primary p-3 text-primary-foreground'
             : 'flex w-full max-w-full flex-col'
             }`}>
             {isEditing ? (
@@ -680,17 +682,29 @@ export const Message: React.FC<MessageProps> = memo(({
                 <Textarea
                   value={editContent}
                   onChange={(e) => setEditContent(e.target.value)}
-                  className="min-h-[100px] resize-none"
+                  className="min-h-28 resize-y bg-muted/30 text-sm leading-6"
                   autoFocus
                 />
-                <div className="flex gap-2 justify-end">
-                  <Button variant="outline" size="sm" onClick={handleCancelEdit}>
+                <div className="flex items-center justify-end gap-2">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-8"
+                    onClick={handleCancelEdit}
+                  >
                     <X className="h-4 w-4 mr-1" />
-                    Cancelar
+                    {labels?.cancel || 'Cancel'}
                   </Button>
-                  <Button size="sm" onClick={handleEdit}>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="h-8"
+                    onClick={handleEdit}
+                    disabled={!editContent.trim() || editContent.trim() === message.content}
+                  >
                     <Check className="h-4 w-4 mr-1" />
-                    Salvar
+                    Save
                   </Button>
                 </div>
               </div>
@@ -742,10 +756,14 @@ export const Message: React.FC<MessageProps> = memo(({
             {/* Action Buttons */}
           </div>
 
-          {!isEditing && (showActions || actionsFocused || copied) && (enableCopy || canEdit) && (
+          {!isEditing && (enableCopy || canEdit) && (
             <div
-              className={`mt-1 flex items-center gap-1 text-muted-foreground transition-opacity ${
+              className={`mt-1 flex h-7 items-center gap-1 text-muted-foreground transition-opacity duration-150 ${
                 messageIsUser ? 'justify-end' : 'justify-start'
+              } ${
+                showActions || actionsFocused || copied
+                  ? 'opacity-100'
+                  : 'pointer-events-none opacity-0'
               }`}
             >
               {canEdit && (
