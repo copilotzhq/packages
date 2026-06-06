@@ -225,15 +225,6 @@ type ThreadGroup = {
   muted?: boolean;
 };
 
-const TAG_COLOR_CLASSES = [
-  "bg-sky-500",
-  "bg-emerald-500",
-  "bg-violet-500",
-  "bg-amber-500",
-  "bg-rose-500",
-  "bg-cyan-500",
-] as const;
-
 function slugTagName(name: string): string {
   const slug = name
     .trim()
@@ -280,30 +271,142 @@ function collectThreadTags(threads: ChatThread[]): ChatThreadTag[] {
   return tags.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function tagColorIndex(tag: ChatThreadTag): number {
-  let hash = 0;
-  for (const char of tag.id || tag.name) {
-    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  }
-  return hash % TAG_COLOR_CLASSES.length;
+type TagColor = {
+  accent: string;
+  background: string;
+  border: string;
+};
+
+function normalizeTagColorKey(tag: ChatThreadTag): string {
+  return (tag.name || tag.id || "tag")
+    .trim()
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "");
 }
 
-const TagDot = ({ tag }: { tag: ChatThreadTag }) => (
-  <span
-    aria-hidden="true"
-    className={`h-2 w-2 shrink-0 rounded-full ${TAG_COLOR_CLASSES[tagColorIndex(tag)]}`}
-  />
-);
+function hashTagColorKey(value: string): number {
+  let hash = 0;
+  for (const char of value) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+  return hash;
+}
 
-const ThreadTagBadge = ({ tag }: { tag: ChatThreadTag }) => (
-  <Badge
-    variant="secondary"
-    className="h-4 max-w-24 gap-1 rounded px-1.5 py-0 text-[10px] font-normal text-muted-foreground"
-  >
-    <TagDot tag={tag} />
-    <span className="truncate">{tag.name}</span>
-  </Badge>
-);
+function hslToRgb(hue: number, saturation: number, lightness: number) {
+  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
+  const x = chroma * (1 - Math.abs(((hue / 60) % 2) - 1));
+  const match = lightness - chroma / 2;
+  let red = 0;
+  let green = 0;
+  let blue = 0;
+
+  if (hue < 60) {
+    red = chroma;
+    green = x;
+  } else if (hue < 120) {
+    red = x;
+    green = chroma;
+  } else if (hue < 180) {
+    green = chroma;
+    blue = x;
+  } else if (hue < 240) {
+    green = x;
+    blue = chroma;
+  } else if (hue < 300) {
+    red = x;
+    blue = chroma;
+  } else {
+    red = chroma;
+    blue = x;
+  }
+
+  return {
+    red: Math.round((red + match) * 255),
+    green: Math.round((green + match) * 255),
+    blue: Math.round((blue + match) * 255),
+  };
+}
+
+function tagColor(tag: ChatThreadTag): TagColor {
+  if (tag.color) {
+    return {
+      accent: tag.color,
+      background: `color-mix(in srgb, ${tag.color} 12%, transparent)`,
+      border: `color-mix(in srgb, ${tag.color} 24%, transparent)`,
+    };
+  }
+
+  const hue = hashTagColorKey(normalizeTagColorKey(tag)) % 360;
+  const { red, green, blue } = hslToRgb(hue, 0.68, 0.48);
+
+  return {
+    accent: `rgb(${red} ${green} ${blue})`,
+    background: `rgb(${red} ${green} ${blue} / 0.12)`,
+    border: `rgb(${red} ${green} ${blue} / 0.24)`,
+  };
+}
+
+const TagDot = ({ tag }: { tag: ChatThreadTag }) => {
+  const color = tagColor(tag);
+  return (
+    <span
+      aria-hidden="true"
+      className="h-2 w-2 shrink-0 rounded-full"
+      style={{ backgroundColor: color.accent }}
+    />
+  );
+};
+
+const ThreadTagBadge = ({ tag }: { tag: ChatThreadTag }) => {
+  const color = tagColor(tag);
+  return (
+    <Badge
+      variant="secondary"
+      className="h-4 max-w-24 gap-1 rounded border px-1.5 py-0 text-[10px] font-normal text-muted-foreground"
+      style={{
+        backgroundColor: color.background,
+        borderColor: color.border,
+      }}
+    >
+      <TagDot tag={tag} />
+      <span className="truncate">{tag.name}</span>
+    </Badge>
+  );
+};
+
+const ThreadTagEditorBadge = ({
+  tag,
+  removeLabel,
+  onRemove,
+}: {
+  tag: ChatThreadTag;
+  removeLabel: string;
+  onRemove: () => void;
+}) => {
+  const color = tagColor(tag);
+  return (
+    <Badge
+      variant="secondary"
+      className="gap-1 rounded-md border py-1 text-sm font-normal"
+      style={{
+        backgroundColor: color.background,
+        borderColor: color.border,
+      }}
+    >
+      <TagDot tag={tag} />
+      {tag.name}
+      <button
+        type="button"
+        className="rounded-sm hover:bg-background/80"
+        onClick={onRemove}
+        aria-label={removeLabel}
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </Badge>
+  );
+};
 
 export const Sidebar: React.FC<SidebarProps> = ({
   threads,
@@ -880,24 +983,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 ) : (
                   <div className="flex flex-wrap gap-2">
                     {(tagDialogThread.tags ?? []).map((tag) => (
-                      <Badge
+                      <ThreadTagEditorBadge
                         key={tag.id}
-                        variant="secondary"
-                        className="gap-1 rounded-md py-1 text-sm font-normal"
-                      >
-                        <TagDot tag={tag} />
-                        {tag.name}
-                        <button
-                          type="button"
-                          className="rounded-sm hover:bg-background/80"
-                          onClick={() =>
-                            removeTagFromThread(tagDialogThread, tag.id)
-                          }
-                          aria-label={config.labels?.removeTag || "Remove tag"}
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </Badge>
+                        tag={tag}
+                        removeLabel={config.labels?.removeTag || "Remove tag"}
+                        onRemove={() =>
+                          removeTagFromThread(tagDialogThread, tag.id)
+                        }
+                      />
                     ))}
                   </div>
                 )}
