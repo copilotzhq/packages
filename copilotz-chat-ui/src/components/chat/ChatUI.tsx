@@ -688,6 +688,9 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   );
 
   const isMultiAgentMode = config.agentSelector?.mode === "multi";
+  const customPanelWidth = config.customComponent?.panelWidth ?? 320;
+  const customPanelMinWidth = Math.min(customPanelWidth, 320);
+  const customPanelResponsiveWidth = `clamp(${customPanelMinWidth}px, 30vw, ${customPanelWidth}px)`;
 
   // Stable props object for Message components — prevents unnecessary re-renders
   // when the virtualizer re-evaluates which items to show
@@ -779,8 +782,8 @@ export const ChatUI: React.FC<ChatV2Props> = ({
             userMenuAdditionalItems={userMenuAdditionalItems}
           />
 
-          <SidebarInset>
-            <div className="flex flex-col h-full min-h-0">
+          <SidebarInset className="min-w-0 overflow-hidden">
+            <div className="flex flex-col h-full min-h-0 min-w-0">
               {/* Header */}
               <ChatHeader
                 config={config}
@@ -801,9 +804,9 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                 onParticipantsChange={onParticipantsChange}
               />
 
-              <div className="flex flex-1 flex-row min-h-0 overflow-hidden">
+              <div className="flex flex-1 flex-row min-h-0 min-w-0 overflow-hidden">
                 {/* Main Chat Area */}
-                <div className="flex-1 flex flex-col min-h-0">
+                <div className="flex-1 flex flex-col min-h-0 min-w-0">
                   {/* Messages — contain: strict prevents reflow from propagating to/from the input */}
                   <ScrollArea
                     ref={scrollAreaRef}
@@ -951,19 +954,16 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                 {/* Right sidebar custom component for desktop */}
                 {config?.customComponent?.component && !isMobile && (
                   <div
-                    className="h-full transition-all duration-300 ease-in-out overflow-hidden"
+                    className="h-full shrink-0 transition-all duration-300 ease-in-out overflow-hidden"
                     style={{
                       width: state.showSidebar
-                        ? config.customComponent.panelWidth ?? 320
+                        ? customPanelResponsiveWidth
                         : 0,
                     }}
                   >
                     {state.showSidebar && (
                       <div
                         className="h-full overflow-hidden border-l bg-background animate-in slide-in-from-right-4 duration-300"
-                        style={{
-                          width: config.customComponent.panelWidth ?? 320,
-                        }}
                       >
                         {renderCustomComponent()}
                       </div>
