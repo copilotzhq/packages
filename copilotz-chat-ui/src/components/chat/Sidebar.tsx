@@ -674,75 +674,73 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
 
-        <div className="group-data-[collapsible=icon]:hidden">
-          <div className="space-y-2 rounded-2xl border border-sidebar-border/70 bg-sidebar-accent/45 p-2 shadow-sm">
-            {/* New Chat Button */}
-            {onCreateThread && (
-              <CreateThreadDialog
-                config={config}
-                onCreateThread={onCreateThread}
-                trigger={
-                  <SidebarMenu>
-                    <SidebarMenuItem>
-                      <SidebarMenuButton
-                        size="lg"
-                        className="h-11 w-full justify-start gap-2 rounded-xl border border-sidebar-border/80 bg-sidebar text-sidebar-foreground shadow-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground group-data-[collapsible=icon]:justify-center"
-                        tooltip={config.labels?.newChat || "New Chat"}
-                      >
-                        <Plus className="size-4" />
-                        <span className="group-data-[collapsible=icon]:hidden">
-                          {config.labels?.newChat || "New Chat"}
-                        </span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  </SidebarMenu>
-                }
-              />
-            )}
+        <div className="space-y-3 px-1 group-data-[collapsible=icon]:hidden">
+          {/* New Chat Button */}
+          {onCreateThread && (
+            <CreateThreadDialog
+              config={config}
+              onCreateThread={onCreateThread}
+              trigger={
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      size="lg"
+                      className="h-11 w-full justify-start gap-2 rounded-xl border border-sidebar-border/80 bg-sidebar text-sidebar-foreground shadow-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground group-data-[collapsible=icon]:justify-center"
+                      tooltip={config.labels?.newChat || "New Chat"}
+                    >
+                      <Plus className="size-4" />
+                      <span className="group-data-[collapsible=icon]:hidden">
+                        {config.labels?.newChat || "New Chat"}
+                      </span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              }
+            />
+          )}
 
-            {/* Search */}
-            <div className="relative">
-              <Search
-                aria-hidden="true"
-                className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 select-none text-sidebar-foreground/45"
-              />
-              <Input
-                className="h-9 rounded-xl border-sidebar-border/80 bg-sidebar pl-3 pr-10 text-sidebar-foreground shadow-sm placeholder:text-sidebar-foreground/50 focus-visible:ring-1 focus-visible:ring-sidebar-ring"
-                placeholder={config.labels?.search || "Search..."}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-            </div>
-
-            {tagsEnabled && threadTagsConfig?.groupingEnabled !== false && (
-              <div className="grid grid-cols-2 gap-1 rounded-xl border border-sidebar-border/60 bg-sidebar-accent/70 p-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setGroupBy("date")}
-                  className={`h-8 rounded-lg px-2 text-xs font-semibold transition-colors ${
-                    groupBy === "date"
-                      ? "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar"
-                      : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
-                  }`}
-                >
-                  {config.labels?.groupByDate || "Date"}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setGroupBy("tag")}
-                  className={`h-8 rounded-lg px-2 text-xs font-semibold transition-colors ${
-                    groupBy === "tag"
-                      ? "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar"
-                      : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
-                  }`}
-                >
-                  {config.labels?.groupByTag || "Tag"}
-                </Button>
-              </div>
-            )}
+          {/* Search */}
+          <div className="relative">
+            <Search
+              aria-hidden="true"
+              className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 select-none text-sidebar-foreground/45"
+            />
+            <Input
+              className="h-9 rounded-xl border-sidebar-border/80 bg-sidebar pl-3 pr-10 text-sidebar-foreground shadow-sm placeholder:text-sidebar-foreground/50 focus-visible:ring-1 focus-visible:ring-sidebar-ring"
+              placeholder={config.labels?.search || "Search..."}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
           </div>
+
+          {tagsEnabled && threadTagsConfig?.groupingEnabled !== false && (
+            <div className="grid grid-cols-2 gap-1 rounded-xl border border-sidebar-border/60 bg-sidebar-accent/70 p-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setGroupBy("date")}
+                className={`h-8 rounded-lg px-2 text-xs font-semibold transition-colors ${
+                  groupBy === "date"
+                    ? "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar"
+                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                }`}
+              >
+                {config.labels?.groupByDate || "Date"}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setGroupBy("tag")}
+                className={`h-8 rounded-lg px-2 text-xs font-semibold transition-colors ${
+                  groupBy === "tag"
+                    ? "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar"
+                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                }`}
+              >
+                {config.labels?.groupByTag || "Tag"}
+              </Button>
+            </div>
+          )}
         </div>
 
         {/* Collapsed View: Search Icon Button (expands sidebar on click) */}
