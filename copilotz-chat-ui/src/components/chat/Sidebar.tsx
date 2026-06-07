@@ -650,10 +650,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <ShadcnSidebar collapsible="icon" {...props}>
-      <SidebarHeader className="gap-3 p-3">
+      <SidebarHeader className="gap-3 p-3 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-0">
         {/* Branding / Logo */}
-        <div className="flex items-center gap-3 px-2 py-3">
-          <div className="flex items-center justify-center shrink-0">
+        <div className="flex items-center gap-3 px-2 py-3 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center">
             {config.branding?.logo || (
               <Avatar className="h-8 w-8">
                 <AvatarFallback className="bg-primary text-primary-foreground">
