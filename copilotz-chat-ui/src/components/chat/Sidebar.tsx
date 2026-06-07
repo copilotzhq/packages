@@ -490,14 +490,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   }, [editingThreadId]);
 
+  const normalizedSearchQuery = searchQuery.trim().toLowerCase();
+
+  const threadMatchesTitle = (thread: ChatThread) =>
+    !normalizedSearchQuery ||
+    (thread.title ?? "").toString().toLowerCase().includes(
+      normalizedSearchQuery,
+    );
+
+  const tagMatchesSearch = (tag: ChatThreadTag) =>
+    !normalizedSearchQuery ||
+    tag.name.toLowerCase().includes(normalizedSearchQuery) ||
+    tag.id.toLowerCase().includes(normalizedSearchQuery);
+
+  const threadMatchesSearch = (thread: ChatThread) =>
+    threadMatchesTitle(thread) || (thread.tags ?? []).some(tagMatchesSearch);
+
   // Filter threads based on search and archive filter
   const filteredThreads = threads.filter((thread) => {
-    const title = (thread.title ?? "").toString();
-    const matchesSearch = title
-      .toLowerCase()
-      .includes(searchQuery.toLowerCase());
     const matchesArchiveFilter = showArchived || !thread.isArchived;
-    return matchesSearch && matchesArchiveFilter;
+    return threadMatchesSearch(thread) && matchesArchiveFilter;
   });
 
   const allTags = useMemo(() => collectThreadTags(threads), [threads]);
@@ -505,17 +517,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const threadGroups = useMemo((): ThreadGroup[] => {
     if (tagsEnabled && groupBy === "tag") {
       const groups = allTags
-        .map((tag) => ({
-          key: tag.id,
-          label: tag.name,
-          tag,
-          threads: filteredThreads.filter((thread) =>
-            (thread.tags ?? []).some((threadTag) => threadTag.id === tag.id)
-          ),
-        }))
+        .map((tag) => {
+          const tagMatches = tagMatchesSearch(tag);
+          return {
+            key: tag.id,
+            label: tag.name,
+            tag,
+            threads: filteredThreads.filter((thread) =>
+              (thread.tags ?? []).some((threadTag) => threadTag.id === tag.id) &&
+              (tagMatches || threadMatchesTitle(thread))
+            ),
+          };
+        })
         .filter((group) => group.threads.length > 0);
       const untagged = filteredThreads.filter(
-        (thread) => (thread.tags ?? []).length === 0
+        (thread) => (thread.tags ?? []).length === 0 &&
+          threadMatchesTitle(thread)
       );
       if (untagged.length > 0) {
         groups.push({
@@ -565,6 +582,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     config.labels?.yesterday,
     filteredThreads,
     groupBy,
+    normalizedSearchQuery,
     tagsEnabled,
   ]);
 
@@ -632,7 +650,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <ShadcnSidebar collapsible="icon" {...props}>
-      <SidebarHeader>
+      <SidebarHeader className="gap-3 p-3">
         {/* Branding / Logo */}
         <div className="flex items-center gap-3 px-2 py-3">
           <div className="flex items-center justify-center shrink-0">
@@ -656,58 +674,88 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
 
-        {/* New Chat Button */}
-        {onCreateThread && (
-          <CreateThreadDialog
-            config={config}
-            onCreateThread={onCreateThread}
-            trigger={
-              <SidebarMenu>
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    size="lg"
-                    className="w-full justify-start gap-2 border border-sidebar-border shadow-sm hover:bg-sidebar-accent hover:text-sidebar-accent-foreground group-data-[collapsible=icon]:justify-center"
-                    tooltip={config.labels?.newChat || "New Chat"}
-                  >
-                    <Plus className="size-4" />
-                    <span className="group-data-[collapsible=icon]:hidden">
-                      {config.labels?.newChat || "New Chat"}
-                    </span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              </SidebarMenu>
-            }
-          />
-        )}
+        <div className="group-data-[collapsible=icon]:hidden">
+          <div className="space-y-2 rounded-2xl border border-sidebar-border/70 bg-sidebar-accent/45 p-2 shadow-sm">
+            {/* New Chat Button */}
+            {onCreateThread && (
+              <CreateThreadDialog
+                config={config}
+                onCreateThread={onCreateThread}
+                trigger={
+                  <SidebarMenu>
+                    <SidebarMenuItem>
+                      <SidebarMenuButton
+                        size="lg"
+                        className="h-11 w-full justify-start gap-2 rounded-xl border border-sidebar-border/80 bg-sidebar text-sidebar-foreground shadow-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground group-data-[collapsible=icon]:justify-center"
+                        tooltip={config.labels?.newChat || "New Chat"}
+                      >
+                        <Plus className="size-4" />
+                        <span className="group-data-[collapsible=icon]:hidden">
+                          {config.labels?.newChat || "New Chat"}
+                        </span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  </SidebarMenu>
+                }
+              />
+            )}
 
-        {/* Search */}
-        <div className="px-2 py-1 mt-4">
-          {/* Expanded View: Input */}
-          <div className="relative group-data-[collapsible=icon]:hidden">
-            <Search
-              aria-hidden="true"
-              className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 select-none opacity-50"
-            />
-            <Input
-              className="h-8 pl-3 pr-10 bg-sidebar-accent/50 border-sidebar-border focus-visible:ring-1 focus-visible:ring-sidebar-ring"
-              placeholder={config.labels?.search || "Search..."}
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </div>
+            {/* Search */}
+            <div className="relative">
+              <Search
+                aria-hidden="true"
+                className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 select-none text-sidebar-foreground/45"
+              />
+              <Input
+                className="h-9 rounded-xl border-sidebar-border/80 bg-sidebar pl-3 pr-10 text-sidebar-foreground shadow-sm placeholder:text-sidebar-foreground/50 focus-visible:ring-1 focus-visible:ring-sidebar-ring"
+                placeholder={config.labels?.search || "Search..."}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+            </div>
 
-          {/* Collapsed View: Search Icon Button (expands sidebar on click) */}
-          <div className="hidden group-data-[collapsible=icon]:flex justify-center">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-7 w-7"
-              onClick={() => setOpen(true)}
-              title={config.labels?.search || "Search"}
-            >
-              <Search className="h-4 w-4" />
-            </Button>
+            {tagsEnabled && threadTagsConfig?.groupingEnabled !== false && (
+              <div className="grid grid-cols-2 gap-1 rounded-xl border border-sidebar-border/60 bg-sidebar-accent/70 p-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setGroupBy("date")}
+                  className={`h-8 rounded-lg px-2 text-xs font-semibold transition-colors ${
+                    groupBy === "date"
+                      ? "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar"
+                      : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                  }`}
+                >
+                  {config.labels?.groupByDate || "Date"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setGroupBy("tag")}
+                  className={`h-8 rounded-lg px-2 text-xs font-semibold transition-colors ${
+                    groupBy === "tag"
+                      ? "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar"
+                      : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                  }`}
+                >
+                  {config.labels?.groupByTag || "Tag"}
+                </Button>
+              </div>
+            )}
           </div>
+        </div>
+
+        {/* Collapsed View: Search Icon Button (expands sidebar on click) */}
+        <div className="hidden group-data-[collapsible=icon]:flex justify-center">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={() => setOpen(true)}
+            title={config.labels?.search || "Search"}
+          >
+            <Search className="h-4 w-4" />
+          </Button>
         </div>
       </SidebarHeader>
 
@@ -726,37 +774,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 ? config.labels?.hideArchived || "Hide Archived"
                 : config.labels?.showArchived || "Show Archived"}
             </Button>
-          </div>
-        )}
-
-        {tagsEnabled && threadTagsConfig?.groupingEnabled !== false && (
-          <div className="px-2 py-2 group-data-[collapsible=icon]:hidden">
-            <div className="grid grid-cols-2 gap-1 rounded-lg border border-sidebar-border/70 bg-sidebar-accent/70 p-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setGroupBy("date")}
-                className={`h-7 rounded-md px-2 text-xs font-semibold transition-colors ${
-                  groupBy === "date"
-                    ? "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar"
-                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
-                }`}
-              >
-                {config.labels?.groupByDate || "Date"}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setGroupBy("tag")}
-                className={`h-7 rounded-md px-2 text-xs font-semibold transition-colors ${
-                  groupBy === "tag"
-                    ? "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar"
-                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
-                }`}
-              >
-                {config.labels?.groupByTag || "Tag"}
-              </Button>
-            </div>
           </div>
         )}
 
