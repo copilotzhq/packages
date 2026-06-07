@@ -731,20 +731,28 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
         {tagsEnabled && threadTagsConfig?.groupingEnabled !== false && (
           <div className="px-2 py-2 group-data-[collapsible=icon]:hidden">
-            <div className="grid grid-cols-2 gap-1 rounded-md bg-sidebar-accent/50 p-1">
+            <div className="grid grid-cols-2 gap-1 rounded-lg border border-sidebar-border/70 bg-sidebar-accent/70 p-1">
               <Button
-                variant={groupBy === "date" ? "secondary" : "ghost"}
+                variant="ghost"
                 size="sm"
                 onClick={() => setGroupBy("date")}
-                className="h-7 px-2 text-xs"
+                className={`h-7 rounded-md px-2 text-xs font-semibold transition-colors ${
+                  groupBy === "date"
+                    ? "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar"
+                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                }`}
               >
                 {config.labels?.groupByDate || "Date"}
               </Button>
               <Button
-                variant={groupBy === "tag" ? "secondary" : "ghost"}
+                variant="ghost"
                 size="sm"
                 onClick={() => setGroupBy("tag")}
-                className="h-7 px-2 text-xs"
+                className={`h-7 rounded-md px-2 text-xs font-semibold transition-colors ${
+                  groupBy === "tag"
+                    ? "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar"
+                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                }`}
               >
                 {config.labels?.groupByTag || "Tag"}
               </Button>
@@ -967,7 +975,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
       </SidebarContent>
 
-      <SidebarFooter>
+      <SidebarFooter className="border-t border-sidebar-border/70 px-3 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-3">
         <UserMenu
           user={user}
           config={config.userMenu}
