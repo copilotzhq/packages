@@ -10,6 +10,43 @@ test('mergeConfig enables activity timeline by default', () => {
   assert.equal(config.features.showActivityDetails, true);
 });
 
+test('mergeConfig enables thread tags by default', () => {
+  const config = mergeConfig(defaultChatConfig, undefined);
+  assert.equal(config.features.threadTags.enabled, true);
+  assert.equal(config.features.threadTags.groupingEnabled, true);
+  assert.equal(config.features.threadTags.allowCreate, true);
+  assert.equal(config.features.threadTags.allowDrag, true);
+});
+
+test('mergeConfig preserves thread tag defaults for partial overrides', () => {
+  const config = mergeConfig(defaultChatConfig, {
+    features: {
+      threadTags: {
+        defaultGroupBy: 'tag',
+      },
+    },
+  });
+
+  assert.equal(config.features.threadTags.enabled, true);
+  assert.equal(config.features.threadTags.groupingEnabled, true);
+  assert.equal(config.features.threadTags.defaultGroupBy, 'tag');
+  assert.equal(config.features.threadTags.allowCreate, true);
+  assert.equal(config.features.threadTags.allowDrag, true);
+});
+
+test('mergeConfig allows consumers to disable thread tags', () => {
+  const config = mergeConfig(defaultChatConfig, {
+    features: {
+      threadTags: {
+        enabled: false,
+      },
+    },
+  });
+
+  assert.equal(config.features.threadTags.enabled, false);
+  assert.equal(config.features.threadTags.groupingEnabled, true);
+});
+
 test('AssistantActivity renders generic timeline labels', () => {
   const html = renderToStaticMarkup(
     React.createElement(AssistantActivity, {

@@ -118,7 +118,7 @@ export const defaultChatConfig: Required<ChatConfig> = {
     showActivity: true,
     showActivityDetails: true,
     threadTags: {
-      enabled: false,
+      enabled: true,
       groupingEnabled: true,
       defaultGroupBy: "date",
       allowCreate: true,
@@ -182,6 +182,10 @@ export function mergeConfig(
     features: {
       ...defaultChatConfig.features,
       ...userConfig.features,
+      threadTags: {
+        ...defaultChatConfig.features.threadTags,
+        ...userConfig.features?.threadTags,
+      },
     },
     ui: {
       ...defaultChatConfig.ui,
