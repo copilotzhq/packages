@@ -214,6 +214,8 @@ export interface ChatConfig {
     stopGenerationTooltip?: string;
     attachFiles?: string;
     attachFileTooltip?: string;
+    fileTooLarge?: string;
+    attachmentsCount?: string;
     voiceEnter?: string;
     voiceExit?: string;
     voiceTitle?: string;

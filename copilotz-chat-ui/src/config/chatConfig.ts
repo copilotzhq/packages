@@ -28,6 +28,8 @@ export const defaultChatConfig: Required<ChatConfig> = {
     stopGenerationTooltip: "Stop generation",
     attachFiles: "Attach Files",
     attachFileTooltip: "Attach file",
+    fileTooLarge: "File too large. Max allowed: {{maxSize}}MB",
+    attachmentsCount: "{{count}}/{{max}} attachments",
     voiceEnter: "Voice input",
     voiceExit: "Use keyboard",
     voiceTitle: "Voice",

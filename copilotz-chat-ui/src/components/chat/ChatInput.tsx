@@ -77,6 +77,16 @@ function getActiveMentionMatch(value: string, caret: number): MentionMatch | nul
   };
 }
 
+function formatLabel(
+  template: string | undefined,
+  fallback: string,
+  values: Record<string, string | number>,
+): string {
+  return (template || fallback).replace(/\{\{(\w+)\}\}/g, (_, key) =>
+    String(values[key] ?? '')
+  );
+}
+
 function resolveTargetFromMentions(
   value: string,
   agents: AgentOption[],
@@ -561,7 +571,11 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
 
   const processFile = async (file: File): Promise<MediaAttachment | null> => {
     if (file.size > maxFileSize) {
-      alert(`File too large. Max allowed: ${Math.round(maxFileSize / 1024 / 1024)}MB`);
+      alert(formatLabel(
+        config?.labels?.fileTooLarge,
+        'File too large. Max allowed: {{maxSize}}MB',
+        { maxSize: Math.round(maxFileSize / 1024 / 1024) },
+      ));
       return null;
     }
 
@@ -1212,7 +1226,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                         agents={mentionAgents}
                         targetAgentId={targetAgentId}
                         onTargetChange={onTargetAgentChange}
-                        placeholder={targetAgentSelectorPlaceholder || 'Select agent'}
+                        placeholder={targetAgentSelectorPlaceholder || config?.agentSelector?.label || 'Select agent'}
                         disabled={disabled || isGenerating}
                         compact
                       />
@@ -1287,7 +1301,11 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
             {window.innerWidth > 768 ? config?.labels?.inputHelpText : ''}
 
             {attachments.length > 0 && (
-              <> • {attachments.length}/{maxAttachments} anexos</>
+              <> • {formatLabel(
+                config?.labels?.attachmentsCount,
+                '{{count}}/{{max}} attachments',
+                { count: attachments.length, max: maxAttachments },
+              )}</>
             )}
             {config?.labels?.footerLabel && (
               <> • {config.labels.footerLabel}</>
