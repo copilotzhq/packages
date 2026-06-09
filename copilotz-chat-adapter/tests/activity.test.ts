@@ -6,6 +6,10 @@ import {
   finalizeAssistantMessage,
   updateAssistantMessageToken,
 } from '../src/activity.ts';
+import {
+  canAttachToCurrentStreamingAssistant,
+  canAttachToStreamingAssistant,
+} from '../src/toolActivity.ts';
 
 test('reasoning tokens create an active thinking timeline item', () => {
   const next = updateAssistantMessageToken({
@@ -93,4 +97,24 @@ test('finalizeAssistantMessage removes transient answering activity', () => {
   assert.equal(finalized.isStreaming, false);
   assert.equal(finalized.isComplete, true);
   assert.equal(finalized.activity, undefined);
+});
+
+test('current streaming placeholder can adopt the real token sender', () => {
+  const northPlaceholder = {
+    id: 'assistant-placeholder',
+    role: 'assistant',
+    content: '',
+    timestamp: Date.now(),
+    isStreaming: true,
+    isComplete: false,
+    sender: {
+      type: 'agent',
+      id: 'north',
+      name: 'North',
+      agentId: 'north',
+    },
+  };
+
+  assert.equal(canAttachToStreamingAssistant(northPlaceholder, 'west'), false);
+  assert.equal(canAttachToCurrentStreamingAssistant(northPlaceholder), true);
 });

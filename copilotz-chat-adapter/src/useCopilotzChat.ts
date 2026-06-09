@@ -9,7 +9,7 @@ import type { RequestHeadersProvider, RestMessage, RestMessagePageInfo } from '.
 import { appendAssistantToolCall, closeAssistantMessage, finalizeAssistantMessage, hasVisibleAssistantOutput, type InternalChatMessage, updateAssistantMessageToken, toPublicChatMessage } from './activity';
 import { resolveAgentSender, resolveAssistantFallbackSender, resolveLiveEventSender, resolveUserSender, type SenderResolutionOptions } from './senders';
 import { convertServerMessage, isInternalMessageMetadata, prepareHydratedMessages } from './messageContract';
-import { applyToolResultUpdateToMessages, canAttachToStreamingAssistant, extractLiveToolCall, extractLiveToolResultUpdate, mergePersistedToolResults, messageAgentKey, matchesToolResultUpdate, prependUniqueMessages, type ToolResultUpdate } from './toolActivity';
+import { applyToolResultUpdateToMessages, canAttachToCurrentStreamingAssistant, canAttachToStreamingAssistant, extractLiveToolCall, extractLiveToolResultUpdate, mergePersistedToolResults, messageAgentKey, matchesToolResultUpdate, prependUniqueMessages, type ToolResultUpdate } from './toolActivity';
 
 const nowTs = () => Date.now();
 const generateId = () => (globalThis.crypto?.randomUUID?.() ?? `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`) as string;
@@ -696,7 +696,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
 
         setMessages((prev) => {
           const idx = prev.findIndex((m) => m.id === currentAssistantId);
-          if (idx >= 0 && canAttachToStreamingAssistant(prev[idx], nextAgentKey)) {
+          if (idx >= 0 && canAttachToCurrentStreamingAssistant(prev[idx])) {
             const msg = prev[idx];
             const next = applyUpdate(msg);
             if (msg.content === next.content && msg.activity === next.activity && msg.isStreaming === next.isStreaming && msg.isComplete === next.isComplete) {

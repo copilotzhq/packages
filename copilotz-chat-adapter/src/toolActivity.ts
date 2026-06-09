@@ -295,3 +295,9 @@ export const canAttachToStreamingAssistant = (
   const currentAgentKey = messageAgentKey(message);
   return !incomingAgentKey || !currentAgentKey || currentAgentKey === incomingAgentKey;
 };
+
+export const canAttachToCurrentStreamingAssistant = (
+  message: ChatViewMessage | undefined,
+): boolean => {
+  return !!message && message.role === 'assistant' && message.isStreaming === true;
+};
