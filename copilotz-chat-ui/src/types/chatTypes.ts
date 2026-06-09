@@ -215,6 +215,9 @@ export interface ChatConfig {
     attachFiles?: string;
     attachFileTooltip?: string;
     fileTooLarge?: string;
+    fileProcessError?: string;
+    dropFiles?: string;
+    dropFilesHelp?: string;
     attachmentsCount?: string;
     voiceEnter?: string;
     voiceExit?: string;

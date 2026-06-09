@@ -32,6 +32,7 @@ import {
   Play,
   Pause,
   Loader2,
+  UploadCloud,
 } from 'lucide-react';
 
 interface ChatInputProps {
@@ -85,6 +86,10 @@ function formatLabel(
   return (template || fallback).replace(/\{\{(\w+)\}\}/g, (_, key) =>
     String(values[key] ?? '')
   );
+}
+
+function hasDraggedFiles(dataTransfer: DataTransfer): boolean {
+  return Array.from(dataTransfer.types || []).includes('Files');
 }
 
 function resolveTargetFromMentions(
@@ -407,9 +412,11 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [activeMention, setActiveMention] = useState<MentionMatch | null>(null);
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragDepthRef = useRef(0);
   const voiceProviderRef = useRef<VoiceProvider | null>(null);
   const voiceDraftRef = useRef<VoiceSegment | null>(null);
   const voiceAppendBaseRef = useRef<VoiceSegment | null>(null);
@@ -569,7 +576,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
     }
   };
 
-  const processFile = async (file: File): Promise<MediaAttachment | null> => {
+  const processFile = useCallback(async (file: File): Promise<MediaAttachment | null> => {
     if (file.size > maxFileSize) {
       alert(formatLabel(
         config?.labels?.fileTooLarge,
@@ -646,48 +653,79 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
         newMap.delete(fileId);
         return newMap;
       });
-      alert('Failed to process file');
+      alert(config?.labels?.fileProcessError || 'Failed to process file');
       return null;
     }
-  };
+  }, [config?.labels?.fileProcessError, config?.labels?.fileTooLarge, maxFileSize, setContext]);
+
+  const processFiles = useCallback(async (files: File[]) => {
+    if (!enableFileUpload || disabled || files.length === 0) return;
+    const remainingSlots = maxAttachments - attachments.length;
+    if (remainingSlots <= 0) return;
+
+    const filesToProcess = files.slice(0, remainingSlots);
+    const nextAttachments: MediaAttachment[] = [];
+    for (const file of filesToProcess) {
+      const attachment = await processFile(file);
+      if (attachment) {
+        nextAttachments.push(attachment);
+      }
+    }
+
+    if (nextAttachments.length > 0) {
+      onAttachmentsChange([...attachments, ...nextAttachments]);
+    }
+  }, [attachments, disabled, enableFileUpload, maxAttachments, onAttachmentsChange, processFile]);
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
 
-    const remainingSlots = maxAttachments - attachments.length;
-    const filesToProcess = Array.from(files).slice(0, remainingSlots);
-
-    for (const file of filesToProcess) {
-      const attachment = await processFile(file);
-      if (attachment) {
-        onAttachmentsChange([...attachments, attachment]);
-      }
-    }
+    await processFiles(Array.from(files));
 
     // Reset input
     e.target.value = '';
   };
 
   const handleDrop = useCallback(async (e: React.DragEvent) => {
+    if (!enableFileUpload || !hasDraggedFiles(e.dataTransfer)) return;
+
     e.preventDefault();
-    if (!enableFileUpload) return;
+    dragDepthRef.current = 0;
+    setIsDraggingFiles(false);
 
-    const files = Array.from(e.dataTransfer.files);
-    const remainingSlots = maxAttachments - attachments.length;
-    const filesToProcess = files.slice(0, remainingSlots);
+    await processFiles(Array.from(e.dataTransfer.files));
+  }, [enableFileUpload, processFiles]);
 
-    for (const file of filesToProcess) {
-      const attachment = await processFile(file);
-      if (attachment) {
-        onAttachmentsChange([...attachments, attachment]);
-      }
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (!enableFileUpload || !hasDraggedFiles(e.dataTransfer)) return;
+
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    if (attachments.length < maxAttachments) {
+      setIsDraggingFiles(true);
     }
-  }, [attachments, enableFileUpload, maxAttachments, onAttachmentsChange]);
+  }, [attachments.length, enableFileUpload, maxAttachments]);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (!enableFileUpload || !hasDraggedFiles(e.dataTransfer)) return;
+
     e.preventDefault();
-  }, []);
+    e.dataTransfer.dropEffect = attachments.length < maxAttachments ? 'copy' : 'none';
+    if (attachments.length < maxAttachments) {
+      setIsDraggingFiles(true);
+    }
+  }, [attachments.length, enableFileUpload, maxAttachments]);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (!enableFileUpload || !hasDraggedFiles(e.dataTransfer)) return;
+
+    e.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) {
+      setIsDraggingFiles(false);
+    }
+  }, [enableFileUpload]);
 
   const resetVoiceComposerState = useCallback((nextState: VoiceComposerState = 'idle') => {
     setVoiceState(nextState);
@@ -1131,10 +1169,35 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
           ) : (
             <form onSubmit={handleSubmit} className="mb-1">
               <div
-                className="group/composer flex w-full flex-col gap-2 rounded-3xl border border-border/80 bg-card/95 p-2.5 shadow-sm transition-[border-color,box-shadow,background-color] focus-within:border-ring/60 focus-within:bg-card focus-within:shadow-md focus-within:ring-2 focus-within:ring-ring/15"
+                className={`group/composer relative flex w-full flex-col gap-2 overflow-hidden rounded-3xl border border-border/80 bg-card/95 p-2.5 shadow-sm transition-[border-color,box-shadow,background-color] focus-within:border-ring/60 focus-within:bg-card focus-within:shadow-md focus-within:ring-2 focus-within:ring-ring/15 ${
+                  isDraggingFiles
+                    ? 'border-primary/60 bg-primary/5 shadow-md ring-2 ring-primary/15'
+                    : ''
+                }`}
                 onDrop={handleDrop}
+                onDragEnter={handleDragEnter}
                 onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
               >
+                {isDraggingFiles && enableFileUpload && canAddMoreAttachments && (
+                  <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-3xl border-2 border-dashed border-primary/60 bg-primary/10 text-primary backdrop-blur-[1px]">
+                    <div className="flex flex-col items-center gap-2 px-4 text-center">
+                      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/15">
+                        <UploadCloud className="h-5 w-5" />
+                      </span>
+                      <span className="text-sm font-semibold">
+                        {config?.labels?.dropFiles || 'Drop files to attach'}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {formatLabel(
+                          config?.labels?.dropFilesHelp,
+                          'Up to {{remaining}} more files',
+                          { remaining: Math.max(0, maxAttachments - attachments.length) },
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                )}
                 {/* Text input */}
                 <div className="relative min-w-0">
                   <Textarea
