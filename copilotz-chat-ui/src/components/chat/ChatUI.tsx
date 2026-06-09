@@ -891,7 +891,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                     <ChatInput
                       value={inputValue}
                       onChange={(value) => {
-                        setInputValue(value);
+                        inputValueRef.current = value;
                         // Mark initial input as consumed when user modifies it
                         if (
                           initialInputApplied.current &&

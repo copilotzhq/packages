@@ -367,7 +367,7 @@ const clearVoiceTranscript = (): VoiceTranscript => ({});
 const resolveVoiceSegmentDuration = (segment: VoiceSegment): number => segment.attachment.durationMs ?? 0;
 
 export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
-  value,
+  value: externalValue,
   onChange,
   onSubmit,
   attachments,
@@ -398,6 +398,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   const voiceMaxRecordingMs = config?.voiceCompose?.maxRecordingMs;
 
   const { setContext } = useChatUserContext();
+  const [draftValue, setDraftValue] = useState(externalValue);
   const [uploadProgress, setUploadProgress] = useState<Map<string, FileUploadProgress>>(new Map());
   const [isVoiceComposerOpen, setIsVoiceComposerOpen] = useState(
     () => enableAudioRecording && voiceDefaultMode === 'voice',
@@ -421,6 +422,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   const voiceDraftRef = useRef<VoiceSegment | null>(null);
   const voiceAppendBaseRef = useRef<VoiceSegment | null>(null);
   const voiceAppendBaseDurationRef = useRef(0);
+  const previousExternalValueRef = useRef(externalValue);
 
   const filteredMentionAgents = React.useMemo(() => {
     if (!activeMention || mentionAgents.length === 0) return [];
@@ -460,7 +462,18 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
 
   useEffect(() => {
     resizeTextarea();
-  }, [resizeTextarea, value]);
+  }, [resizeTextarea, draftValue]);
+
+  useEffect(() => {
+    if (externalValue === previousExternalValueRef.current) return;
+    previousExternalValueRef.current = externalValue;
+    setDraftValue(externalValue);
+  }, [externalValue]);
+
+  const updateDraftValue = useCallback((nextValue: string) => {
+    setDraftValue(nextValue);
+    onChange(nextValue);
+  }, [onChange]);
 
   const syncMentionState = useCallback((nextValue: string, nextCaret?: number) => {
     const caret = typeof nextCaret === 'number'
@@ -509,12 +522,12 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
 
     const replacement = `@${agent.name} `;
     const nextValue =
-      value.slice(0, activeMention.start) +
+      draftValue.slice(0, activeMention.start) +
       replacement +
-      value.slice(activeMention.end);
+      draftValue.slice(activeMention.end);
     const nextCaret = activeMention.start + replacement.length;
 
-    onChange(nextValue);
+    updateDraftValue(nextValue);
     onTargetAgentChange?.(agent.id);
     setActiveMention(null);
     setActiveMentionIndex(0);
@@ -523,19 +536,19 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
       textareaRef.current?.focus();
       textareaRef.current?.setSelectionRange(nextCaret, nextCaret);
     });
-  }, [activeMention, onChange, onTargetAgentChange, value]);
+  }, [activeMention, draftValue, onTargetAgentChange, updateDraftValue]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if ((!value.trim() && attachments.length === 0) || disabled || isGenerating) return;
+    if ((!draftValue.trim() && attachments.length === 0) || disabled || isGenerating) return;
 
-    const mentionedAgent = resolveTargetFromMentions(value, mentionAgents);
+    const mentionedAgent = resolveTargetFromMentions(draftValue, mentionAgents);
     if (mentionedAgent) {
       onTargetAgentChange?.(mentionedAgent.id);
     }
 
-    onSubmit(value.trim(), attachments);
-    onChange('');
+    onSubmit(draftValue.trim(), attachments);
+    updateDraftValue('');
     onAttachmentsChange([]);
     setActiveMention(null);
     setActiveMentionIndex(0);
@@ -1202,9 +1215,9 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                 <div className="relative min-w-0">
                   <Textarea
                     ref={textareaRef}
-                    value={value}
+                    value={draftValue}
                     onChange={(e) => {
-                      onChange(e.target.value);
+                      updateDraftValue(e.target.value);
                       syncMentionState(e.target.value, e.target.selectionStart ?? e.target.value.length);
                       requestAnimationFrame(resizeTextarea);
                     }}
@@ -1298,7 +1311,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
 
                   <div className="flex shrink-0 items-center gap-1">
                     {/* Voice compose entry */}
-                    {enableAudioRecording && canAddMoreAttachments && !value.trim() && (
+                    {enableAudioRecording && canAddMoreAttachments && !draftValue.trim() && (
                       <Tooltip>
                         <TooltipTrigger asChild>
                           <Button
@@ -1341,7 +1354,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                             type="submit"
                             size="icon"
                             className="h-9 w-9 rounded-full"
-                            disabled={disabled || (!value.trim() && attachments.length === 0)}
+                            disabled={disabled || (!draftValue.trim() && attachments.length === 0)}
                           >
                             {disabled ? (
                               <Loader2 className="h-4 w-4 animate-spin" />
