@@ -1169,7 +1169,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
           ) : (
             <form onSubmit={handleSubmit} className="mb-1">
               <div
-                className={`group/composer relative flex w-full flex-col gap-2 overflow-hidden rounded-3xl border border-border/80 bg-card/95 p-2.5 shadow-sm transition-[border-color,box-shadow,background-color] focus-within:border-ring/60 focus-within:bg-card focus-within:shadow-md focus-within:ring-2 focus-within:ring-ring/15 ${
+                className={`group/composer relative flex w-full flex-col gap-2 overflow-visible rounded-3xl border border-border/80 bg-card/95 p-2.5 shadow-sm transition-[border-color,box-shadow,background-color] focus-within:border-ring/60 focus-within:bg-card focus-within:shadow-md focus-within:ring-2 focus-within:ring-ring/15 ${
                   isDraggingFiles
                     ? 'border-primary/60 bg-primary/5 shadow-md ring-2 ring-primary/15'
                     : ''
@@ -1223,7 +1223,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                     rows={1}
                   />
                   {isMentionMenuOpen && (
-                    <div className="absolute bottom-full left-0 right-0 mb-2 overflow-hidden rounded-md border bg-popover shadow-md">
+                    <div className="absolute bottom-full left-0 right-0 z-30 mb-2 overflow-hidden rounded-md border bg-popover shadow-md">
                       <div className="p-1">
                         {filteredMentionAgents.map((agent, index) => (
                           <button
