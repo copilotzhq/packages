@@ -1,6 +1,5 @@
 
 @import "tailwindcss";
-@import "highlight.js/styles/github.css";
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
@@ -281,9 +280,81 @@
   }
 }
 
-/* Improve markdown code block overflow inside prose */
+/* Improve markdown code block readability and overflow inside prose. */
 .prose pre {
   overflow: auto;
+  border: 1px solid hsl(var(--border) / 0.35);
+  background: hsl(222.2 47.4% 11.2%);
+  color: hsl(210 40% 96%);
+}
+
+.prose pre code {
+  color: inherit;
+  background: transparent;
+  text-shadow: none;
+}
+
+.prose .hljs {
+  background: transparent;
+  color: hsl(210 40% 96%);
+}
+
+.prose .hljs-comment,
+.prose .hljs-quote {
+  color: hsl(215 20.2% 65.1%);
+}
+
+.prose .hljs-keyword,
+.prose .hljs-selector-tag,
+.prose .hljs-subst {
+  color: hsl(199 89% 74%);
+}
+
+.prose .hljs-literal,
+.prose .hljs-number,
+.prose .hljs-tag .hljs-attr,
+.prose .hljs-template-variable,
+.prose .hljs-variable {
+  color: hsl(38 92% 70%);
+}
+
+.prose .hljs-doctag,
+.prose .hljs-string,
+.prose .hljs-title,
+.prose .hljs-section,
+.prose .hljs-selector-id,
+.prose .hljs-selector-class,
+.prose .hljs-type {
+  color: hsl(142 70% 72%);
+}
+
+.prose .hljs-attribute,
+.prose .hljs-built_in,
+.prose .hljs-builtin-name,
+.prose .hljs-name,
+.prose .hljs-symbol {
+  color: hsl(262 83% 78%);
+}
+
+.prose .hljs-meta,
+.prose .hljs-link {
+  color: hsl(217.2 91.2% 72%);
+}
+
+.prose .hljs-deletion {
+  color: hsl(0 84.2% 72%);
+}
+
+.prose .hljs-addition {
+  color: hsl(142 70% 72%);
+}
+
+.prose .hljs-emphasis {
+  font-style: italic;
+}
+
+.prose .hljs-strong {
+  font-weight: 700;
 }
 
 /* Ensure markdown text is readable inside primary-colored bubbles */
