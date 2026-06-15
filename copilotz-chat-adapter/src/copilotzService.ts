@@ -68,6 +68,35 @@ type AgentApiItem = {
   description?: string | null;
 };
 
+export type ThreadActivityStatus = "idle" | "running" | "failed";
+
+export type ThreadActivity = {
+  threadId: string;
+  status: ThreadActivityStatus;
+  activeCount: number;
+  activeEvents?: Array<{
+    id: string;
+    eventType: string;
+    status: string;
+    priority?: number | null;
+    traceId?: string | null;
+    parentEventId?: string | null;
+    createdAt?: string;
+    updatedAt?: string;
+  }>;
+  lastFailure?: {
+    id: string;
+    eventType: string;
+    status: string;
+    priority?: number | null;
+    traceId?: string | null;
+    parentEventId?: string | null;
+    createdAt?: string;
+    updatedAt?: string;
+  } | null;
+  updatedAt?: string;
+};
+
 export type RestMessage = {
   id: string;
   threadId: string;
@@ -803,6 +832,26 @@ export async function fetchThreads(
   }
 
   return data as RestThread[];
+}
+
+export async function fetchThreadActivity(
+  threadId: string,
+  getRequestHeaders?: RequestHeadersProvider,
+): Promise<ThreadActivity> {
+  const res = await fetch(apiUrl(`/v1/threads/${encodeURIComponent(threadId)}/activity`), {
+    headers: await withAuthHeaders(
+      { Accept: "application/json" },
+      getRequestHeaders,
+    ),
+  });
+
+  if (!res.ok) {
+    const errorText = await res.text().catch(() => res.statusText);
+    throw new Error(errorText || `Failed to load thread activity (${res.status})`);
+  }
+
+  const { data } = await res.json();
+  return data as ThreadActivity;
 }
 
 export async function fetchAgents(

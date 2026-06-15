@@ -1,6 +1,6 @@
 // deno-lint-ignore-file no-explicit-any
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { runCopilotzStream, fetchThreads, fetchThreadMessagesPage, updateThread as updateThreadApi, editThreadMessage, deleteThread as deleteThreadApi } from './copilotzService';
+import { runCopilotzStream, fetchThreads, fetchThreadMessagesPage, fetchThreadActivity, updateThread as updateThreadApi, editThreadMessage, deleteThread as deleteThreadApi } from './copilotzService';
 import { getAttachmentKindFromMimeType, getMimeTypeFromDataUrl } from '@copilotz/chat-ui';
 import type { AgentOption, AssistantActivityBlock, ChatMessage as ChatViewMessage, ChatSender, ChatThread, ChatThreadTag, MediaAttachment, ChatUserContext } from '@copilotz/chat-ui';
 import { useUrlState } from './useUrlState';
@@ -132,6 +132,8 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   // Buffer live TOOL_RESULT updates that arrive before their matching TOOL_CALL
   // has been rendered. We reconcile them as soon as the TOOL_CALL lands.
   const liveToolUpdatesRef = useRef<ToolResultUpdate[]>([]);
+  const stopRequestedRef = useRef(false);
+  const recoveryPollGenerationRef = useRef(0);
 
   // Sync refs on every render (more efficient than multiple useEffects)
   threadsRef.current = threads;
@@ -617,6 +619,8 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   );
 
   const handleStop = useCallback(() => {
+    stopRequestedRef.current = true;
+    recoveryPollGenerationRef.current += 1;
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     setIsStreaming(false);
@@ -655,6 +659,58 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       )
     );
   }, []);
+
+  const finalizeStreamingPlaceholders = useCallback(() => {
+    setIsStreaming(false);
+    setMessages((prev) => {
+      const hasStreaming = prev.some((msg) => msg.isStreaming);
+      if (!hasStreaming) return prev;
+      return prev.map((msg) => (msg.isStreaming ? closeAssistantMessage(msg) : msg));
+    });
+  }, []);
+
+  const startThreadActivityRecovery = useCallback(
+    (threadId: string) => {
+      const generation = ++recoveryPollGenerationRef.current;
+      setIsStreaming(true);
+
+      void (async () => {
+        let delayMs = 2000;
+        let attempts = 0;
+
+        while (recoveryPollGenerationRef.current === generation) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          if (recoveryPollGenerationRef.current !== generation) return;
+          if (currentThreadIdRef.current !== threadId) return;
+
+          try {
+            const activity = await fetchThreadActivity(threadId, getRequestHeaders);
+            if (activity.status === 'running') {
+              attempts += 1;
+              if (attempts % 3 === 0) {
+                await loadThreadMessages(threadId);
+              }
+              if (attempts >= 15) {
+                delayMs = 5000;
+              }
+              continue;
+            }
+
+            await loadThreadMessages(threadId);
+            finalizeStreamingPlaceholders();
+            return;
+          } catch (error) {
+            if (isAbortError(error)) return;
+            attempts += 1;
+            if (attempts >= 15) {
+              delayMs = 5000;
+            }
+          }
+        }
+      })();
+    },
+    [finalizeStreamingPlaceholders, getRequestHeaders, loadThreadMessages]
+  );
 
   const sendCopilotzMessage = useCallback(
     async (params: { threadId?: string | null; threadExternalId?: string | null; content: string; attachments?: MediaAttachment[]; metadata?: Record<string, unknown>; threadMetadata?: Record<string, unknown>; toolCalls?: Array<{ name: string; args: Record<string, unknown> }>; userId: string; userName?: string; userMetadata?: Record<string, unknown>; agentName?: string | null; assistantMessageId?: string; assistantSender?: ChatSender; onBeforeStart?: (assistantMessageId: string) => void }) => {
@@ -836,10 +892,28 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       const abortController = new AbortController();
       abortControllerRef.current?.abort();
       abortControllerRef.current = abortController;
+      stopRequestedRef.current = false;
+      recoveryPollGenerationRef.current += 1;
       setIsStreaming(true);
       // Reset the live tool-result buffer at the start of every stream so
       // stale updates from a previous run can't leak into this one.
       liveToolUpdatesRef.current = [];
+
+      let streamError: unknown = null;
+      const resolveActivityThreadId = async () => {
+        if (params.threadId) return params.threadId;
+
+        const curId = currentThreadIdRef.current;
+        if (curId && threadExternalIdMapRef.current[curId] !== curId) {
+          return curId;
+        }
+
+        if (params.threadExternalId) {
+          return await fetchAndSetThreadsState(params.userId, params.threadExternalId);
+        }
+
+        return null;
+      };
 
       try {
         const normalizedUserMetadata = params.userMetadata ? (JSON.parse(JSON.stringify(params.userMetadata)) as Record<string, unknown>) : undefined;
@@ -1031,19 +1105,47 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
           },
           signal: abortController.signal,
         });
-      } finally {
-        setIsStreaming(false);
-        setMessages((prev) => {
-          const hasStreaming = prev.some((msg) => msg.isStreaming);
-          if (!hasStreaming) return prev;
-          return prev.map((msg) => (msg.isStreaming ? closeAssistantMessage(msg) : msg));
-        });
-        abortControllerRef.current = null;
+      } catch (error) {
+        streamError = error;
+      }
+
+      const wasStopped = stopRequestedRef.current || abortController.signal.aborted || isAbortError(streamError);
+      let recoveryStarted = false;
+
+      if (!wasStopped) {
+        try {
+          const activityThreadId = await resolveActivityThreadId();
+          if (activityThreadId) {
+            const activity = await fetchThreadActivity(activityThreadId, getRequestHeaders);
+            if (activity.status === 'running') {
+              recoveryStarted = true;
+              startThreadActivityRecovery(activityThreadId);
+            } else if (streamError || activity.status === 'failed') {
+              await loadThreadMessages(activityThreadId);
+            }
+          }
+        } catch (activityError) {
+          if (!streamError) {
+            console.warn('Unable to verify Copilotz thread activity after stream close', activityError);
+          }
+        }
+      }
+
+      abortControllerRef.current = null;
+
+      if (recoveryStarted) {
+        return currentAssistantId;
+      }
+
+      finalizeStreamingPlaceholders();
+
+      if (streamError) {
+        throw streamError;
       }
 
       return currentAssistantId;
     },
-    [applyEventInterceptor, handleStreamMessageEvent, handleStreamAssetEvent, getRequestHeaders]
+    [applyEventInterceptor, handleStreamMessageEvent, handleStreamAssetEvent, fetchAndSetThreadsState, finalizeStreamingPlaceholders, getRequestHeaders, loadThreadMessages, startThreadActivityRecovery]
   );
 
   const handleSendMessage = useCallback(
