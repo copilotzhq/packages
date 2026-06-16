@@ -5,7 +5,7 @@ import { getAttachmentKindFromMimeType, getMimeTypeFromDataUrl } from '@copilotz
 import type { AgentOption, AssistantActivityBlock, ChatMessage as ChatViewMessage, ChatSender, ChatThread, ChatThreadTag, MediaAttachment, ChatUserContext } from '@copilotz/chat-ui';
 import { useUrlState } from './useUrlState';
 import type { EventInterceptor, RunErrorInterceptor, SpecialChatState } from './specialState';
-import type { RequestHeadersProvider, RestMessage, RestMessagePageInfo } from './copilotzService';
+import type { RequestHeadersProvider, RestMessage, RestMessagePageInfo, ThreadActivityStatus } from './copilotzService';
 import { appendAssistantToolCall, closeAssistantMessage, finalizeAssistantMessage, hasVisibleAssistantOutput, type InternalChatMessage, updateAssistantMessageToken, toPublicChatMessage } from './activity';
 import { resolveAgentSender, resolveAssistantFallbackSender, resolveLiveEventSender, resolveUserSender, type SenderResolutionOptions } from './senders';
 import { convertServerMessage, isInternalMessageMetadata, prepareHydratedMessages } from './messageContract';
@@ -106,6 +106,8 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
   const [messagePageInfo, setMessagePageInfo] = useState<RestMessagePageInfo>(createEmptyMessagePageInfo);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [threadActivityStatus, setThreadActivityStatus] = useState<ThreadActivityStatus>('idle');
+  const [isRecoveringStream, setIsRecoveringStream] = useState(false);
   const [specialState, setSpecialState] = useState<SpecialChatState | null>(null);
 
   const [userContextSeed, setUserContextSeed] = useState<Partial<ChatUserContext>>(initialContext || {});
@@ -415,8 +417,93 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     }
   }, [getRequestHeaders, prepareThreadMessages]);
 
+  const finalizeStreamingPlaceholders = useCallback((nextActivityStatus: ThreadActivityStatus = 'idle') => {
+    setThreadActivityStatus(nextActivityStatus);
+    setIsRecoveringStream(false);
+    setIsStreaming(false);
+    setMessages((prev) => {
+      const hasStreaming = prev.some((msg) => msg.isStreaming);
+      if (!hasStreaming) return prev;
+      return prev.map((msg) => (msg.isStreaming ? closeAssistantMessage(msg) : msg));
+    });
+  }, []);
+
+  const startThreadActivityRecovery = useCallback(
+    (threadId: string) => {
+      const generation = ++recoveryPollGenerationRef.current;
+      setThreadActivityStatus('running');
+      setIsRecoveringStream(true);
+      setIsStreaming(true);
+
+      void (async () => {
+        let delayMs = 2000;
+        let attempts = 0;
+
+        while (recoveryPollGenerationRef.current === generation) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          if (recoveryPollGenerationRef.current !== generation) return;
+          if (currentThreadIdRef.current !== threadId) return;
+
+          try {
+            const activity = await fetchThreadActivity(threadId, getRequestHeaders);
+            setThreadActivityStatus(activity.status);
+
+            if (activity.status === 'running') {
+              attempts += 1;
+              if (attempts % 3 === 0) {
+                await loadThreadMessages(threadId);
+              }
+              if (attempts >= 15) {
+                delayMs = 5000;
+              }
+              continue;
+            }
+
+            await loadThreadMessages(threadId);
+            finalizeStreamingPlaceholders(activity.status);
+            return;
+          } catch (error) {
+            if (isAbortError(error)) return;
+            attempts += 1;
+            if (attempts >= 15) {
+              delayMs = 5000;
+            }
+          }
+        }
+      })();
+    },
+    [finalizeStreamingPlaceholders, getRequestHeaders, loadThreadMessages]
+  );
+
+  const refreshThreadActivity = useCallback(
+    async (threadId: string) => {
+      try {
+        const activity = await fetchThreadActivity(threadId, getRequestHeaders);
+        setThreadActivityStatus(activity.status);
+
+        if (activity.status === 'running') {
+          startThreadActivityRecovery(threadId);
+          return;
+        }
+
+        setIsRecoveringStream(false);
+        if (activity.status === 'failed') {
+          await loadThreadMessages(threadId);
+        }
+      } catch (error) {
+        if (isAbortError(error)) return;
+        console.warn('Unable to load Copilotz thread activity', error);
+      }
+    },
+    [getRequestHeaders, loadThreadMessages, startThreadActivityRecovery]
+  );
+
   const handleSelectThread = useCallback(
     async (threadId: string) => {
+      recoveryPollGenerationRef.current += 1;
+      setThreadActivityStatus('idle');
+      setIsRecoveringStream(false);
+      setIsStreaming(false);
       setCurrentThreadId(threadId);
       setMessages([]);
       setMessagePageInfo(createEmptyMessagePageInfo());
@@ -425,14 +512,19 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       const extMap = threadExternalIdMapRef.current;
       setCurrentThreadExternalId(extMap[threadId] ?? null);
       await loadThreadMessages(threadId);
+      await refreshThreadActivity(threadId);
     },
-    [loadThreadMessages]
+    [loadThreadMessages, refreshThreadActivity]
   );
 
   const handleCreateThread = useCallback((title?: string) => {
     messagesRequestRef.current += 1;
     setIsMessagesLoading(false);
     setIsLoadingOlderMessages(false);
+    recoveryPollGenerationRef.current += 1;
+    setThreadActivityStatus('idle');
+    setIsRecoveringStream(false);
+    setIsStreaming(false);
     const id = generateId();
     const now = nowTs();
     const newThread: ChatThread = {
@@ -623,6 +715,8 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     recoveryPollGenerationRef.current += 1;
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
+    setThreadActivityStatus('idle');
+    setIsRecoveringStream(false);
     setIsStreaming(false);
     setMessages((prev) => {
       // Check if any message needs updating before creating new array
@@ -659,58 +753,6 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       )
     );
   }, []);
-
-  const finalizeStreamingPlaceholders = useCallback(() => {
-    setIsStreaming(false);
-    setMessages((prev) => {
-      const hasStreaming = prev.some((msg) => msg.isStreaming);
-      if (!hasStreaming) return prev;
-      return prev.map((msg) => (msg.isStreaming ? closeAssistantMessage(msg) : msg));
-    });
-  }, []);
-
-  const startThreadActivityRecovery = useCallback(
-    (threadId: string) => {
-      const generation = ++recoveryPollGenerationRef.current;
-      setIsStreaming(true);
-
-      void (async () => {
-        let delayMs = 2000;
-        let attempts = 0;
-
-        while (recoveryPollGenerationRef.current === generation) {
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
-          if (recoveryPollGenerationRef.current !== generation) return;
-          if (currentThreadIdRef.current !== threadId) return;
-
-          try {
-            const activity = await fetchThreadActivity(threadId, getRequestHeaders);
-            if (activity.status === 'running') {
-              attempts += 1;
-              if (attempts % 3 === 0) {
-                await loadThreadMessages(threadId);
-              }
-              if (attempts >= 15) {
-                delayMs = 5000;
-              }
-              continue;
-            }
-
-            await loadThreadMessages(threadId);
-            finalizeStreamingPlaceholders();
-            return;
-          } catch (error) {
-            if (isAbortError(error)) return;
-            attempts += 1;
-            if (attempts >= 15) {
-              delayMs = 5000;
-            }
-          }
-        }
-      })();
-    },
-    [finalizeStreamingPlaceholders, getRequestHeaders, loadThreadMessages]
-  );
 
   const sendCopilotzMessage = useCallback(
     async (params: { threadId?: string | null; threadExternalId?: string | null; content: string; attachments?: MediaAttachment[]; metadata?: Record<string, unknown>; threadMetadata?: Record<string, unknown>; toolCalls?: Array<{ name: string; args: Record<string, unknown> }>; userId: string; userName?: string; userMetadata?: Record<string, unknown>; agentName?: string | null; assistantMessageId?: string; assistantSender?: ChatSender; onBeforeStart?: (assistantMessageId: string) => void }) => {
@@ -894,6 +936,8 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       abortControllerRef.current = abortController;
       stopRequestedRef.current = false;
       recoveryPollGenerationRef.current += 1;
+      setThreadActivityStatus('running');
+      setIsRecoveringStream(false);
       setIsStreaming(true);
       // Reset the live tool-result buffer at the start of every stream so
       // stale updates from a previous run can't leak into this one.
@@ -1117,10 +1161,12 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
           const activityThreadId = await resolveActivityThreadId();
           if (activityThreadId) {
             const activity = await fetchThreadActivity(activityThreadId, getRequestHeaders);
+            setThreadActivityStatus(activity.status);
             if (activity.status === 'running') {
               recoveryStarted = true;
               startThreadActivityRecovery(activityThreadId);
             } else if (streamError || activity.status === 'failed') {
+              setIsRecoveringStream(false);
               await loadThreadMessages(activityThreadId);
             }
           }
@@ -1339,6 +1385,8 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       ]);
       setMessagePageInfo(createEmptyMessagePageInfo());
       persistedToolUpdatesRef.current = [];
+      setThreadActivityStatus('running');
+      setIsRecoveringStream(false);
       setSpecialState(null);
 
       try {
@@ -1399,6 +1447,8 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     setIsMessagesLoading(false);
     setIsLoadingOlderMessages(false);
     setIsStreaming(false);
+    setThreadActivityStatus('idle');
+    setIsRecoveringStream(false);
     setMessagePageInfo(createEmptyMessagePageInfo());
     persistedToolUpdatesRef.current = [];
     setSpecialState(null);
@@ -1420,6 +1470,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
         const preferredThreadId = await fetchAndSetThreadsState(userId, urlPreferredThread);
         if (preferredThreadId) {
           await loadThreadMessages(preferredThreadId);
+          await refreshThreadActivity(preferredThreadId);
         } else if (bootstrap) {
           await bootstrapConversation(userId);
         }
@@ -1433,7 +1484,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     // by the lazy initializer in useUrlState). Including it would re-trigger the
     // effect when the thread-sync effect writes back to the URL.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, fetchAndSetThreadsState, loadThreadMessages, bootstrapConversation, reset, bootstrap, isUrlSyncEnabled]);
+  }, [userId, fetchAndSetThreadsState, loadThreadMessages, refreshThreadActivity, bootstrapConversation, reset, bootstrap, isUrlSyncEnabled]);
 
   // Sync currentThreadExternalId to URL when it changes
   useEffect(() => {
@@ -1458,6 +1509,18 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     }
   }, [currentThreadId, threadMetadataMap]);
 
+  const activityNotice = threadActivityStatus === 'running' && isRecoveringStream
+    ? {
+      tone: 'info' as const,
+      message: 'The agent is still working. Loading updates...',
+    }
+    : threadActivityStatus === 'failed'
+    ? {
+      tone: 'error' as const,
+      message: 'The last run failed. Refreshing the latest messages...',
+    }
+    : null;
+
   return {
     messages: messages.map(toPublicChatMessage),
     isMessagesLoading,
@@ -1466,6 +1529,9 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     threads,
     currentThreadId,
     isStreaming,
+    threadActivityStatus,
+    isRecoveringStream,
+    activityNotice,
     specialState,
     clearSpecialState,
     userContextSeed,

@@ -1281,6 +1281,9 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                               )}
                             </div>
                           )}
+                          <div className="text-xs text-muted-foreground">
+                            {config?.labels?.stagedMessageLabel || 'Not sent yet'}
+                          </div>
                         </div>
                         <Tooltip>
                           <TooltipTrigger asChild>
@@ -1293,7 +1296,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                               <Send className="h-4 w-4" />
                             </Button>
                           </TooltipTrigger>
-                          <TooltipContent>{config?.labels?.sendMessageTooltip}</TooltipContent>
+                          <TooltipContent>{config?.labels?.sendNowTooltip || config?.labels?.sendMessageTooltip}</TooltipContent>
                         </Tooltip>
                         <Tooltip>
                           <TooltipTrigger asChild>
@@ -1307,7 +1310,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                               <X className="h-4 w-4" />
                             </Button>
                           </TooltipTrigger>
-                          <TooltipContent>{config?.labels?.voiceCancel}</TooltipContent>
+                          <TooltipContent>{config?.labels?.discardStagedMessageTooltip || config?.labels?.voiceCancel}</TooltipContent>
                         </Tooltip>
                       </div>
                     ))}
@@ -1448,7 +1451,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                                 <Send className="h-4 w-4" />
                               </Button>
                             </TooltipTrigger>
-                            <TooltipContent>{config?.labels?.sendMessageTooltip}</TooltipContent>
+                            <TooltipContent>{config?.labels?.stageMessageTooltip || config?.labels?.sendMessageTooltip}</TooltipContent>
                           </Tooltip>
                         )}
                         <Tooltip>

@@ -205,6 +205,10 @@ export interface ChatConfig {
     inputPlaceholder?: string;
     sendButton?: string;
     sendMessageTooltip?: string;
+    stageMessageTooltip?: string;
+    sendNowTooltip?: string;
+    stagedMessageLabel?: string;
+    discardStagedMessageTooltip?: string;
     newThread?: string;
     deleteThread?: string;
     copyMessage?: string;
@@ -449,6 +453,11 @@ export interface ChatCallbacks {
   onLogout?: () => void;
 }
 
+export interface ChatActivityNotice {
+  tone: "info" | "error";
+  message: string;
+}
+
 // Main Chat Props
 export interface ChatV2Props {
   // Core Data
@@ -468,6 +477,7 @@ export interface ChatV2Props {
   isMessagesLoading?: boolean;
   isLoadingOlderMessages?: boolean;
   hasMoreMessagesBefore?: boolean;
+  activityNotice?: ChatActivityNotice | null;
 
   // Callbacks
   callbacks?: ChatCallbacks;

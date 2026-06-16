@@ -50,6 +50,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   isMessagesLoading = false,
   isLoadingOlderMessages = false,
   hasMoreMessagesBefore = false,
+  activityNotice = null,
   callbacks = {},
   onLoadOlderMessages,
   user,
@@ -888,6 +889,19 @@ export const ChatUI: React.FC<ChatV2Props> = ({
 
                   {/* Input */}
                   <div className="-mt-8 bg-gradient-to-t from-background via-background/95 to-transparent px-0 pb-[env(safe-area-inset-bottom)] pt-10">
+                    {activityNotice && (
+                      <div className="mx-auto mb-2 w-full max-w-3xl px-3 md:px-2">
+                        <div
+                          className={
+                            activityNotice.tone === "error"
+                              ? "rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+                              : "rounded-md border border-border bg-muted/70 px-3 py-2 text-sm text-muted-foreground"
+                          }
+                        >
+                          {activityNotice.message}
+                        </div>
+                      </div>
+                    )}
                     <ChatInput
                       value={inputValue}
                       onChange={(value) => {
