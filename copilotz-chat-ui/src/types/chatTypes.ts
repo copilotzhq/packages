@@ -478,6 +478,7 @@ export interface ChatV2Props {
   isLoadingOlderMessages?: boolean;
   hasMoreMessagesBefore?: boolean;
   activityNotice?: ChatActivityNotice | null;
+  isBackgroundRefreshingMessages?: boolean;
 
   // Callbacks
   callbacks?: ChatCallbacks;

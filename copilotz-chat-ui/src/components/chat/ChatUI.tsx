@@ -51,6 +51,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   isLoadingOlderMessages = false,
   hasMoreMessagesBefore = false,
   activityNotice = null,
+  isBackgroundRefreshingMessages = false,
   callbacks = {},
   onLoadOlderMessages,
   user,
@@ -234,7 +235,9 @@ export const ChatUI: React.FC<ChatV2Props> = ({
       return;
     }
 
-    const wasEmpty = prevMessageCountRef.current === 0;
+    const previousMessageCount = prevMessageCountRef.current;
+    const wasEmpty = previousMessageCount === 0;
+    const didAppendMessages = groupedMessages.length > previousMessageCount;
     prevMessageCountRef.current = groupedMessages.length;
 
     if (wasEmpty) {
@@ -250,6 +253,10 @@ export const ChatUI: React.FC<ChatV2Props> = ({
       return;
     }
 
+    if (isBackgroundRefreshingMessages && !didAppendMessages) {
+      return;
+    }
+
     // Incremental update (new message, streaming) — smooth-scroll if at bottom
     if (!state.isAtBottom) return;
     requestAnimationFrame(() => {
@@ -261,7 +268,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
         viewport.scrollTop = viewport.scrollHeight;
       }
     });
-  }, [groupedMessages, state.isAtBottom, virtualizer]);
+  }, [groupedMessages, isBackgroundRefreshingMessages, state.isAtBottom, virtualizer]);
 
   // Re-measure visible items when the scroll container is resized (sidebar
   // toggle, devtools, window resize).  We do NOT call virtualizer.measure()

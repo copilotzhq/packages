@@ -85,7 +85,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({ userId, userName, us
     return targetAgentId;
   }, [targetAgentId]);
 
-  const { messages, isMessagesLoading, isLoadingOlderMessages, messagePageInfo, threads, currentThreadId, isStreaming, activityNotice, specialState, clearSpecialState, userContextSeed, sendMessage, createThread, selectThread, renameThread, archiveThread, updateThreadTags, editMessage, deleteThread, stopGeneration, loadOlderMessages } = useCopilotz({
+  const { messages, isMessagesLoading, isLoadingOlderMessages, messagePageInfo, threads, currentThreadId, isStreaming, isRecoveringStream, activityNotice, specialState, clearSpecialState, userContextSeed, sendMessage, createThread, selectThread, renameThread, archiveThread, updateThreadTags, editMessage, deleteThread, stopGeneration, loadOlderMessages } = useCopilotz({
     userId,
     userName,
     userAvatar,
@@ -195,5 +195,5 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({ userId, userName, us
 
   const specialStateContent = specialState ? renderSpecialState?.(specialState, { clear: clearSpecialState }) : null;
 
-  return <ChatUserContextProvider initial={userContextSeed}>{specialStateContent ?? <ChatUI messages={messages} isMessagesLoading={isMessagesLoading} isLoadingOlderMessages={isLoadingOlderMessages} hasMoreMessagesBefore={messagePageInfo.hasMoreBefore} activityNotice={activityNotice} onLoadOlderMessages={loadOlderMessages} threads={threads} currentThreadId={currentThreadId} config={mergedConfig} callbacks={chatCallbacks} isGenerating={isStreaming} suggestions={suggestions} agentOptions={agentOptions} selectedAgentId={selectedAgentId} onSelectAgent={onSelectAgent} participantIds={participantIds} onParticipantsChange={onParticipantsChange} targetAgentId={targetAgentId} onTargetAgentChange={onTargetAgentChange} user={userProp} assistant={assistantProp} onAddMemory={onAddMemory} onUpdateMemory={onUpdateMemory} onDeleteMemory={onDeleteMemory} userMenuSections={userMenuSections} userMenuAdditionalItems={userMenuAdditionalItems} className={className} />}</ChatUserContextProvider>;
+  return <ChatUserContextProvider initial={userContextSeed}>{specialStateContent ?? <ChatUI messages={messages} isMessagesLoading={isMessagesLoading} isLoadingOlderMessages={isLoadingOlderMessages} hasMoreMessagesBefore={messagePageInfo.hasMoreBefore} activityNotice={activityNotice} isBackgroundRefreshingMessages={isRecoveringStream} onLoadOlderMessages={loadOlderMessages} threads={threads} currentThreadId={currentThreadId} config={mergedConfig} callbacks={chatCallbacks} isGenerating={isStreaming} suggestions={suggestions} agentOptions={agentOptions} selectedAgentId={selectedAgentId} onSelectAgent={onSelectAgent} participantIds={participantIds} onParticipantsChange={onParticipantsChange} targetAgentId={targetAgentId} onTargetAgentChange={onTargetAgentChange} user={userProp} assistant={assistantProp} onAddMemory={onAddMemory} onUpdateMemory={onUpdateMemory} onDeleteMemory={onDeleteMemory} userMenuSections={userMenuSections} userMenuAdditionalItems={userMenuAdditionalItems} className={className} />}</ChatUserContextProvider>;
 };

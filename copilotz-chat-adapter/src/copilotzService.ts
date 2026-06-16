@@ -895,6 +895,7 @@ export async function fetchThreadMessagesPage(
   options?: {
     limit?: number;
     before?: string | null;
+    after?: string | null;
   },
   getRequestHeaders?: RequestHeadersProvider,
 ): Promise<RestMessagePage> {
@@ -902,6 +903,9 @@ export async function fetchThreadMessagesPage(
   params.set("limit", String(options?.limit ?? 50));
   if (options?.before) {
     params.set("before", options.before);
+  }
+  if (options?.after) {
+    params.set("after", options.after);
   }
 
   const res = await fetch(

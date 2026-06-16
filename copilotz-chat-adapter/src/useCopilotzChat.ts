@@ -54,6 +54,75 @@ const createEmptyMessagePageInfo = (): RestMessagePageInfo => ({
   newestMessageId: null,
 });
 
+const stringifyForCompare = (value: unknown): string => {
+  if (value === undefined) return '';
+  try {
+    return JSON.stringify(value) ?? '';
+  } catch {
+    return String(value);
+  }
+};
+
+const getMessageSignature = (message: InternalChatMessage): string => JSON.stringify({
+  id: message.id,
+  role: message.role,
+  content: message.content ?? '',
+  isStreaming: message.isStreaming === true,
+  isComplete: message.isComplete === true,
+  attachments: stringifyForCompare(message.attachments),
+  activity: stringifyForCompare(message.activity),
+  metadata: stringifyForCompare(message.metadata),
+  sender: message.sender
+    ? {
+      id: message.sender.id,
+      type: message.sender.type,
+      name: message.sender.name,
+      agentId: message.sender.agentId,
+    }
+    : null,
+});
+
+const reconcileThreadMessages = (
+  currentMessages: InternalChatMessage[],
+  freshMessages: InternalChatMessage[],
+): { messages: InternalChatMessage[]; changed: boolean } => {
+  if (freshMessages.length === 0) {
+    return { messages: currentMessages, changed: false };
+  }
+  if (currentMessages.length === 0) {
+    return { messages: freshMessages, changed: true };
+  }
+
+  const freshById = new Map(freshMessages.map((message) => [message.id, message]));
+  const seen = new Set<string>();
+  let changed = false;
+
+  const nextMessages = currentMessages.map((message) => {
+    const fresh = freshById.get(message.id);
+    if (!fresh) return message;
+
+    seen.add(message.id);
+    if (getMessageSignature(message) === getMessageSignature(fresh)) {
+      return message;
+    }
+
+    changed = true;
+    return fresh;
+  });
+
+  const appended = freshMessages.filter((message) => !seen.has(message.id));
+  if (appended.length > 0) {
+    changed = true;
+    nextMessages.push(...appended);
+    nextMessages.sort((a, b) => {
+      const timestampDelta = (a.timestamp ?? 0) - (b.timestamp ?? 0);
+      return timestampDelta !== 0 ? timestampDelta : a.id.localeCompare(b.id);
+    });
+  }
+
+  return changed ? { messages: nextMessages, changed } : { messages: currentMessages, changed: false };
+};
+
 const createPendingAssistantActivity = (): AssistantActivityBlock => ({
   items: [
     {
@@ -386,6 +455,40 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     [getRequestHeaders, prepareThreadMessages]
   );
 
+  const refreshThreadMessages = useCallback(
+    async (threadId: string) => {
+      const requestId = messagesRequestRef.current;
+
+      try {
+        const page = await fetchThreadMessagesPage(threadId, { limit: THREAD_MESSAGES_PAGE_SIZE }, getRequestHeaders);
+        const { viewMessages, toolResultUpdates } = await prepareThreadMessages(page.data);
+        if (messagesRequestRef.current !== requestId) return;
+
+        persistedToolUpdatesRef.current = [
+          ...persistedToolUpdatesRef.current,
+          ...toolResultUpdates.filter((update) => (
+            !persistedToolUpdatesRef.current.some((current) => matchesToolResultUpdate(current, update))
+          )),
+        ];
+
+        const hydratedMessages = mergePersistedToolResults(viewMessages, persistedToolUpdatesRef.current);
+        setMessages((prev) => {
+          const reconciled = reconcileThreadMessages(prev, hydratedMessages);
+          return reconciled.changed ? reconciled.messages : prev;
+        });
+        setMessagePageInfo((prev) => ({
+          hasMoreBefore: prev.hasMoreBefore || page.pageInfo.hasMoreBefore,
+          oldestMessageId: prev.oldestMessageId ?? page.pageInfo.oldestMessageId,
+          newestMessageId: page.pageInfo.newestMessageId ?? prev.newestMessageId,
+        }));
+      } catch (error) {
+        if (isAbortError(error)) return;
+        console.error(`Error refreshing messages for thread ${threadId}`, error);
+      }
+    },
+    [getRequestHeaders, prepareThreadMessages]
+  );
+
   const loadOlderMessages = useCallback(async () => {
     const threadId = currentThreadIdRef.current;
     const pageInfo = messagePageInfoRef.current;
@@ -439,6 +542,8 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
         let delayMs = 2000;
         let attempts = 0;
 
+        await refreshThreadMessages(threadId);
+
         while (recoveryPollGenerationRef.current === generation) {
           await new Promise((resolve) => setTimeout(resolve, delayMs));
           if (recoveryPollGenerationRef.current !== generation) return;
@@ -451,7 +556,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
             if (activity.status === 'running') {
               attempts += 1;
               if (attempts % 3 === 0) {
-                await loadThreadMessages(threadId);
+                await refreshThreadMessages(threadId);
               }
               if (attempts >= 15) {
                 delayMs = 5000;
@@ -459,7 +564,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
               continue;
             }
 
-            await loadThreadMessages(threadId);
+            await refreshThreadMessages(threadId);
             finalizeStreamingPlaceholders(activity.status);
             return;
           } catch (error) {
@@ -472,7 +577,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
         }
       })();
     },
-    [finalizeStreamingPlaceholders, getRequestHeaders, loadThreadMessages]
+    [finalizeStreamingPlaceholders, getRequestHeaders, refreshThreadMessages]
   );
 
   const refreshThreadActivity = useCallback(
@@ -488,14 +593,14 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
 
         setIsRecoveringStream(false);
         if (activity.status === 'failed') {
-          await loadThreadMessages(threadId);
+          await refreshThreadMessages(threadId);
         }
       } catch (error) {
         if (isAbortError(error)) return;
         console.warn('Unable to load Copilotz thread activity', error);
       }
     },
-    [getRequestHeaders, loadThreadMessages, startThreadActivityRecovery]
+    [getRequestHeaders, refreshThreadMessages, startThreadActivityRecovery]
   );
 
   const handleSelectThread = useCallback(
@@ -1167,7 +1272,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
               startThreadActivityRecovery(activityThreadId);
             } else if (streamError || activity.status === 'failed') {
               setIsRecoveringStream(false);
-              await loadThreadMessages(activityThreadId);
+              await refreshThreadMessages(activityThreadId);
             }
           }
         } catch (activityError) {
@@ -1191,7 +1296,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
 
       return currentAssistantId;
     },
-    [applyEventInterceptor, handleStreamMessageEvent, handleStreamAssetEvent, fetchAndSetThreadsState, finalizeStreamingPlaceholders, getRequestHeaders, loadThreadMessages, startThreadActivityRecovery]
+    [applyEventInterceptor, handleStreamMessageEvent, handleStreamAssetEvent, fetchAndSetThreadsState, finalizeStreamingPlaceholders, getRequestHeaders, refreshThreadMessages, startThreadActivityRecovery]
   );
 
   const handleSendMessage = useCallback(
