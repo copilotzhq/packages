@@ -65,6 +65,18 @@ interface MentionMatch {
   query: string;
 }
 
+interface StagedSend {
+  id: string;
+  content: string;
+  attachments: MediaAttachment[];
+}
+
+function createStagedSendId(): string {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
 function getActiveMentionMatch(value: string, caret: number): MentionMatch | null {
   const prefix = value.slice(0, caret);
   const match = /(^|\s)@([\w.-]*)$/.exec(prefix);
@@ -414,6 +426,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   const [activeMention, setActiveMention] = useState<MentionMatch | null>(null);
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const [stagedSends, setStagedSends] = useState<StagedSend[]>([]);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -538,20 +551,57 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
     });
   }, [activeMention, draftValue, onTargetAgentChange, updateDraftValue]);
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if ((!draftValue.trim() && attachments.length === 0) || disabled || isGenerating) return;
-
-    const mentionedAgent = resolveTargetFromMentions(draftValue, mentionAgents);
-    if (mentionedAgent) {
-      onTargetAgentChange?.(mentionedAgent.id);
-    }
-
-    onSubmit(draftValue.trim(), attachments);
+  const clearComposer = useCallback(() => {
     updateDraftValue('');
     onAttachmentsChange([]);
     setActiveMention(null);
     setActiveMentionIndex(0);
+  }, [onAttachmentsChange, updateDraftValue]);
+
+  const submitResolvedMessage = useCallback((content: string, messageAttachments: MediaAttachment[]) => {
+    const mentionedAgent = resolveTargetFromMentions(content, mentionAgents);
+    if (mentionedAgent) {
+      onTargetAgentChange?.(mentionedAgent.id);
+    }
+
+    onSubmit(content.trim(), messageAttachments);
+  }, [mentionAgents, onSubmit, onTargetAgentChange]);
+
+  const stageCurrentDraft = useCallback(() => {
+    const content = draftValue.trim();
+    if (!content && attachments.length === 0) return;
+
+    setStagedSends((prev) => [
+      ...prev,
+      {
+        id: createStagedSendId(),
+        content,
+        attachments: [...attachments],
+      },
+    ]);
+    clearComposer();
+  }, [attachments, clearComposer, draftValue]);
+
+  const sendStagedMessage = useCallback((staged: StagedSend) => {
+    setStagedSends((prev) => prev.filter((item) => item.id !== staged.id));
+    submitResolvedMessage(staged.content, staged.attachments);
+  }, [submitResolvedMessage]);
+
+  const removeStagedMessage = useCallback((id: string) => {
+    setStagedSends((prev) => prev.filter((item) => item.id !== id));
+  }, []);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if ((!draftValue.trim() && attachments.length === 0) || disabled) return;
+
+    if (isGenerating) {
+      stageCurrentDraft();
+      return;
+    }
+
+    submitResolvedMessage(draftValue.trim(), attachments);
+    clearComposer();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -1211,6 +1261,58 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                     </div>
                   </div>
                 )}
+                {stagedSends.length > 0 && (
+                  <div className="flex flex-col gap-1.5">
+                    {stagedSends.map((staged) => (
+                      <div
+                        key={staged.id}
+                        className="flex min-h-10 items-center gap-2 rounded-2xl border border-border/80 bg-muted/45 px-2.5 py-1.5"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm text-foreground">
+                            {staged.content || staged.attachments[0]?.fileName || config?.labels?.attachmentsCount || 'Attachment'}
+                          </div>
+                          {staged.attachments.length > 0 && (
+                            <div className="text-xs text-muted-foreground">
+                              {formatLabel(
+                                config?.labels?.attachmentsCount,
+                                '{{count}}/{{max}} attachments',
+                                { count: staged.attachments.length, max: maxAttachments },
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              type="button"
+                              size="icon"
+                              className="h-8 w-8 rounded-full"
+                              onClick={() => sendStagedMessage(staged)}
+                            >
+                              <Send className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{config?.labels?.sendMessageTooltip}</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground"
+                              onClick={() => removeStagedMessage(staged.id)}
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{config?.labels?.voiceCancel}</TooltipContent>
+                        </Tooltip>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {/* Text input */}
                 <div className="relative min-w-0">
                   <Textarea
@@ -1333,20 +1435,37 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
 
                     {/* Submit/Stop button */}
                     {isGenerating ? (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="icon"
-                            className="h-9 w-9 rounded-full"
-                            onClick={onStopGeneration}
-                          >
-                            <Square className="h-4 w-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>{config?.labels?.stopGenerationTooltip}</TooltipContent>
-                      </Tooltip>
+                      <>
+                        {(draftValue.trim() || attachments.length > 0) && (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                type="submit"
+                                size="icon"
+                                className="h-9 w-9 rounded-full"
+                                disabled={disabled}
+                              >
+                                <Send className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{config?.labels?.sendMessageTooltip}</TooltipContent>
+                          </Tooltip>
+                        )}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="icon"
+                              className="h-9 w-9 rounded-full"
+                              onClick={onStopGeneration}
+                            >
+                              <Square className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>{config?.labels?.stopGenerationTooltip}</TooltipContent>
+                        </Tooltip>
+                      </>
                     ) : (
                       <Tooltip>
                         <TooltipTrigger asChild>
