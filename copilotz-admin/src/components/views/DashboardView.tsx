@@ -4,7 +4,7 @@ import {
   BarChart,
   CartesianGrid,
   Legend,
-  Tooltip,
+  Tooltip as RechartsTooltip,
   XAxis,
   YAxis,
 } from "recharts";
@@ -57,7 +57,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../ui/select";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import {
+  Tooltip as UiTooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "../ui/tooltip";
 
 interface DashboardViewProps {
   config: ResolvedAdminConfig;
@@ -296,10 +300,10 @@ function UsageDashboard({
   }, [loadUsage, setHeaderRefresh]);
 
   return (
-    <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,4fr)_minmax(0,5fr)] gap-3">
+    <div className="grid h-full min-h-[760px] grid-rows-[auto_minmax(280px,4fr)_minmax(260px,5fr)] gap-3">
       <div className="space-y-3">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-          <div className="min-w-0">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-[180px]">
             <h2 className="text-xl font-semibold tracking-tight">
               {config.labels.llmUsageTitle}
             </h2>
@@ -471,7 +475,7 @@ function UsageChart({
           tickLine={false}
           width={60}
         />
-        <Tooltip
+        <RechartsTooltip
           content={
             <ChartTooltipContent
               formatter={(value) =>
@@ -768,7 +772,7 @@ function InlineFilters({
   threadId: string;
 }) {
   return (
-    <div className="flex max-w-full flex-wrap items-end justify-end gap-2">
+    <div className="flex min-w-[min(100%,520px)] flex-1 flex-wrap items-end justify-end gap-2">
       <div className="flex items-center gap-2 pb-1 text-xs font-medium text-muted-foreground">
         <Filter className="size-3.5" />
         <span>Filters</span>
@@ -857,7 +861,7 @@ function HeaderSelect(props: {
   width: string;
 }) {
   return (
-    <Tooltip>
+    <UiTooltip>
       <Select value={props.value} onValueChange={props.onValueChange}>
         <TooltipTrigger asChild>
           <SelectTrigger
@@ -876,7 +880,7 @@ function HeaderSelect(props: {
         </SelectContent>
       </Select>
       <TooltipContent>{props.label}</TooltipContent>
-    </Tooltip>
+    </UiTooltip>
   );
 }
 
@@ -888,7 +892,7 @@ function UsageSelect(props: {
   compact?: boolean;
 }) {
   return (
-    <Tooltip>
+    <UiTooltip>
       <label className={cn("space-y-1", props.compact && "w-[116px]")}>
         <span className="sr-only">
           {props.label}
@@ -915,7 +919,7 @@ function UsageSelect(props: {
         </Select>
       </label>
       <TooltipContent>{props.label}</TooltipContent>
-    </Tooltip>
+    </UiTooltip>
   );
 }
 
@@ -928,7 +932,7 @@ function FilterInput(props: {
   compact?: boolean;
 }) {
   return (
-    <Tooltip>
+    <UiTooltip>
       <label className={cn("space-y-1", props.compact && "w-[150px]")}>
         <span className="sr-only">
           {props.label}
@@ -955,7 +959,7 @@ function FilterInput(props: {
         </TooltipTrigger>
       </label>
       <TooltipContent>{props.label}</TooltipContent>
-    </Tooltip>
+    </UiTooltip>
   );
 }
 
