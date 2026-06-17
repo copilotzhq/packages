@@ -220,6 +220,7 @@ export async function fetchAdminUsage(
     interval: filters.interval,
     metric: filters.metric,
     groupBy: filters.groupBy,
+    attribution: filters.attribution,
     threadId: filters.threadId,
     participantId: filters.participantId,
     participantType: filters.participantType,

@@ -38,6 +38,7 @@ export type {
   AdminSectionState,
   AdminThreadDetail,
   AdminThreadSummary,
+  AdminUsageAttribution,
   AdminUsageFilters,
   AdminUsageGroupBy,
   AdminUsageInterval,

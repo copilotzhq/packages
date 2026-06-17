@@ -1,8 +1,58 @@
 import React from "react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import {
+  Activity,
+  Database,
+  Filter,
+  RefreshCw,
+  Search,
+  Sparkles,
+  Users,
+  Wallet,
+} from "lucide-react";
+
+import { fetchAdminUsage } from "../../adminService";
 import { cn } from "../../lib/utils";
-import { Input } from "../ui/input";
+import type {
+  AdminActivityPoint,
+  AdminAgentSummary,
+  AdminDatePreset,
+  AdminOverview,
+  AdminParticipantSummary,
+  AdminThreadSummary,
+  AdminUsageAttribution,
+  AdminUsageDimension,
+  AdminUsageGroupBy,
+  AdminUsageInterval,
+  AdminUsageMetricKind,
+  AdminUsagePoint,
+  AdminUsageResponse,
+  AdminUsageTotals,
+  ResolvedAdminConfig,
+} from "../../types";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "../ui/card";
+import {
+  ChartConfig,
+  ChartContainer,
+  ChartLegendContent,
+  ChartTooltipContent,
+} from "../ui/chart";
+import { Input } from "../ui/input";
 import {
   Select,
   SelectContent,
@@ -10,21 +60,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../ui/select";
-import type {
-  AdminActivityPoint,
-  AdminAgentSummary,
-  AdminParticipantSummary,
-  AdminThreadSummary,
-  AdminOverview,
-  AdminUsageDimension,
-  AdminUsageGroupBy,
-  AdminUsageInterval,
-  AdminUsageMetricKind,
-  AdminUsageResponse,
-  AdminUsagePoint,
-  ResolvedAdminConfig,
-} from "../../types";
-import { fetchAdminUsage } from "../../adminService";
 
 interface DashboardViewProps {
   config: ResolvedAdminConfig;
@@ -61,189 +96,59 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onThreadClick,
   namespace,
 }) => {
-  const [usageMetricKind, setUsageMetricKind] = React.useState<AdminUsageMetricKind>(
-    "cost",
-  );
-  const [usageDimension, setUsageDimension] = React.useState<AdminUsageDimension>(
-    "total",
-  );
+  void overview;
+  void activity;
+  void threads;
+  void participants;
+  void agents;
+  void interval;
+  void threadSearch;
+  void participantSearch;
+  void agentSearch;
+  void onThreadSearchChange;
+  void onParticipantSearchChange;
+  void onAgentSearchChange;
+  void onThreadClick;
 
-  const llmSummaryValue = overview
-    ? getOverviewUsageValue(overview, usageMetricKind, usageDimension)
-    : 0;
-  const llmSummaryLabel = getUsageSummaryLabel(
-    config.labels,
-    usageMetricKind,
-    usageDimension,
-  );
-  const cards = [
-    {
-      label: config.labels.messagesCard,
-      value: overview?.messageTotals.total ?? 0,
-      detail: `${overview?.messageTotals.toolCallMessages ?? 0} tool-call messages`,
-    },
-    {
-      label: config.labels.activeThreadsCard,
-      value: overview?.threadTotals.active ?? 0,
-      detail: `${overview?.threadTotals.total ?? 0} total threads`,
-    },
-    {
-      label: config.labels.participantsCard,
-      value: overview?.participantTotals.total ?? 0,
-      detail: `${overview?.participantTotals.agents ?? 0} agents, ${
-        overview?.participantTotals.jobs ?? 0
-      } jobs`,
-    },
-    {
-      label: llmSummaryLabel,
-      value: llmSummaryValue,
-      detail: `${overview?.llmTotals.totalCalls ?? 0} ${config.labels.usageCallsDetail}`,
-      metricKind: usageMetricKind,
-    },
-    {
-      label: config.labels.queueCard,
-      value: overview?.queueTotals.pending ?? 0,
-      detail: `${overview?.queueTotals.failed ?? 0} failed`,
-    },
-  ];
-
-  const isEmpty =
-    cards.every((card) => card.value === 0) &&
-    activity.length === 0 &&
-    threads.length === 0 &&
-    participants.length === 0 &&
-    agents.length === 0;
+  if (!config.features.showOverview) {
+    return (
+      <EmptyDashboard
+        description={config.labels.emptyDescription}
+        title={config.labels.emptyTitle}
+      />
+    );
+  }
 
   return (
-    <div className="space-y-6">
-      {isEmpty && (
-        <div className="rounded-xl border border-dashed p-10 text-center">
-          <h3 className="text-lg font-semibold">{config.labels.emptyTitle}</h3>
-          <p className="mt-2 text-sm text-muted-foreground">
-            {config.labels.emptyDescription}
-          </p>
-        </div>
-      )}
-
-      {/* Overview Cards */}
-      {config.features.showOverview && (
-        <section className="space-y-4">
-          <SectionHeading title={config.labels.overviewTitle} />
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-5">
-            {cards.map((card) => (
-              <div
-                className="rounded-xl border bg-card p-5 shadow-sm"
-                key={card.label}
-              >
-                <p className="text-sm font-medium text-muted-foreground">
-                  {card.label}
-                </p>
-                <p className="mt-3 text-3xl font-semibold tracking-tight">
-                  {formatMetricValue(
-                    card.value,
-                    card.metricKind ?? "tokens",
-                  )}
-                </p>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {card.detail}
-                </p>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {config.features.showOverview && (
-        <UsageExplorer
-          config={config}
-          metricKind={usageMetricKind}
-          namespace={namespace}
-          onDimensionChange={setUsageDimension}
-          onMetricKindChange={setUsageMetricKind}
-          selectedDimension={usageDimension}
-        />
-      )}
-
-      {/* Activity Chart */}
-      {config.features.showActivity && (
-        <section className="space-y-4">
-          <SectionHeading title={config.labels.activityTitle} />
-          <ActivityChart
-            interval={interval}
-            labels={config.labels}
-            maxBars={config.ui.maxActivityBars}
-            points={activity}
-            usageDimension={usageDimension}
-            usageMetricKind={usageMetricKind}
-          />
-        </section>
-      )}
-
-      {/* Data Tables */}
-      <div className="grid gap-6 lg:grid-cols-3">
-        {config.features.showThreads && (
-          <DataTable
-            rows={threads}
-            searchPlaceholder={config.labels.threadSearchPlaceholder}
-            searchValue={threadSearch}
-            setSearchValue={onThreadSearchChange}
-            title={config.labels.threadsTitle}
-          >
-            <ThreadsTable
-              rows={threads}
-              labels={config.labels}
-              onThreadClick={onThreadClick}
-            />
-          </DataTable>
-        )}
-        {config.features.showParticipants && (
-          <DataTable
-            rows={participants}
-            searchPlaceholder={config.labels.participantSearchPlaceholder}
-            searchValue={participantSearch}
-            setSearchValue={onParticipantSearchChange}
-            title={config.labels.participantsTitle}
-          >
-            <ParticipantsTable rows={participants} labels={config.labels} />
-          </DataTable>
-        )}
-        {config.features.showAgents && (
-          <DataTable
-            rows={agents}
-            searchPlaceholder={config.labels.agentSearchPlaceholder}
-            searchValue={agentSearch}
-            setSearchValue={onAgentSearchChange}
-            title={config.labels.agentsTitle}
-          >
-            <AgentsTable
-              rows={agents}
-              labels={config.labels}
-              usageMetricKind={usageMetricKind}
-              usageDimension={usageDimension}
-            />
-          </DataTable>
-        )}
-      </div>
-    </div>
+    <UsageDashboard
+      config={config}
+      namespace={namespace}
+    />
   );
 };
 
-function SectionHeading({ title }: { title: string }) {
-  return <h3 className="text-lg font-semibold tracking-tight">{title}</h3>;
-}
-
-function UsageExplorer(props: {
+function UsageDashboard({
+  config,
+  namespace,
+}: {
   config: ResolvedAdminConfig;
   namespace?: string;
-  metricKind: AdminUsageMetricKind;
-  selectedDimension: AdminUsageDimension;
-  onMetricKindChange: (value: AdminUsageMetricKind) => void;
-  onDimensionChange: (value: AdminUsageDimension) => void;
 }) {
   const [period, setPeriod] = React.useState<AdminDatePreset | "custom">("7d");
   const [bucket, setBucket] = React.useState<AdminUsageInterval>("day");
-  const [groupBy, setGroupBy] = React.useState<AdminUsageGroupBy>("participant");
-  const [participantType, setParticipantType] = React.useState<"all" | "human" | "agent" | "job">("all");
+  const [metricKind, setMetricKind] = React.useState<AdminUsageMetricKind>(
+    "cost",
+  );
+  const [dimension, setDimension] = React.useState<AdminUsageDimension>("total");
+  const [groupBy, setGroupBy] = React.useState<AdminUsageGroupBy>(
+    "participant",
+  );
+  const [attribution, setAttribution] = React.useState<AdminUsageAttribution>(
+    "initiatedBy",
+  );
+  const [participantType, setParticipantType] = React.useState<
+    "all" | "human" | "agent" | "job"
+  >("all");
   const [threadId, setThreadId] = React.useState("");
   const [participantId, setParticipantId] = React.useState("");
   const [provider, setProvider] = React.useState("");
@@ -268,17 +173,18 @@ function UsageExplorer(props: {
         from: range.from,
         to: range.to,
         interval: bucket,
-        metric: props.metricKind,
+        metric: metricKind,
         groupBy,
-        namespace: props.namespace || undefined,
+        attribution,
+        namespace: namespace || undefined,
         participantType,
         threadId: emptyToUndefined(threadId),
         participantId: emptyToUndefined(participantId),
         provider: emptyToUndefined(provider),
         model: emptyToUndefined(model),
       }, {
-        baseUrl: props.config.baseUrl,
-        getRequestHeaders: props.config.getRequestHeaders,
+        baseUrl: config.baseUrl,
+        getRequestHeaders: config.getRequestHeaders,
       });
       setUsage(next);
     } catch (err) {
@@ -288,15 +194,16 @@ function UsageExplorer(props: {
       setIsLoading(false);
     }
   }, [
+    attribution,
     bucket,
+    config.baseUrl,
+    config.getRequestHeaders,
     groupBy,
+    metricKind,
     model,
+    namespace,
     participantId,
     participantType,
-    props.config.baseUrl,
-    props.config.getRequestHeaders,
-    props.metricKind,
-    props.namespace,
     provider,
     range.from,
     range.to,
@@ -307,122 +214,543 @@ function UsageExplorer(props: {
     void loadUsage();
   }, [loadUsage]);
 
-  return (
-    <section className="space-y-4">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-        <SectionHeading title={props.config.labels.llmUsageTitle} />
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          <UsageSelect
-            label="Period"
-            value={period}
-            onValueChange={(value) => setPeriod(value as AdminDatePreset | "custom")}
-            options={[
-              ["24h", props.config.labels.range24h],
-              ["7d", props.config.labels.range7d],
-              ["30d", props.config.labels.range30d],
-              ["custom", "Custom"],
-            ]}
-          />
-          <UsageSelect
-            label="Bucket"
-            value={bucket}
-            onValueChange={(value) => setBucket(value as AdminUsageInterval)}
-            options={[
-              ["minute", "Minute"],
-              ["hour", "Hour"],
-              ["day", "Day"],
-              ["week", "Week"],
-              ["month", "Month"],
-            ]}
-          />
-          <UsageSelect
-            label={props.config.labels.usageMetricLabel}
-            value={props.metricKind}
-            onValueChange={(value) => props.onMetricKindChange(value as AdminUsageMetricKind)}
-            options={[
-              ["cost", props.config.labels.usageMetricCost],
-              ["tokens", props.config.labels.usageMetricTokens],
-              ["calls", "Calls"],
-            ]}
-          />
-          <UsageSelect
-            label="Group by"
-            value={groupBy}
-            onValueChange={(value) => setGroupBy(value as AdminUsageGroupBy)}
-            options={[
-              ["participant", "Participant"],
-              ["thread", "Thread"],
-              ["namespace", "Namespace"],
-              ["provider", "Provider"],
-              ["model", "Model"],
-            ]}
-          />
-          <UsageSelect
-            label={props.config.labels.usageDimensionLabel}
-            value={props.selectedDimension}
-            onValueChange={(value) => props.onDimensionChange(value as AdminUsageDimension)}
-            options={USAGE_DIMENSIONS.map((dimension) => [
-              dimension,
-              getUsageDimensionLabel(props.config.labels, dimension),
-            ])}
-          />
-        </div>
-      </div>
+  const points = usage?.points ?? [];
+  const totals = usage?.totals ?? EMPTY_TOTALS;
+  const chartState = React.useMemo(() =>
+    buildChartState(points, metricKind, dimension, bucket), [
+      bucket,
+      dimension,
+      metricKind,
+      points,
+    ]);
+  const groupedRows = React.useMemo(() =>
+    aggregateUsageRows(points, metricKind, dimension), [
+      dimension,
+      metricKind,
+      points,
+    ]);
+  const activeFilterCount = [
+    participantType !== "all" ? participantType : "",
+    threadId,
+    participantId,
+    provider,
+    model,
+    period === "custom" ? customFrom : "",
+    period === "custom" ? customTo : "",
+  ].filter((value) => value.trim().length > 0).length;
 
-      <div className="rounded-xl border bg-card p-5 shadow-sm">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-          {period === "custom" && (
-            <>
-              <FilterInput label="From" type="datetime-local" value={customFrom} onChange={setCustomFrom} />
-              <FilterInput label="To" type="datetime-local" value={customTo} onChange={setCustomTo} />
-            </>
-          )}
-          <UsageSelect
-            label="Participant type"
-            value={participantType}
-            onValueChange={(value) => setParticipantType(value as "all" | "human" | "agent" | "job")}
-            options={[
-              ["all", "All"],
-              ["human", "Human"],
-              ["agent", "Agent"],
-              ["job", "Job"],
-            ]}
-          />
-          <FilterInput label="Thread" value={threadId} onChange={setThreadId} />
-          <FilterInput label="Participant" value={participantId} onChange={setParticipantId} />
-          <FilterInput label="Provider" value={provider} onChange={setProvider} />
-          <FilterInput label="Model" value={model} onChange={setModel} />
-          <div className="flex items-end">
-            <Button
-              className="h-9 w-full"
-              onClick={() => void loadUsage()}
-              disabled={isLoading}
-              variant="outline"
-            >
-              {props.config.labels.refresh}
-            </Button>
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <h2 className="text-2xl font-semibold tracking-tight">
+            {config.labels.llmUsageTitle}
+          </h2>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Badge variant="outline">{formatUsageRangeLabel(period, range)}</Badge>
+            <Badge variant="secondary">
+              {getGroupByLabel(groupBy)}
+            </Badge>
+            {groupBy === "participant" && (
+              <Badge variant="outline">
+                {attribution === "initiatedBy"
+                  ? "Initiated by sender"
+                  : "Generated by caller"}
+              </Badge>
+            )}
           </div>
         </div>
+        <Button
+          className="w-full sm:w-auto"
+          disabled={isLoading}
+          onClick={() => void loadUsage()}
+          size="sm"
+          variant="outline"
+        >
+          <RefreshCw className={cn("size-4", isLoading && "animate-spin")} />
+          {config.labels.refresh}
+        </Button>
       </div>
 
-      <UsageChart
-        labels={props.config.labels}
-        metricKind={props.metricKind}
-        dimension={props.selectedDimension}
-        points={usage?.points ?? []}
-        bucket={bucket}
-        isLoading={isLoading}
-        error={error}
+      <UsageSummary
+        dimension={dimension}
+        labels={config.labels}
+        metricKind={metricKind}
+        totals={totals}
       />
 
+      <Card className="gap-4 overflow-hidden py-4">
+        <CardContent className="space-y-4 px-4 lg:px-5">
+          <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-6">
+            <UsageSelect
+              label="Period"
+              onValueChange={(value) =>
+                setPeriod(value as AdminDatePreset | "custom")}
+              options={[
+                ["24h", config.labels.range24h],
+                ["7d", config.labels.range7d],
+                ["30d", config.labels.range30d],
+                ["custom", "Custom"],
+              ]}
+              value={period}
+            />
+            <UsageSelect
+              label="Bucket"
+              onValueChange={(value) => setBucket(value as AdminUsageInterval)}
+              options={[
+                ["minute", "Minute"],
+                ["hour", "Hour"],
+                ["day", "Day"],
+                ["week", "Week"],
+                ["month", "Month"],
+              ]}
+              value={bucket}
+            />
+            <UsageSelect
+              label={config.labels.usageMetricLabel}
+              onValueChange={(value) =>
+                setMetricKind(value as AdminUsageMetricKind)}
+              options={[
+                ["cost", config.labels.usageMetricCost],
+                ["tokens", config.labels.usageMetricTokens],
+                ["calls", "Calls"],
+              ]}
+              value={metricKind}
+            />
+            <UsageSelect
+              label="Group"
+              onValueChange={(value) => setGroupBy(value as AdminUsageGroupBy)}
+              options={[
+                ["participant", "Participant"],
+                ["thread", "Thread"],
+                ["namespace", "Namespace"],
+                ["provider", "Provider"],
+                ["model", "Model"],
+              ]}
+              value={groupBy}
+            />
+            <UsageSelect
+              label="Attribution"
+              onValueChange={(value) =>
+                setAttribution(value as AdminUsageAttribution)}
+              options={[
+                ["initiatedBy", "Initiated by"],
+                ["generatedBy", "Generated by"],
+              ]}
+              value={attribution}
+            />
+            <UsageSelect
+              label={config.labels.usageDimensionLabel}
+              onValueChange={(value) =>
+                setDimension(value as AdminUsageDimension)}
+              options={USAGE_DIMENSIONS.map((nextDimension) => [
+                nextDimension,
+                getUsageDimensionLabel(config.labels, nextDimension),
+              ])}
+              value={dimension}
+            />
+          </div>
+
+          <div className="rounded-lg border bg-muted/30 p-3">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <Filter className="size-4" />
+                <span>Filters</span>
+                {activeFilterCount > 0 && (
+                  <Badge variant="secondary">{activeFilterCount}</Badge>
+                )}
+              </div>
+              {activeFilterCount > 0 && (
+                <Button
+                  onClick={() => {
+                    setParticipantType("all");
+                    setThreadId("");
+                    setParticipantId("");
+                    setProvider("");
+                    setModel("");
+                    setCustomFrom("");
+                    setCustomTo("");
+                  }}
+                  size="sm"
+                  variant="ghost"
+                >
+                  Clear
+                </Button>
+              )}
+            </div>
+            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-6">
+              {period === "custom" && (
+                <>
+                  <FilterInput
+                    label="From"
+                    onChange={setCustomFrom}
+                    type="datetime-local"
+                    value={customFrom}
+                  />
+                  <FilterInput
+                    label="To"
+                    onChange={setCustomTo}
+                    type="datetime-local"
+                    value={customTo}
+                  />
+                </>
+              )}
+              <UsageSelect
+                label="Type"
+                onValueChange={(value) =>
+                  setParticipantType(
+                    value as "all" | "human" | "agent" | "job",
+                  )}
+                options={[
+                  ["all", "All"],
+                  ["human", "Human"],
+                  ["agent", "Agent"],
+                  ["job", "Job"],
+                ]}
+                value={participantType}
+              />
+              <FilterInput
+                icon={<Search className="size-3.5" />}
+                label="Thread"
+                onChange={setThreadId}
+                value={threadId}
+              />
+              <FilterInput
+                icon={<Users className="size-3.5" />}
+                label="Participant"
+                onChange={setParticipantId}
+                value={participantId}
+              />
+              <FilterInput
+                icon={<Database className="size-3.5" />}
+                label="Provider"
+                onChange={setProvider}
+                value={provider}
+              />
+              <FilterInput
+                icon={<Sparkles className="size-3.5" />}
+                label="Model"
+                onChange={setModel}
+                value={model}
+              />
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="gap-3 overflow-hidden py-4">
+        <CardHeader className="px-4 lg:px-5">
+          <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+            <div>
+              <CardTitle className="text-base">
+                {getUsageSummaryLabel(config.labels, metricKind, dimension)}
+              </CardTitle>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {formatMetricValue(
+                  getUsageTotalValue(totals, metricKind, dimension),
+                  metricKind,
+                )}{" "}
+                across {formatNumber(totals.totalCalls)} calls
+              </p>
+            </div>
+            {isLoading && <Badge variant="outline">{config.labels.loading}</Badge>}
+          </div>
+        </CardHeader>
+        <CardContent className="px-2 lg:px-4">
+          {error ? (
+            <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+              {error}
+            </div>
+          ) : chartState.data.length === 0 ? (
+            <EmptyDashboard
+              description={config.labels.noResults}
+              title="No usage"
+            />
+          ) : (
+            <UsageChart
+              chartState={chartState}
+              metricKind={metricKind}
+            />
+          )}
+        </CardContent>
+      </Card>
+
       <UsageTable
-        labels={props.config.labels}
-        metricKind={props.metricKind}
-        dimension={props.selectedDimension}
-        rows={usage?.rows ?? []}
-        isLoading={isLoading}
+        dimension={dimension}
+        groupBy={groupBy}
+        labels={config.labels}
+        metricKind={metricKind}
+        onRowFilter={(row) => {
+          if (groupBy === "thread") setThreadId(row.groupKey);
+          if (groupBy === "participant") setParticipantId(row.groupKey);
+          if (groupBy === "provider") setProvider(row.groupKey);
+          if (groupBy === "model") setModel(row.groupKey);
+        }}
+        rows={groupedRows}
+        totals={totals}
       />
-    </section>
+    </div>
+  );
+}
+
+function UsageSummary({
+  dimension,
+  labels,
+  metricKind,
+  totals,
+}: {
+  dimension: AdminUsageDimension;
+  labels: ResolvedAdminConfig["labels"];
+  metricKind: AdminUsageMetricKind;
+  totals: AdminUsageTotals;
+}) {
+  const summary = [
+    {
+      label: labels.usageMetricCost,
+      value: formatMetricValue(totals.totalCostUsd, "cost"),
+      detail: `${formatNumber(totals.totalCalls)} ${labels.usageCallsDetail}`,
+      icon: Wallet,
+    },
+    {
+      label: labels.usageMetricTokens,
+      value: formatMetricValue(totals.totalTokens, "tokens"),
+      detail: `${formatMetricValue(totals.inputTokens, "tokens")} input`,
+      icon: Activity,
+    },
+    {
+      label: labels.usageCacheRead,
+      value: formatMetricValue(totals.cacheReadInputCostUsd, "cost"),
+      detail: `${formatMetricValue(totals.cacheReadInputTokens, "tokens")} tokens`,
+      icon: Database,
+    },
+    {
+      label: getUsageSummaryLabel(labels, metricKind, dimension),
+      value: formatMetricValue(
+        getUsageTotalValue(totals, metricKind, dimension),
+        metricKind,
+      ),
+      detail: labels.usageTotal,
+      icon: Sparkles,
+    },
+  ];
+
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      {summary.map((item) => (
+        <Card className="gap-3 py-4" key={item.label}>
+          <CardContent className="px-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm text-muted-foreground">
+                  {item.label}
+                </p>
+                <p className="mt-1 truncate text-2xl font-semibold tracking-tight">
+                  {item.value}
+                </p>
+                <p className="mt-1 truncate text-xs text-muted-foreground">
+                  {item.detail}
+                </p>
+              </div>
+              <div className="rounded-md border bg-muted/50 p-2 text-muted-foreground">
+                <item.icon className="size-4" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+function UsageChart({
+  chartState,
+  metricKind,
+}: {
+  chartState: ChartState;
+  metricKind: AdminUsageMetricKind;
+}) {
+  return (
+    <ChartContainer
+      className="h-[320px] w-full"
+      config={chartState.config}
+    >
+      <BarChart
+        accessibilityLayer
+        data={chartState.data}
+        margin={{ left: 8, right: 8, top: 12 }}
+      >
+        <CartesianGrid vertical={false} />
+        <XAxis
+          axisLine={false}
+          dataKey="label"
+          tickLine={false}
+          tickMargin={10}
+        />
+        <YAxis
+          axisLine={false}
+          tickFormatter={(value) => formatCompactMetric(value, metricKind)}
+          tickLine={false}
+          width={60}
+        />
+        <Tooltip
+          content={
+            <ChartTooltipContent
+              formatter={(value) =>
+                formatMetricValue(Number(value), metricKind)}
+              labelFormatter={(value) => String(value ?? "")}
+            />
+          }
+          cursor={false}
+        />
+        <Legend
+          content={<ChartLegendContent className="justify-center pt-3" />}
+        />
+        {chartState.series.map((series) => (
+          <Bar
+            dataKey={series.id}
+            fill={`var(--color-${series.id})`}
+            key={series.id}
+            radius={[4, 4, 0, 0]}
+            stackId="usage"
+          />
+        ))}
+      </BarChart>
+    </ChartContainer>
+  );
+}
+
+function UsageTable({
+  dimension,
+  groupBy,
+  labels,
+  metricKind,
+  onRowFilter,
+  rows,
+  totals,
+}: {
+  dimension: AdminUsageDimension;
+  groupBy: AdminUsageGroupBy;
+  labels: ResolvedAdminConfig["labels"];
+  metricKind: AdminUsageMetricKind;
+  onRowFilter: (row: AggregatedUsageRow) => void;
+  rows: AggregatedUsageRow[];
+  totals: AdminUsageTotals;
+}) {
+  const totalValue = getUsageTotalValue(totals, metricKind, dimension);
+  const filterable = groupBy !== "namespace";
+
+  return (
+    <Card className="gap-3 py-4">
+      <CardHeader className="px-4 lg:px-5">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <CardTitle className="text-base">Usage detail</CardTitle>
+          <Badge variant="outline">
+            {formatNumber(rows.length)} {getGroupByLabel(groupBy).toLowerCase()}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="px-0">
+        {rows.length === 0 ? (
+          <p className="px-5 py-4 text-sm text-muted-foreground">
+            {labels.noResults}
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[940px] text-sm">
+              <thead>
+                <tr className="border-b text-left text-xs uppercase tracking-[0.12em] text-muted-foreground">
+                  <th className="px-5 py-2.5 font-medium">
+                    {getGroupByLabel(groupBy)}
+                  </th>
+                  <th className="px-3 py-2.5 text-right font-medium">
+                    {getUsageSummaryLabel(labels, metricKind, dimension)}
+                  </th>
+                  <th className="px-3 py-2.5 text-right font-medium">Share</th>
+                  <th className="px-3 py-2.5 text-right font-medium">Calls</th>
+                  <th className="px-3 py-2.5 text-right font-medium">Input</th>
+                  <th className="px-3 py-2.5 text-right font-medium">Output</th>
+                  <th className="px-3 py-2.5 text-right font-medium">
+                    Reasoning
+                  </th>
+                  <th className="px-3 py-2.5 text-right font-medium">
+                    Cache read
+                  </th>
+                  <th className="px-5 py-2.5 text-right font-medium">
+                    Avg/call
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.slice(0, 60).map((row) => {
+                  const share = totalValue > 0 ? row.value / totalValue : 0;
+                  return (
+                    <tr
+                      className={cn(
+                        "border-b last:border-0",
+                        filterable &&
+                          "cursor-pointer transition-colors hover:bg-muted/50",
+                      )}
+                      key={row.groupKey}
+                      onClick={() => filterable && onRowFilter(row)}
+                    >
+                      <td className="px-5 py-3">
+                        <div className="max-w-80 truncate font-medium">
+                          {row.groupLabel}
+                        </div>
+                        {row.groupKey !== row.groupLabel && (
+                          <div className="mt-0.5 max-w-80 truncate text-xs text-muted-foreground">
+                            {row.groupKey}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-3 py-3 text-right font-medium">
+                        {formatMetricValue(row.value, metricKind)}
+                      </td>
+                      <td className="px-3 py-3 text-right">
+                        {formatPercent(share)}
+                      </td>
+                      <td className="px-3 py-3 text-right">
+                        {formatNumber(row.totalCalls)}
+                      </td>
+                      <td className="px-3 py-3 text-right">
+                        {formatMetricValue(
+                          getUsageTotalValue(row, metricKind, "input"),
+                          metricKind,
+                        )}
+                      </td>
+                      <td className="px-3 py-3 text-right">
+                        {formatMetricValue(
+                          getUsageTotalValue(row, metricKind, "output"),
+                          metricKind,
+                        )}
+                      </td>
+                      <td className="px-3 py-3 text-right">
+                        {formatMetricValue(
+                          getUsageTotalValue(row, metricKind, "reasoning"),
+                          metricKind,
+                        )}
+                      </td>
+                      <td className="px-3 py-3 text-right">
+                        {formatMetricValue(
+                          getUsageTotalValue(row, metricKind, "cacheRead"),
+                          metricKind,
+                        )}
+                      </td>
+                      <td className="px-5 py-3 text-right">
+                        {formatMetricValue(
+                          row.totalCalls > 0 ? row.value / row.totalCalls : 0,
+                          metricKind,
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -433,21 +761,23 @@ function UsageSelect(props: {
   options: Array<[string, string]>;
 }) {
   return (
-    <div className="space-y-1">
-      <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+    <label className="space-y-1">
+      <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
         {props.label}
-      </p>
+      </span>
       <Select value={props.value} onValueChange={props.onValueChange}>
-        <SelectTrigger className="h-9 w-full min-w-[140px]">
+        <SelectTrigger className="h-9 w-full min-w-0 bg-background">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
           {props.options.map(([value, label]) => (
-            <SelectItem key={value} value={value}>{label}</SelectItem>
+            <SelectItem key={value} value={value}>
+              {label}
+            </SelectItem>
           ))}
         </SelectContent>
       </Select>
-    </div>
+    </label>
   );
 }
 
@@ -455,473 +785,80 @@ function FilterInput(props: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  icon?: React.ReactNode;
   type?: string;
 }) {
   return (
-    <div className="space-y-1">
-      <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+    <label className="space-y-1">
+      <span className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
         {props.label}
-      </p>
-      <Input
-        className="h-9"
-        type={props.type ?? "text"}
-        value={props.value}
-        onChange={(event) => props.onChange(event.target.value)}
-      />
-    </div>
-  );
-}
-
-function UsageChart(props: {
-  points: AdminUsagePoint[];
-  labels: ResolvedAdminConfig["labels"];
-  metricKind: AdminUsageMetricKind;
-  dimension: AdminUsageDimension;
-  bucket: AdminUsageInterval;
-  isLoading: boolean;
-  error: string | null;
-}) {
-  const buckets = React.useMemo(() => buildUsageBuckets(props.points), [props.points]);
-  const visibleBuckets = buckets.slice(-18);
-  const groups = React.useMemo(() => topUsageGroups(props.points, props.metricKind, props.dimension), [
-    props.dimension,
-    props.metricKind,
-    props.points,
-  ]);
-  const maxBucketValue = Math.max(
-    ...visibleBuckets.map((bucket) =>
-      bucket.points.reduce((sum, point) =>
-        sum + getUsagePointValue(point, props.metricKind, props.dimension), 0)
-    ),
-    1,
-  );
-
-  return (
-    <div className="rounded-xl border bg-card p-5 shadow-sm">
-      {props.error ? (
-        <p className="text-sm text-destructive">{props.error}</p>
-      ) : props.isLoading && props.points.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{props.labels.loading}</p>
-      ) : visibleBuckets.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{props.labels.noResults}</p>
-      ) : (
-        <div className="space-y-4">
-          <div className="flex min-h-56 items-end gap-2">
-            {visibleBuckets.map((bucket) => {
-              const bucketTotal = bucket.points.reduce((sum, point) =>
-                sum + getUsagePointValue(point, props.metricKind, props.dimension), 0);
-              return (
-                <div className="flex min-w-0 flex-1 flex-col items-center gap-2" key={bucket.bucket}>
-                  <div className="flex h-40 w-full items-end rounded-lg bg-muted px-1 pb-1">
-                    <div
-                      className="flex w-full flex-col-reverse overflow-hidden rounded-md"
-                      style={{
-                        height: `${Math.max((bucketTotal / maxBucketValue) * 100, 6)}%`,
-                      }}
-                    >
-                      {groups.map((group, index) => {
-                        const point = bucket.points.find((item) => item.groupKey === group.key);
-                        const value = point
-                          ? getUsagePointValue(point, props.metricKind, props.dimension)
-                          : 0;
-                        if (value <= 0 || bucketTotal <= 0) return null;
-                        return (
-                          <div
-                            key={group.key}
-                            title={`${group.label}: ${formatMetricValue(value, props.metricKind)}`}
-                            style={{
-                              height: `${(value / bucketTotal) * 100}%`,
-                              backgroundColor: USAGE_CHART_COLORS[index % USAGE_CHART_COLORS.length],
-                            }}
-                          />
-                        );
-                      })}
-                    </div>
-                  </div>
-                  <div className="text-center">
-                    <p className="text-xs font-medium">{formatUsageBucket(bucket.bucket, props.bucket)}</p>
-                    <p className="text-[11px] text-muted-foreground">
-                      {formatMetricValue(bucketTotal, props.metricKind)}
-                    </p>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <div className="flex flex-wrap gap-3">
-            {groups.map((group, index) => (
-              <div className="flex items-center gap-2 text-xs" key={group.key}>
-                <span
-                  className="size-2 rounded-sm"
-                  style={{ backgroundColor: USAGE_CHART_COLORS[index % USAGE_CHART_COLORS.length] }}
-                />
-                <span className="max-w-48 truncate text-muted-foreground">{group.label}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function UsageTable(props: {
-  rows: AdminUsagePoint[];
-  labels: ResolvedAdminConfig["labels"];
-  metricKind: AdminUsageMetricKind;
-  dimension: AdminUsageDimension;
-  isLoading: boolean;
-}) {
-  const rows = props.rows.slice(0, 40);
-  return (
-    <div className="rounded-xl border bg-card p-5 shadow-sm">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <SectionHeading title="Usage detail" />
-        {props.isLoading && (
-          <Badge variant="outline">{props.labels.loading}</Badge>
+      </span>
+      <div className="relative">
+        {props.icon && (
+          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
+            {props.icon}
+          </span>
         )}
-      </div>
-      {rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">{props.labels.noResults}</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-sm">
-            <thead>
-              <tr className="border-b text-left text-xs uppercase tracking-[0.14em] text-muted-foreground">
-                <th className="py-2 pr-4 font-medium">Interval</th>
-                <th className="py-2 pr-4 font-medium">Group</th>
-                <th className="py-2 pr-4 text-right font-medium">Input</th>
-                <th className="py-2 pr-4 text-right font-medium">Output</th>
-                <th className="py-2 pr-4 text-right font-medium">Reasoning</th>
-                <th className="py-2 pr-4 text-right font-medium">Cache read</th>
-                <th className="py-2 pr-4 text-right font-medium">Cache write</th>
-                <th className="py-2 text-right font-medium">
-                  {getUsageSummaryLabel(props.labels, props.metricKind, props.dimension)}
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr className="border-b last:border-0" key={`${row.bucket}:${row.groupKey}`}>
-                  <td className="py-2 pr-4 text-muted-foreground">{formatDate(row.bucket)}</td>
-                  <td className="max-w-72 truncate py-2 pr-4 font-medium">{row.groupLabel}</td>
-                  <td className="py-2 pr-4 text-right">{formatMetricValue(getUsagePointValue(row, props.metricKind, "input"), props.metricKind)}</td>
-                  <td className="py-2 pr-4 text-right">{formatMetricValue(getUsagePointValue(row, props.metricKind, "output"), props.metricKind)}</td>
-                  <td className="py-2 pr-4 text-right">{formatMetricValue(getUsagePointValue(row, props.metricKind, "reasoning"), props.metricKind)}</td>
-                  <td className="py-2 pr-4 text-right">{formatMetricValue(getUsagePointValue(row, props.metricKind, "cacheRead"), props.metricKind)}</td>
-                  <td className="py-2 pr-4 text-right">{formatMetricValue(getUsagePointValue(row, props.metricKind, "cacheWrite"), props.metricKind)}</td>
-                  <td className="py-2 text-right font-medium">{formatMetricValue(getUsagePointValue(row, props.metricKind, props.dimension), props.metricKind)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ActivityChart(props: {
-  points: AdminActivityPoint[];
-  interval: "hour" | "day";
-  maxBars: number;
-  labels: ResolvedAdminConfig["labels"];
-  usageMetricKind: AdminUsageMetricKind;
-  usageDimension: AdminUsageDimension;
-}) {
-  const trimmedPoints = props.points.slice(-props.maxBars);
-  const maxUsageValue = Math.max(
-    ...trimmedPoints.map((point) =>
-      getActivityUsageValue(
-        point,
-        props.usageMetricKind,
-        props.usageDimension,
-      )
-    ),
-    1,
-  );
-
-  return (
-    <div className="rounded-xl border bg-card p-5 shadow-sm">
-      {trimmedPoints.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {props.labels.noResults}
-        </p>
-      ) : (
-        <div className="flex min-h-48 items-end gap-2">
-          {trimmedPoints.map((point) => {
-            const usageValue = getActivityUsageValue(
-              point,
-              props.usageMetricKind,
-              props.usageDimension,
-            );
-            return (
-              <div
-                className="flex min-w-0 flex-1 flex-col items-center gap-2"
-                key={point.bucket}
-              >
-                <div className="flex h-36 w-full items-end rounded-lg bg-muted px-1 pb-1">
-                  <div
-                    className="w-full rounded-md bg-primary transition-all"
-                    style={{
-                      height: `${Math.max((usageValue / maxUsageValue) * 100, 8)}%`,
-                    }}
-                  />
-                </div>
-                <div className="text-center">
-                  <p className="text-xs font-medium">
-                    {formatBucket(point.bucket, props.interval)}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">
-                    {formatMetricValue(usageValue, props.usageMetricKind)}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">
-                    {formatNumber(point.totalCalls)} {props.labels.usageCallsDetail}
-                  </p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function DataTable<T>(props: {
-  title: string;
-  searchPlaceholder: string;
-  searchValue: string;
-  setSearchValue: (value: string) => void;
-  rows: T[];
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-xl border bg-card p-5 shadow-sm">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <SectionHeading title={props.title} />
         <Input
-          className="h-8 w-full max-w-44"
-          onChange={(event) => props.setSearchValue(event.target.value)}
-          placeholder={props.searchPlaceholder}
-          value={props.searchValue}
+          className={cn("h-9 bg-background", props.icon && "pl-8")}
+          onChange={(event) => props.onChange(event.target.value)}
+          type={props.type ?? "text"}
+          value={props.value}
         />
       </div>
-      {props.rows.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No results</p>
-      ) : (
-        props.children
-      )}
-    </div>
+    </label>
   );
 }
 
-function ThreadsTable({
-  rows,
-  labels,
-  onThreadClick,
+function EmptyDashboard({
+  description,
+  title,
 }: {
-  rows: AdminThreadSummary[];
-  labels: ResolvedAdminConfig["labels"];
-  onThreadClick?: (threadId: string) => void;
+  description: string;
+  title: string;
 }) {
   return (
-    <div className="space-y-3">
-      {rows.map((thread) => (
-        <div
-          className={cn(
-            "rounded-lg border bg-muted/50 p-4",
-            onThreadClick && "cursor-pointer hover:bg-muted transition-colors",
-          )}
-          key={thread.threadId}
-          onClick={() => onThreadClick?.(thread.threadId)}
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="font-medium">{thread.name}</p>
-              <p className="mt-1 truncate text-xs text-muted-foreground">
-                {thread.summary ??
-                  thread.lastMessagePreview ??
-                  "No summary yet"}
-              </p>
-            </div>
-            <Badge
-              variant={
-                thread.status === "archived" ? "secondary" : "default"
-              }
-            >
-              {thread.status === "archived"
-                ? labels.statusArchived
-                : labels.statusActive}
-            </Badge>
-          </div>
-          <div className="mt-3 flex flex-wrap gap-3 text-xs text-muted-foreground">
-            <span>{formatNumber(thread.messageCount)} messages</span>
-            <span>{thread.participantIds.length} participants</span>
-            <span>{formatDate(thread.lastActivityAt)}</span>
-          </div>
-        </div>
-      ))}
+    <div className="rounded-lg border border-dashed bg-muted/20 p-8 text-center">
+      <h3 className="text-base font-semibold">{title}</h3>
+      <p className="mt-2 text-sm text-muted-foreground">{description}</p>
     </div>
   );
 }
 
-function ParticipantsTable({
-  rows,
-  labels,
-}: {
-  rows: AdminParticipantSummary[];
-  labels: ResolvedAdminConfig["labels"];
-}) {
-  return (
-    <div className="space-y-3">
-      {rows.map((participant) => (
-        <div
-          className="rounded-lg border bg-muted/50 p-4"
-          key={`${participant.namespace}:${participant.externalId}`}
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="font-medium">{participant.displayName}</p>
-              <p className="mt-1 text-xs uppercase tracking-[0.18em] text-muted-foreground">
-                {participant.participantType}
-              </p>
-            </div>
-            <Badge variant="outline">
-              {participant.isGlobal
-                ? labels.scopeGlobal
-                : labels.scopeScoped}
-            </Badge>
-          </div>
-          <div className="mt-3 flex flex-wrap gap-3 text-xs text-muted-foreground">
-            <span>{formatNumber(participant.messageCount)} messages</span>
-            <span>{formatNumber(participant.threadCount)} threads</span>
-            <span>{formatDate(participant.lastActivityAt)}</span>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+interface ChartSeries {
+  color: string;
+  id: string;
+  key: string;
+  label: string;
 }
 
-function AgentsTable({
-  rows,
-  labels,
-  usageMetricKind,
-  usageDimension,
-}: {
-  rows: AdminAgentSummary[];
-  labels: ResolvedAdminConfig["labels"];
-  usageMetricKind: AdminUsageMetricKind;
-  usageDimension: AdminUsageDimension;
-}) {
-  return (
-    <div className="space-y-3">
-      {rows.map((agent) => (
-        <div
-          className="rounded-lg border bg-muted/50 p-4"
-          key={`${agent.namespace}:${agent.agentId}`}
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="font-medium">{agent.displayName}</p>
-              <p className="mt-1 truncate text-xs text-muted-foreground">
-                {agent.description ?? agent.agentId}
-              </p>
-            </div>
-            <Badge variant="outline">
-              {agent.isConfigured
-                ? labels.configured
-                : labels.unconfigured}
-            </Badge>
-          </div>
-          <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-            {[
-              {
-                label: "Messages",
-                value: formatNumber(agent.messageCount),
-              },
-              {
-                label: "LLM calls",
-                value: formatNumber(agent.llmCallCount),
-              },
-              {
-                label: "Tool calls",
-                value: formatNumber(agent.toolCallMessageCount),
-              },
-              {
-                label: getUsageSummaryLabel(labels, usageMetricKind, usageDimension),
-                value: formatMetricValue(
-                  getAgentUsageValue(agent, usageMetricKind, usageDimension),
-                  usageMetricKind,
-                ),
-              },
-            ].map((item) => (
-              <div key={item.label}>
-                <p className="font-medium text-foreground">{item.value}</p>
-                <p className="text-muted-foreground">{item.label}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
+interface ChartState {
+  config: ChartConfig;
+  data: Array<Record<string, number | string>>;
+  series: ChartSeries[];
 }
 
-function formatBucket(bucket: string, interval: "hour" | "day") {
-  const date = new Date(bucket);
-  if (Number.isNaN(date.getTime())) return bucket;
-  return interval === "hour"
-    ? date.toLocaleString(undefined, {
-        hour: "numeric",
-        month: "short",
-        day: "numeric",
-      })
-    : date.toLocaleDateString(undefined, {
-        month: "short",
-        day: "numeric",
-      });
+interface AggregatedUsageRow extends AdminUsageTotals {
+  groupKey: string;
+  groupLabel: string;
+  value: number;
 }
 
-function formatUsageBucket(bucket: string, interval: AdminUsageInterval) {
-  const date = new Date(bucket);
-  if (Number.isNaN(date.getTime())) return bucket;
-  if (interval === "minute" || interval === "hour") {
-    return date.toLocaleString(undefined, {
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: interval === "minute" ? "2-digit" : undefined,
-    });
-  }
-  if (interval === "month") {
-    return date.toLocaleDateString(undefined, {
-      month: "short",
-      year: "numeric",
-    });
-  }
-  return date.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function formatDate(value: string | null) {
-  if (!value) return "No activity";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function formatNumber(value: number) {
-  return new Intl.NumberFormat().format(value);
-}
+const EMPTY_TOTALS: AdminUsageTotals = {
+  inputTokens: 0,
+  outputTokens: 0,
+  reasoningTokens: 0,
+  cacheReadInputTokens: 0,
+  cacheCreationInputTokens: 0,
+  totalTokens: 0,
+  inputCostUsd: 0,
+  outputCostUsd: 0,
+  reasoningCostUsd: 0,
+  cacheReadInputCostUsd: 0,
+  cacheCreationInputCostUsd: 0,
+  totalCostUsd: 0,
+  totalCalls: 0,
+};
 
 const USAGE_DIMENSIONS: AdminUsageDimension[] = [
   "total",
@@ -941,9 +878,121 @@ const USAGE_CHART_COLORS = [
   "hsl(var(--muted-foreground))",
 ];
 
-function emptyToUndefined(value: string): string | undefined {
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+function buildChartState(
+  points: AdminUsagePoint[],
+  metricKind: AdminUsageMetricKind,
+  dimension: AdminUsageDimension,
+  interval: AdminUsageInterval,
+): ChartState {
+  const topGroups = topUsageGroups(points, metricKind, dimension);
+  const groupIdByKey = new Map(topGroups.map((group, index) => [
+    group.key,
+    `series${index + 1}`,
+  ]));
+  const series = topGroups.map((group, index) => ({
+    color: USAGE_CHART_COLORS[index % USAGE_CHART_COLORS.length],
+    id: groupIdByKey.get(group.key) ?? `series${index + 1}`,
+    key: group.key,
+    label: group.label,
+  }));
+  const config = Object.fromEntries(
+    series.map((item) => [item.id, {
+      color: item.color,
+      label: item.label,
+    }]),
+  );
+  const buckets = buildUsageBuckets(points);
+  const data = buckets.map((bucket) => {
+    const row: Record<string, number | string> = {
+      bucket: bucket.bucket,
+      label: formatUsageBucket(bucket.bucket, interval),
+    };
+    for (const item of series) row[item.id] = 0;
+    for (const point of bucket.points) {
+      const seriesId = groupIdByKey.get(point.groupKey);
+      if (!seriesId) continue;
+      row[seriesId] = Number(row[seriesId] ?? 0) +
+        getUsageTotalValue(point, metricKind, dimension);
+    }
+    return row;
+  });
+
+  return {
+    config,
+    data,
+    series,
+  };
+}
+
+function buildUsageBuckets(points: AdminUsagePoint[]) {
+  const byBucket = new Map<string, AdminUsagePoint[]>();
+  for (const point of points) {
+    const rows = byBucket.get(point.bucket) ?? [];
+    rows.push(point);
+    byBucket.set(point.bucket, rows);
+  }
+  return Array.from(byBucket.entries())
+    .map(([bucket, bucketPoints]) => ({ bucket, points: bucketPoints }))
+    .sort((a, b) =>
+      new Date(a.bucket).getTime() - new Date(b.bucket).getTime()
+    );
+}
+
+function aggregateUsageRows(
+  points: AdminUsagePoint[],
+  metricKind: AdminUsageMetricKind,
+  dimension: AdminUsageDimension,
+): AggregatedUsageRow[] {
+  const totals = new Map<string, AggregatedUsageRow>();
+  for (const point of points) {
+    const existing = totals.get(point.groupKey) ?? {
+      ...EMPTY_TOTALS,
+      groupKey: point.groupKey,
+      groupLabel: point.groupLabel,
+      value: 0,
+    };
+    addUsageTotals(existing, point);
+    existing.value = getUsageTotalValue(existing, metricKind, dimension);
+    totals.set(point.groupKey, existing);
+  }
+  return Array.from(totals.values())
+    .sort((a, b) => b.value - a.value);
+}
+
+function addUsageTotals(target: AdminUsageTotals, source: AdminUsageTotals) {
+  target.inputTokens += source.inputTokens;
+  target.outputTokens += source.outputTokens;
+  target.reasoningTokens += source.reasoningTokens;
+  target.cacheReadInputTokens += source.cacheReadInputTokens;
+  target.cacheCreationInputTokens += source.cacheCreationInputTokens;
+  target.totalTokens += source.totalTokens;
+  target.inputCostUsd += source.inputCostUsd;
+  target.outputCostUsd += source.outputCostUsd;
+  target.reasoningCostUsd += source.reasoningCostUsd;
+  target.cacheReadInputCostUsd += source.cacheReadInputCostUsd;
+  target.cacheCreationInputCostUsd += source.cacheCreationInputCostUsd;
+  target.totalCostUsd += source.totalCostUsd;
+  target.totalCalls += source.totalCalls;
+}
+
+function topUsageGroups(
+  points: AdminUsagePoint[],
+  metricKind: AdminUsageMetricKind,
+  dimension: AdminUsageDimension,
+) {
+  const totals = new Map<string, { key: string; label: string; value: number }>();
+  for (const point of points) {
+    const existing = totals.get(point.groupKey) ?? {
+      key: point.groupKey,
+      label: point.groupLabel,
+      value: 0,
+    };
+    existing.value += getUsageTotalValue(point, metricKind, dimension);
+    totals.set(point.groupKey, existing);
+  }
+  return Array.from(totals.values())
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 6);
 }
 
 function getUsageRange(
@@ -969,36 +1018,9 @@ function getUsageRange(
   return { from: from.toISOString(), to: to.toISOString() };
 }
 
-function buildUsageBuckets(points: AdminUsagePoint[]) {
-  const byBucket = new Map<string, AdminUsagePoint[]>();
-  for (const point of points) {
-    const rows = byBucket.get(point.bucket) ?? [];
-    rows.push(point);
-    byBucket.set(point.bucket, rows);
-  }
-  return Array.from(byBucket.entries())
-    .map(([bucket, bucketPoints]) => ({ bucket, points: bucketPoints }))
-    .sort((a, b) => new Date(a.bucket).getTime() - new Date(b.bucket).getTime());
-}
-
-function topUsageGroups(
-  points: AdminUsagePoint[],
-  metricKind: AdminUsageMetricKind,
-  dimension: AdminUsageDimension,
-) {
-  const totals = new Map<string, { key: string; label: string; value: number }>();
-  for (const point of points) {
-    const existing = totals.get(point.groupKey) ?? {
-      key: point.groupKey,
-      label: point.groupLabel,
-      value: 0,
-    };
-    existing.value += getUsagePointValue(point, metricKind, dimension);
-    totals.set(point.groupKey, existing);
-  }
-  return Array.from(totals.values())
-    .sort((a, b) => b.value - a.value)
-    .slice(0, 6);
+function emptyToUndefined(value: string): string | undefined {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function getUsageDimensionLabel(
@@ -1035,169 +1057,114 @@ function getUsageSummaryLabel(
   return `${getUsageDimensionLabel(labels, dimension)} ${metricLabel}`;
 }
 
-function getOverviewUsageValue(
-  overview: AdminOverview,
-  metricKind: AdminUsageMetricKind,
-  dimension: AdminUsageDimension,
-) {
-  const llmTotals = overview.llmTotals;
-  if (metricKind === "calls") return llmTotals.totalCalls;
-  if (metricKind === "cost") {
-    switch (dimension) {
-      case "input":
-        return llmTotals.inputCostUsd;
-      case "output":
-        return llmTotals.outputCostUsd;
-      case "reasoning":
-        return llmTotals.reasoningCostUsd;
-      case "cacheRead":
-        return llmTotals.cacheReadInputCostUsd;
-      case "cacheWrite":
-        return llmTotals.cacheCreationInputCostUsd;
-      case "total":
-      default:
-        return llmTotals.totalCostUsd;
-    }
-  }
-
-  switch (dimension) {
-    case "input":
-      return llmTotals.inputTokens;
-    case "output":
-      return llmTotals.outputTokens;
-    case "reasoning":
-      return llmTotals.reasoningTokens;
-    case "cacheRead":
-      return llmTotals.cacheReadInputTokens;
-    case "cacheWrite":
-      return llmTotals.cacheCreationInputTokens;
-    case "total":
+function getGroupByLabel(groupBy: AdminUsageGroupBy) {
+  switch (groupBy) {
+    case "thread":
+      return "Thread";
+    case "namespace":
+      return "Namespace";
+    case "provider":
+      return "Provider";
+    case "model":
+      return "Model";
+    case "participant":
     default:
-      return llmTotals.totalTokens;
+      return "Participant";
   }
 }
 
-function getAgentUsageValue(
-  agent: AdminAgentSummary,
+function getUsageTotalValue(
+  totals: AdminUsageTotals,
   metricKind: AdminUsageMetricKind,
   dimension: AdminUsageDimension,
 ) {
+  if (metricKind === "calls") return totals.totalCalls;
   if (metricKind === "cost") {
     switch (dimension) {
       case "input":
-        return agent.inputCostUsd;
+        return totals.inputCostUsd;
       case "output":
-        return agent.outputCostUsd;
+        return totals.outputCostUsd;
       case "reasoning":
-        return agent.reasoningCostUsd;
+        return totals.reasoningCostUsd;
       case "cacheRead":
-        return agent.cacheReadInputCostUsd;
+        return totals.cacheReadInputCostUsd;
       case "cacheWrite":
-        return agent.cacheCreationInputCostUsd;
+        return totals.cacheCreationInputCostUsd;
       case "total":
       default:
-        return agent.totalCostUsd;
+        return totals.totalCostUsd;
     }
   }
-  if (metricKind === "calls") return agent.llmCallCount;
 
   switch (dimension) {
     case "input":
-      return agent.inputTokens;
+      return totals.inputTokens;
     case "output":
-      return agent.outputTokens;
+      return totals.outputTokens;
     case "reasoning":
-      return agent.reasoningTokens;
+      return totals.reasoningTokens;
     case "cacheRead":
-      return agent.cacheReadInputTokens;
+      return totals.cacheReadInputTokens;
     case "cacheWrite":
-      return agent.cacheCreationInputTokens;
+      return totals.cacheCreationInputTokens;
     case "total":
     default:
-      return agent.totalTokens;
+      return totals.totalTokens;
   }
 }
 
-function getActivityUsageValue(
-  point: AdminActivityPoint,
-  metricKind: AdminUsageMetricKind,
-  dimension: AdminUsageDimension,
-) {
-  if (metricKind === "cost") {
-    switch (dimension) {
-      case "input":
-        return point.inputCostUsd;
-      case "output":
-        return point.outputCostUsd;
-      case "reasoning":
-        return point.reasoningCostUsd;
-      case "cacheRead":
-        return point.cacheReadInputCostUsd;
-      case "cacheWrite":
-        return point.cacheCreationInputCostUsd;
-      case "total":
-      default:
-        return point.totalCostUsd;
-    }
+function formatUsageBucket(bucket: string, interval: AdminUsageInterval) {
+  const date = new Date(bucket);
+  if (Number.isNaN(date.getTime())) return bucket;
+  if (interval === "minute" || interval === "hour") {
+    return date.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: interval === "minute" ? "2-digit" : undefined,
+    });
   }
-  if (metricKind === "calls") return point.llmCallCount;
-
-  switch (dimension) {
-    case "input":
-      return point.inputTokens;
-    case "output":
-      return point.outputTokens;
-    case "reasoning":
-      return point.reasoningTokens;
-    case "cacheRead":
-      return point.cacheReadInputTokens;
-    case "cacheWrite":
-      return point.cacheCreationInputTokens;
-    case "total":
-    default:
-      return point.totalTokens;
+  if (interval === "month") {
+    return date.toLocaleDateString(undefined, {
+      month: "short",
+      year: "numeric",
+    });
   }
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
 }
 
-function getUsagePointValue(
-  point: AdminUsagePoint,
-  metricKind: AdminUsageMetricKind,
-  dimension: AdminUsageDimension,
+function formatUsageRangeLabel(
+  period: AdminDatePreset | "custom",
+  range: { from?: string; to?: string },
 ) {
-  if (metricKind === "cost") {
-    switch (dimension) {
-      case "input":
-        return point.inputCostUsd;
-      case "output":
-        return point.outputCostUsd;
-      case "reasoning":
-        return point.reasoningCostUsd;
-      case "cacheRead":
-        return point.cacheReadInputCostUsd;
-      case "cacheWrite":
-        return point.cacheCreationInputCostUsd;
-      case "total":
-      default:
-        return point.totalCostUsd;
-    }
-  }
-  if (metricKind === "calls") return point.totalCalls;
+  if (period !== "custom") return period;
+  if (!range.from && !range.to) return "Custom";
+  return `${formatShortDate(range.from)} - ${formatShortDate(range.to)}`;
+}
 
-  switch (dimension) {
-    case "input":
-      return point.inputTokens;
-    case "output":
-      return point.outputTokens;
-    case "reasoning":
-      return point.reasoningTokens;
-    case "cacheRead":
-      return point.cacheReadInputTokens;
-    case "cacheWrite":
-      return point.cacheCreationInputTokens;
-    case "total":
-    default:
-      return point.totalTokens;
-  }
+function formatShortDate(value?: string) {
+  if (!value) return "Open";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function formatNumber(value: number) {
+  return new Intl.NumberFormat().format(value);
+}
+
+function formatPercent(value: number) {
+  return new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 1,
+    style: "percent",
+  }).format(value);
 }
 
 function formatMetricValue(
@@ -1209,8 +1176,8 @@ function formatMetricValue(
     const maximumFractionDigits = absoluteValue >= 1
       ? 2
       : absoluteValue >= 0.01
-        ? 4
-        : 6;
+      ? 4
+      : 6;
     return new Intl.NumberFormat(undefined, {
       style: "currency",
       currency: "USD",
@@ -1220,4 +1187,21 @@ function formatMetricValue(
   }
 
   return formatNumber(value);
+}
+
+function formatCompactMetric(value: number, metricKind: AdminUsageMetricKind) {
+  if (metricKind === "cost") {
+    return new Intl.NumberFormat(undefined, {
+      compactDisplay: "short",
+      currency: "USD",
+      maximumFractionDigits: 1,
+      notation: "compact",
+      style: "currency",
+    }).format(value);
+  }
+  return new Intl.NumberFormat(undefined, {
+    compactDisplay: "short",
+    maximumFractionDigits: 1,
+    notation: "compact",
+  }).format(value);
 }

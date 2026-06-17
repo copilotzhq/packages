@@ -14,6 +14,7 @@ export type AdminUsageGroupBy =
   | "namespace"
   | "provider"
   | "model";
+export type AdminUsageAttribution = "generatedBy" | "initiatedBy";
 export type AdminUsageDimension =
   | "total"
   | "input"
@@ -136,6 +137,7 @@ export interface AdminUsageFilters {
   interval?: AdminUsageInterval;
   metric?: AdminUsageMetricKind;
   groupBy?: AdminUsageGroupBy;
+  attribution?: AdminUsageAttribution;
   threadId?: string;
   participantId?: string;
   participantType?: "all" | "human" | "agent" | "job";
