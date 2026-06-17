@@ -48,6 +48,8 @@ export const CopilotzAdmin: React.FC<CopilotzAdminProps> = ({
   const [route, setRoute] = useState<AdminRoute>({ page: config.defaultPage });
   const [namespace, setNamespace] = useState(config.namespace);
   const [collections, setCollections] = useState<string[]>([]);
+  const [headerControls, setHeaderControls] = useState<React.ReactNode>(null);
+  const [headerRefresh, setHeaderRefresh] = useState<(() => void) | null>(null);
 
   const [threadSearch, setThreadSearch] = useState("");
   const [participantSearch, setParticipantSearch] = useState("");
@@ -181,6 +183,8 @@ export const CopilotzAdmin: React.FC<CopilotzAdminProps> = ({
             onParticipantSearchChange={setParticipantSearch}
             onAgentSearchChange={setAgentSearch}
             onThreadClick={handleThreadClick}
+            setHeaderControls={setHeaderControls}
+            setHeaderRefresh={setHeaderRefresh}
           />
         );
 
@@ -287,15 +291,18 @@ export const CopilotzAdmin: React.FC<CopilotzAdminProps> = ({
               <AdminHeader
                 config={config}
                 currentRoute={route}
-                range={admin.filters.range}
-                interval={admin.filters.interval}
-                onRangeChange={admin.setRange}
-                onIntervalChange={admin.setInterval}
-                onRefresh={() => void admin.refresh()}
+                onRefresh={() => {
+                  if (route.page === "dashboard" && headerRefresh) {
+                    headerRefresh();
+                    return;
+                  }
+                  void admin.refresh();
+                }}
                 isLoading={admin.isLoading}
+                controls={route.page === "dashboard" ? headerControls : null}
               />
 
-              <div className="flex-1 overflow-auto p-6">
+              <div className="flex-1 overflow-auto p-4">
                 {renderCurrentView()}
               </div>
             </div>

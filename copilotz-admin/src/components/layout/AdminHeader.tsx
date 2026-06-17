@@ -4,16 +4,7 @@ import { Card, CardHeader } from "../ui/card";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { SidebarTrigger } from "../ui/sidebar";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../ui/select";
 import type {
-  AdminDatePreset,
-  AdminActivityInterval,
   AdminPage,
   AdminRoute,
   ResolvedAdminConfig,
@@ -35,23 +26,17 @@ const PAGE_TITLES: Record<string, string> = {
 export interface AdminHeaderProps {
   config: ResolvedAdminConfig;
   currentRoute: AdminRoute;
-  range: AdminDatePreset;
-  interval: AdminActivityInterval;
-  onRangeChange: (range: AdminDatePreset) => void;
-  onIntervalChange: (interval: AdminActivityInterval) => void;
   onRefresh: () => void;
   isLoading?: boolean;
+  controls?: React.ReactNode;
 }
 
 export const AdminHeader: React.FC<AdminHeaderProps> = ({
   config,
   currentRoute,
-  range,
-  interval,
-  onRangeChange,
-  onIntervalChange,
   onRefresh,
   isLoading,
+  controls,
 }) => {
   let pageTitle =
     config.labels[`${currentRoute.page}Title` as keyof typeof config.labels] ||
@@ -63,70 +48,28 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({
   }
 
   return (
-    <Card className="py-0 border-b rounded-none relative z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-      <CardHeader className="p-2">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1">
+    <Card className="py-0 border-b rounded-none relative z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 shadow-none">
+      <CardHeader className="px-3 py-2">
+        <div className="flex min-h-10 flex-wrap items-center gap-2">
+          <div className="flex min-w-0 items-center gap-1">
             <Tooltip>
               <TooltipTrigger asChild>
                 <SidebarTrigger className="-ml-1" />
               </TooltipTrigger>
               <TooltipContent>Toggle Sidebar</TooltipContent>
             </Tooltip>
-            <h1 className="text-sm font-medium ml-2">{pageTitle}</h1>
+            <h1 className="ml-2 whitespace-nowrap text-sm font-medium">
+              {pageTitle}
+            </h1>
           </div>
 
-          <div className="flex-1" />
+          {controls && (
+            <div className="flex min-w-[240px] flex-1 items-center justify-end gap-2 overflow-x-auto">
+              {controls}
+            </div>
+          )}
 
-          <div className="flex items-center gap-1">
-            {currentRoute.page === "dashboard" && (
-              <>
-                <Button
-                  variant={range === "24h" ? "default" : "ghost"}
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() => onRangeChange("24h")}
-                >
-                  {config.labels.range24h}
-                </Button>
-                <Button
-                  variant={range === "7d" ? "default" : "ghost"}
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() => onRangeChange("7d")}
-                >
-                  {config.labels.range7d}
-                </Button>
-                <Button
-                  variant={range === "30d" ? "default" : "ghost"}
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() => onRangeChange("30d")}
-                >
-                  {config.labels.range30d}
-                </Button>
-
-                <Select
-                  value={interval}
-                  onValueChange={(v) =>
-                    onIntervalChange(v as AdminActivityInterval)
-                  }
-                >
-                  <SelectTrigger className="h-7 w-[90px] text-xs">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="hour">
-                      {config.labels.intervalHour}
-                    </SelectItem>
-                    <SelectItem value="day">
-                      {config.labels.intervalDay}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </>
-            )}
-
+          <div className="ml-auto flex items-center gap-1">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
