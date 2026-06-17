@@ -42,8 +42,6 @@ import { Button } from "../ui/button";
 import {
   Card,
   CardContent,
-  CardHeader,
-  CardTitle,
 } from "../ui/card";
 import {
   ChartConfig,
@@ -59,6 +57,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
 interface DashboardViewProps {
   config: ResolvedAdminConfig;
@@ -299,10 +298,10 @@ function UsageDashboard({
   return (
     <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,4fr)_minmax(0,5fr)] gap-3">
       <div className="space-y-3">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0">
             <h2 className="text-xl font-semibold tracking-tight">
-            {config.labels.llmUsageTitle}
+              {config.labels.llmUsageTitle}
             </h2>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <Badge variant="outline">{formatUsageRangeLabel(period, range)}</Badge>
@@ -346,23 +345,7 @@ function UsageDashboard({
         />
       </div>
 
-      <Card className="min-h-0 gap-2 overflow-hidden py-3">
-        <CardHeader className="px-4">
-          <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-            <div>
-              <CardTitle className="text-base">
-                {getUsageSummaryLabel(config.labels, metricKind, dimension)}
-              </CardTitle>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {formatMetricValue(
-                  getUsageTotalValue(totals, metricKind, dimension),
-                  metricKind,
-                )}{" "}
-                across {formatNumber(totals.totalCalls)} calls
-              </p>
-            </div>
-          </div>
-        </CardHeader>
+      <Card className="min-h-0 gap-0 overflow-hidden py-2">
         <CardContent className="min-h-0 flex-1 px-2 lg:px-4">
           {error ? (
             <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
@@ -536,15 +519,7 @@ function UsageTable({
   const filterable = groupBy !== "namespace";
 
   return (
-    <Card className="min-h-0 gap-2 overflow-hidden py-3">
-      <CardHeader className="px-4">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <CardTitle className="text-base">Usage detail</CardTitle>
-          <Badge variant="outline">
-            {formatNumber(rows.length)} {getGroupByLabel(groupBy).toLowerCase()}
-          </Badge>
-        </div>
-      </CardHeader>
+    <Card className="min-h-0 gap-0 overflow-hidden py-0">
       <CardContent className="min-h-0 flex-1 overflow-hidden px-0">
         {rows.length === 0 ? (
           <p className="px-5 py-4 text-sm text-muted-foreground">
@@ -882,21 +857,26 @@ function HeaderSelect(props: {
   width: string;
 }) {
   return (
-    <Select value={props.value} onValueChange={props.onValueChange}>
-      <SelectTrigger
-        aria-label={props.label}
-        className={cn("h-8 bg-background text-xs", props.width)}
-      >
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {props.options.map(([value, label]) => (
-          <SelectItem key={value} value={value}>
-            {label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <Tooltip>
+      <Select value={props.value} onValueChange={props.onValueChange}>
+        <TooltipTrigger asChild>
+          <SelectTrigger
+            aria-label={props.label}
+            className={cn("h-8 bg-background text-xs", props.width)}
+          >
+            <SelectValue />
+          </SelectTrigger>
+        </TooltipTrigger>
+        <SelectContent>
+          {props.options.map(([value, label]) => (
+            <SelectItem key={value} value={value}>
+              {label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <TooltipContent>{props.label}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -908,29 +888,34 @@ function UsageSelect(props: {
   compact?: boolean;
 }) {
   return (
-    <label className={cn("space-y-1", props.compact && "w-[116px]")}>
-      <span className="sr-only">
-        {props.label}
-      </span>
-      <Select value={props.value} onValueChange={props.onValueChange}>
-        <SelectTrigger
-          aria-label={props.label}
-          className={cn(
-            "w-full min-w-0 bg-background",
-            props.compact ? "h-8 text-xs" : "h-9",
-          )}
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {props.options.map(([value, label]) => (
-            <SelectItem key={value} value={value}>
-              {label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </label>
+    <Tooltip>
+      <label className={cn("space-y-1", props.compact && "w-[116px]")}>
+        <span className="sr-only">
+          {props.label}
+        </span>
+        <Select value={props.value} onValueChange={props.onValueChange}>
+          <TooltipTrigger asChild>
+            <SelectTrigger
+              aria-label={props.label}
+              className={cn(
+                "w-full min-w-0 bg-background",
+                props.compact ? "h-8 text-xs" : "h-9",
+              )}
+            >
+              <SelectValue />
+            </SelectTrigger>
+          </TooltipTrigger>
+          <SelectContent>
+            {props.options.map(([value, label]) => (
+              <SelectItem key={value} value={value}>
+                {label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </label>
+      <TooltipContent>{props.label}</TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -943,29 +928,34 @@ function FilterInput(props: {
   compact?: boolean;
 }) {
   return (
-    <label className={cn("space-y-1", props.compact && "w-[150px]")}>
-      <span className="sr-only">
-        {props.label}
-      </span>
-      <div className="relative">
-        {props.icon && (
-          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
-            {props.icon}
-          </span>
-        )}
-        <Input
-          aria-label={props.label}
-          className={cn(
-            "bg-background",
-            props.compact ? "h-8 text-xs" : "h-9",
-            props.icon && "pl-8",
-          )}
-          onChange={(event) => props.onChange(event.target.value)}
-          type={props.type ?? "text"}
-          value={props.value}
-        />
-      </div>
-    </label>
+    <Tooltip>
+      <label className={cn("space-y-1", props.compact && "w-[150px]")}>
+        <span className="sr-only">
+          {props.label}
+        </span>
+        <TooltipTrigger asChild>
+          <div className="relative">
+            {props.icon && (
+              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
+                {props.icon}
+              </span>
+            )}
+            <Input
+              aria-label={props.label}
+              className={cn(
+                "bg-background",
+                props.compact ? "h-8 text-xs" : "h-9",
+                props.icon && "pl-8",
+              )}
+              onChange={(event) => props.onChange(event.target.value)}
+              type={props.type ?? "text"}
+              value={props.value}
+            />
+          </div>
+        </TooltipTrigger>
+      </label>
+      <TooltipContent>{props.label}</TooltipContent>
+    </Tooltip>
   );
 }
 
