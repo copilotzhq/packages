@@ -6,7 +6,14 @@ export type RequestHeadersProvider = () =>
 
 export type AdminDatePreset = "24h" | "7d" | "30d";
 export type AdminActivityInterval = "hour" | "day";
-export type AdminUsageMetricKind = "tokens" | "cost";
+export type AdminUsageInterval = "minute" | "hour" | "day" | "week" | "month";
+export type AdminUsageMetricKind = "tokens" | "cost" | "calls";
+export type AdminUsageGroupBy =
+  | "thread"
+  | "participant"
+  | "namespace"
+  | "provider"
+  | "model";
 export type AdminUsageDimension =
   | "total"
   | "input"
@@ -75,6 +82,7 @@ export interface AdminOverview {
     total: number;
     humans: number;
     agents: number;
+    jobs?: number;
   };
   llmTotals: AdminUsageTotals;
 }
@@ -102,12 +110,38 @@ export interface AdminThreadSummary {
 export interface AdminParticipantSummary {
   externalId: string;
   displayName: string;
-  participantType: "human" | "agent";
+  participantType: "human" | "agent" | "job";
   namespace: string;
   isGlobal: boolean;
   messageCount: number;
   threadCount: number;
   lastActivityAt: string | null;
+}
+
+export interface AdminUsagePoint extends AdminUsageTotals {
+  bucket: string;
+  groupKey: string;
+  groupLabel: string;
+}
+
+export interface AdminUsageResponse {
+  points: AdminUsagePoint[];
+  rows: AdminUsagePoint[];
+  totals: AdminUsageTotals;
+}
+
+export interface AdminUsageFilters {
+  from?: string;
+  to?: string;
+  interval?: AdminUsageInterval;
+  metric?: AdminUsageMetricKind;
+  groupBy?: AdminUsageGroupBy;
+  threadId?: string;
+  participantId?: string;
+  participantType?: "all" | "human" | "agent" | "job";
+  namespace?: string;
+  provider?: string;
+  model?: string;
 }
 
 export interface AdminAgentSummary {

@@ -12,6 +12,8 @@ import type {
   AdminQueueEvent,
   AdminThreadDetail,
   AdminThreadSummary,
+  AdminUsageFilters,
+  AdminUsageResponse,
   RequestHeadersProvider,
 } from "./types";
 
@@ -205,6 +207,25 @@ export async function fetchAdminAgents(
     search,
     namespace,
     limit: "8",
+  }, options);
+}
+
+export async function fetchAdminUsage(
+  filters: AdminUsageFilters,
+  options?: FetchOptions,
+): Promise<AdminUsageResponse> {
+  return await fetchAdminJson<AdminUsageResponse>("/v1/admin/usage", {
+    from: filters.from,
+    to: filters.to,
+    interval: filters.interval,
+    metric: filters.metric,
+    groupBy: filters.groupBy,
+    threadId: filters.threadId,
+    participantId: filters.participantId,
+    participantType: filters.participantType,
+    namespace: filters.namespace,
+    provider: filters.provider,
+    model: filters.model,
   }, options);
 }
 

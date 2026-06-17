@@ -173,6 +173,7 @@ export const CopilotzAdmin: React.FC<CopilotzAdminProps> = ({
             participants={admin.participants}
             agents={admin.agents}
             interval={admin.filters.interval}
+            namespace={namespace}
             threadSearch={threadSearch}
             participantSearch={participantSearch}
             agentSearch={agentSearch}
