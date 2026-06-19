@@ -194,6 +194,9 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   const userContextSeedRef = useRef(userContextSeed);
   const messagePageInfoRef = useRef(messagePageInfo);
   const isLoadingOlderMessagesRef = useRef(isLoadingOlderMessages);
+  const isStreamingRef = useRef(isStreaming);
+  const threadActivityStatusRef = useRef(threadActivityStatus);
+  const isRecoveringStreamRef = useRef(isRecoveringStream);
   const senderOptionsRef = useRef<SenderResolutionOptions>({
     agents: agentOptions,
     user: userId ? { id: userId, name: userName, avatarUrl: userAvatar } : null,
@@ -215,6 +218,9 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   userContextSeedRef.current = userContextSeed;
   messagePageInfoRef.current = messagePageInfo;
   isLoadingOlderMessagesRef.current = isLoadingOlderMessages;
+  isStreamingRef.current = isStreaming;
+  threadActivityStatusRef.current = threadActivityStatus;
+  isRecoveringStreamRef.current = isRecoveringStream;
   senderOptionsRef.current = {
     agents: agentOptions,
     user: userId ? { id: userId, name: userName, avatarUrl: userAvatar } : null,
@@ -860,10 +866,19 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   }, []);
 
   const sendCopilotzMessage = useCallback(
-    async (params: { threadId?: string | null; threadExternalId?: string | null; content: string; attachments?: MediaAttachment[]; metadata?: Record<string, unknown>; threadMetadata?: Record<string, unknown>; toolCalls?: Array<{ name: string; args: Record<string, unknown> }>; userId: string; userName?: string; userMetadata?: Record<string, unknown>; agentName?: string | null; assistantMessageId?: string; assistantSender?: ChatSender; onBeforeStart?: (assistantMessageId: string) => void }) => {
+    async (params: { threadId?: string | null; threadExternalId?: string | null; content: string; attachments?: MediaAttachment[]; metadata?: Record<string, unknown>; threadMetadata?: Record<string, unknown>; toolCalls?: Array<{ name: string; args: Record<string, unknown> }>; userId: string; userName?: string; userMetadata?: Record<string, unknown>; agentName?: string | null; assistantMessageId?: string; assistantSender?: ChatSender; onBeforeStart?: (assistantMessageId: string) => void; preserveActiveRun?: boolean }) => {
       // Track the current live assistant message so one sender streak stays in one bubble.
       let currentAssistantId = params.assistantMessageId ?? generateId();
       let currentAssistantSender: ChatSender | undefined = params.assistantSender;
+      const streamOwnerThreadId = currentThreadIdRef.current;
+      const streamOwnerThreadExternalId = params.threadExternalId ?? currentThreadExternalIdRef.current;
+      const streamStillOwnsVisibleThread = () => (
+        streamOwnerThreadId
+          ? currentThreadIdRef.current === streamOwnerThreadId
+          : !streamOwnerThreadExternalId ||
+            currentThreadExternalIdRef.current === streamOwnerThreadExternalId ||
+            currentThreadIdRef.current === streamOwnerThreadExternalId
+      );
       params.onBeforeStart?.(currentAssistantId);
 
       let hasStreamProgress = false;
@@ -876,8 +891,10 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
           agent?: { id?: string | null; name?: string | null } | null;
         }
       ) => {
+        if (!streamStillOwnsVisibleThread()) return;
         if (partial && partial.length > 0) {
           hasStreamProgress = true;
+          setIsRecoveringStream(false);
         }
 
         const isReasoning = opts?.isReasoning ?? false;
@@ -944,6 +961,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       };
 
       const finalizeCurrentAssistantBubble = () => {
+        if (!streamStillOwnsVisibleThread()) return;
         setMessages((prev) => {
           const idx = prev.findIndex((m) => m.id === currentAssistantId);
           if (idx < 0) return prev;
@@ -960,6 +978,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       const curThreadId = currentThreadIdRef.current;
 
       const applyLiveToolResultUpdate = (update: ToolResultUpdate) => {
+        if (!streamStillOwnsVisibleThread()) return;
         let matched = false;
         setMessages((prev) => {
           const next = applyToolResultUpdateToMessages(prev, update, {
@@ -976,6 +995,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       };
 
       const finalizeActiveAssistantTurn = (finalAnswer?: string) => {
+        if (!streamStillOwnsVisibleThread()) return;
         setMessages((prev) => {
           const currentIdx = prev.findIndex((message) => message.id === currentAssistantId && message.role === 'assistant');
           const fallbackIdx =
@@ -1037,12 +1057,14 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       };
 
       const abortController = new AbortController();
-      abortControllerRef.current?.abort();
+      if (!params.preserveActiveRun) {
+        abortControllerRef.current?.abort();
+        recoveryPollGenerationRef.current += 1;
+        setIsRecoveringStream(false);
+      }
       abortControllerRef.current = abortController;
       stopRequestedRef.current = false;
-      recoveryPollGenerationRef.current += 1;
       setThreadActivityStatus('running');
-      setIsRecoveringStream(false);
       setIsStreaming(true);
       // Reset the live tool-result buffer at the start of every stream so
       // stale updates from a previous run can't leak into this one.
@@ -1110,6 +1132,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
               agent: raw?.payload?.agent ?? raw?.agent ?? null,
             }),
           onMessageEvent: async (event: any) => {
+            if (!streamStillOwnsVisibleThread()) return;
             const intercepted = applyEventInterceptor(event);
             if (intercepted?.handled) {
               return;
@@ -1238,6 +1261,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
             handleStreamMessageEvent(event);
           },
           onAssetEvent: async (payload: any) => {
+            if (!streamStillOwnsVisibleThread()) return;
             const intercepted = applyEventInterceptor({
               type: 'ASSET_CREATED',
               payload,
@@ -1261,7 +1285,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       const wasStopped = stopRequestedRef.current || abortController.signal.aborted || isAbortError(streamError);
       let recoveryStarted = false;
 
-      if (!wasStopped) {
+      if (!wasStopped && streamStillOwnsVisibleThread()) {
         try {
           const activityThreadId = await resolveActivityThreadId();
           if (activityThreadId) {
@@ -1282,7 +1306,13 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
         }
       }
 
-      abortControllerRef.current = null;
+      if (abortControllerRef.current === abortController) {
+        abortControllerRef.current = null;
+      }
+
+      if (!streamStillOwnsVisibleThread()) {
+        return currentAssistantId;
+      }
 
       if (recoveryStarted) {
         return currentAssistantId;
@@ -1307,6 +1337,11 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       const timestamp = nowTs();
       const curThreadId = currentThreadIdRef.current;
       const curThreadExtId = currentThreadExternalIdRef.current;
+      const sendOwnerThreadId = curThreadId;
+      const preserveActiveRun =
+        threadActivityStatusRef.current === 'running' ||
+        isRecoveringStreamRef.current ||
+        isStreamingRef.current;
 
       const existingThreadId = curThreadId ?? undefined;
       // Use Ref to check without adding dependency
@@ -1327,6 +1362,14 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       }
 
       const conversationKey = threadIdForSend ?? effectiveThreadExternalId!;
+      const sendOwnerThreadExternalId = effectiveThreadExternalId ?? curThreadExtId;
+      const stillShowingSendOwnerThread = () => (
+        sendOwnerThreadId
+          ? currentThreadIdRef.current === sendOwnerThreadId
+          : !sendOwnerThreadExternalId ||
+            currentThreadExternalIdRef.current === sendOwnerThreadExternalId ||
+            currentThreadIdRef.current === sendOwnerThreadExternalId
+      );
 
       // Get pending title for new threads if any
       const currentMetadata = threadMetadataMapRef.current[conversationKey];
@@ -1401,6 +1444,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
           agentName: preferredAgentRef.current,
           assistantMessageId: assistantPlaceholder.id,
           assistantSender,
+          preserveActiveRun,
           // Include pending title for new threads
           threadMetadata: pendingTitle ? { name: pendingTitle } : undefined,
         });
@@ -1409,7 +1453,9 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
         await new Promise((r) => setTimeout(r, 1000));
         // Refresh threads list to update metadata (message count, timestamps, etc.)
         // Don't reload messages since we already have them from streaming
-        await fetchAndSetThreadsState(userId, effectiveThreadExternalId ?? existingThreadId ?? null);
+        if (stillShowingSendOwnerThread()) {
+          await fetchAndSetThreadsState(userId, effectiveThreadExternalId ?? existingThreadId ?? null);
+        }
       } catch (error) {
         if (isAbortError(error)) return;
         console.error('Error sending Copilotz message', error);
