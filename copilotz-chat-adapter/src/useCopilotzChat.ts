@@ -9,12 +9,13 @@ import type { RequestHeadersProvider, RestMessage, RestMessagePageInfo, ThreadAc
 import { appendAssistantToolCall, closeAssistantMessage, finalizeAssistantMessage, hasVisibleAssistantOutput, type InternalChatMessage, updateAssistantMessageToken, toPublicChatMessage } from './activity';
 import { resolveAgentSender, resolveAssistantFallbackSender, resolveLiveEventSender, resolveUserSender, type SenderResolutionOptions } from './senders';
 import { convertServerMessage, isInternalMessageMetadata, prepareHydratedMessages } from './messageContract';
+import { getStreamEventPayload, isTerminalEmptyLlmResultEvent } from './streamEvents';
 import { applyToolResultUpdateToMessages, canAttachToCurrentStreamingAssistant, canAttachToStreamingAssistant, extractLiveToolCall, extractLiveToolResultUpdate, mergePersistedToolResults, messageAgentKey, matchesToolResultUpdate, prependUniqueMessages, type ToolResultUpdate } from './toolActivity';
 
 const nowTs = () => Date.now();
 const generateId = () => (globalThis.crypto?.randomUUID?.() ?? `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`) as string;
 const isAbortError = (error: unknown) => (error instanceof DOMException && error.name === 'AbortError') || (typeof error === 'object' && error !== null && 'name' in error && (error as { name?: string }).name === 'AbortError');
-const getEventPayload = (event: any) => event?.payload ?? event;
+const getEventPayload = (event: any): any => getStreamEventPayload(event) as any;
 const getEventSenderType = (payload: any): string | undefined => payload?.senderType || payload?.sender?.type;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -1150,6 +1151,9 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
             if (type === 'LLM_RESULT') {
               const finalAnswer = typeof payload?.answer === 'string' ? payload.answer : undefined;
               finalizeActiveAssistantTurn(finalAnswer);
+              if (isTerminalEmptyLlmResultEvent(event)) {
+                finalizeStreamingPlaceholders();
+              }
               return;
             }
 
