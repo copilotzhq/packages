@@ -107,6 +107,7 @@ test('persisted tool call and tool result hydrate into one completed activity', 
       senderExternalId: 'north',
       senderDisplayName: 'North',
       senderParticipantId: '01KQV7M84RVH3FZ82MT665XPBB',
+      toolExecutionId: 'tool-exec-1',
       toolCalls: [{
         id: 'tool-1',
         args: '{"action":"list_cards"}',
@@ -129,6 +130,7 @@ test('persisted tool call and tool result hydrate into one completed activity', 
   const mergedMessages = mergePersistedToolResults(viewMessages, toolResultUpdates);
   assert.deepEqual(mergedMessages[0].activity?.items[0].details?.toolCall, {
     id: 'tool-1',
+    toolExecutionId: 'tool-exec-1',
     name: 'kanban',
     arguments: { action: 'list_cards' },
     status: 'completed',
@@ -137,6 +139,7 @@ test('persisted tool call and tool result hydrate into one completed activity', 
   });
   assert.deepEqual(toolResultUpdates[0], {
     id: 'tool-1',
+    toolExecutionId: 'tool-exec-1',
     name: 'kanban',
     status: 'completed',
     result: { cards: [] },

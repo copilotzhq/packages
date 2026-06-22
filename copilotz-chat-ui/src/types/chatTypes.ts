@@ -95,6 +95,7 @@ export type CreateVoiceProvider = (
 // Tool Calls for Agent Actions
 export interface ToolCall {
   id: string;
+  toolExecutionId?: string;
   name: string;
   arguments: Record<string, any>;
   result?: any;

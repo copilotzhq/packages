@@ -13,6 +13,7 @@ export type ToolCallStatus = 'pending' | 'running' | 'completed' | 'failed';
 
 export type ParsedToolCall = {
   id?: string;
+  toolExecutionId?: string;
   name: string;
   arguments: Record<string, unknown>;
   status: ToolCallStatus;
@@ -21,6 +22,7 @@ export type ParsedToolCall = {
 
 export type ToolResultUpdate = {
   id?: string;
+  toolExecutionId?: string;
   name?: string;
   status: ToolCallStatus;
   result?: unknown;
@@ -104,6 +106,7 @@ export const applyToolResultUpdateToMessages = (
     nextMessages[i] = {
       ...applyAssistantToolResult(message, {
         ...(update.id ? { id: update.id } : {}),
+        ...(update.toolExecutionId ? { toolExecutionId: update.toolExecutionId } : {}),
         name: update.name ?? toolItem.toolName ?? toolItem.id,
         status: update.status,
         ...(update.result !== undefined ? { result: update.result } : {}),
@@ -127,6 +130,7 @@ export const extractLiveToolCall = (
 
   return {
     id: expectString(toolCall.id, 'TOOL_CALL payload.toolCall.id'),
+    ...(typeof payloadRecord.toolExecutionId === 'string' ? { toolExecutionId: payloadRecord.toolExecutionId } : {}),
     name: expectToolName(tool, 'TOOL_CALL payload.toolCall.tool.id'),
     arguments: expectToolArguments(toolCall.args, 'TOOL_CALL payload.toolCall.args'),
     status: toolCall.status === undefined ? 'running' : expectToolStatus(toolCall.status, 'TOOL_CALL payload.toolCall.status'),
@@ -160,6 +164,7 @@ export const extractToolCallsFromServerMessage = (msg: RestMessage): ParsedToolC
     : expectRecord(msg.metadata, 'message.metadata');
   const topLevelToolCalls = readToolCallArray(msg.toolCalls, 'message.toolCalls');
   const metadataToolCalls = readToolCallArray(metadata?.toolCalls, 'message.metadata.toolCalls');
+  const messageToolExecutionId = typeof metadata?.toolExecutionId === 'string' ? metadata.toolExecutionId : undefined;
 
   const usedMetadataIndexes = new Set<number>();
   const parsed: ParsedToolCall[] = [];
@@ -190,6 +195,13 @@ export const extractToolCallsFromServerMessage = (msg: RestMessage): ParsedToolC
 
     return {
       id,
+      ...(typeof primary.toolExecutionId === 'string'
+        ? { toolExecutionId: primary.toolExecutionId }
+        : typeof secondary?.toolExecutionId === 'string'
+          ? { toolExecutionId: secondary.toolExecutionId }
+          : messageToolExecutionId
+            ? { toolExecutionId: messageToolExecutionId }
+            : {}),
       name,
       arguments: expectToolArguments(argsRaw, 'toolCall.args'),
       ...(result !== undefined ? { result } : {}),
@@ -236,6 +248,7 @@ export const extractToolResultUpdateFromMessage = (
 
   return {
     id: firstToolCall.id,
+    ...(firstToolCall.toolExecutionId ? { toolExecutionId: firstToolCall.toolExecutionId } : {}),
     name: firstToolCall.name,
     result: firstToolCall.result,
     status: firstToolCall.status,

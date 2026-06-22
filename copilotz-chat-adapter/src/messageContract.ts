@@ -146,6 +146,7 @@ export const convertServerMessage = (
   const shouldRenderToolCalls = msg.senderType !== 'tool';
   const mappedToolCalls = parsedToolCalls.map((toolCall) => ({
     id: toolCall.id ?? (options.createId ?? defaultCreateId)(),
+    ...(toolCall.toolExecutionId ? { toolExecutionId: toolCall.toolExecutionId } : {}),
     name: toolCall.name,
     arguments: toolCall.arguments,
     status: toolCall.status,
