@@ -1,50 +1,47 @@
-export { CopilotzAdmin } from "./CopilotzAdmin";
-export { useCopilotzAdmin } from "./useCopilotzAdmin";
+export { createAdminClient } from "./api/client";
+export type { AdminClientOptions, AdminClientPaths, CopilotzAdminClient } from "./api/client";
+export type * from "./api/types";
+export { CopilotzAdmin } from "./core";
 export {
-  fetchAdminActivity,
-  fetchAdminAgents,
-  fetchAdminOverview,
-  fetchAdminParticipants,
-  fetchAdminThreads,
-  fetchAdminUsage,
-  fetchParticipantDetail,
-  updateParticipant,
-  fetchCollectionNames,
-  fetchCollectionItems,
-  fetchCollectionItem,
-  createCollectionItem,
-  updateCollectionItem,
-  deleteCollectionItem,
-  fetchThreadEvents,
-} from "./adminService";
+  ADMIN_GROUP_LABELS,
+  ADMIN_GROUP_ORDER,
+  canAccessAdminPermission,
+  collectAdminNavItems,
+  collectAdminRoutes,
+  collectCollectionEditors,
+  firstAccessibleRoute,
+  useAdmin,
+} from "./core";
+export type * from "./core";
+export {
+  agentsModule,
+  collectionsModule,
+  defaultCopilotzModules,
+  eventsModule,
+  overviewModule,
+  participantsModule,
+  threadsModule,
+  usageModule,
+} from "./modules";
+export {
+  addUsageTotals,
+  aggregateUsageRows,
+  buildUsageChartState,
+  EMPTY_USAGE_TOTALS,
+  formatCompactMetric,
+  formatMetricValue,
+  formatNumber,
+  formatPercent,
+  formatUsageBucket,
+  getUsageDimensionLabel,
+  getUsageGroupLabel,
+  getUsageRange,
+  getUsageTotalValue,
+} from "./modules";
+export type * from "./modules";
 export { defaultAdminConfig, mergeAdminConfig } from "./config";
+export { useCopilotzAdmin } from "./useCopilotzAdmin";
 export type {
-  AdminActivityInterval,
-  AdminActivityPoint,
-  AdminAgentSummary,
-  AdminCollectionItem,
-  AdminConfig,
-  AdminDatePreset,
-  AdminFilters,
-  AdminMessage,
-  AdminMessagePage,
-  AdminMessagePageInfo,
-  AdminOverview,
-  AdminPage,
-  AdminParticipantDetail,
-  AdminParticipantSummary,
-  AdminQueueEvent,
-  AdminRoute,
-  AdminSectionState,
-  AdminThreadDetail,
-  AdminThreadSummary,
-  AdminUsageAttribution,
-  AdminUsageFilters,
-  AdminUsageGroupBy,
-  AdminUsageInterval,
-  AdminUsagePoint,
-  AdminUsageResponse,
-  RequestHeadersProvider,
   UseCopilotzAdminOptions,
   UseCopilotzAdminResult,
-} from "./types";
+} from "./useCopilotzAdmin";

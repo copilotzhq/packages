@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/admin",
-  "version": "0.9.33",
+  "version": "0.9.34",
   "description": "Copilotz admin dashboard components",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -26,6 +26,7 @@
     "build:watch": "tsup --watch",
     "build:css:watch": "tailwindcss -c tailwind.config.ts -i ./src/styles.css -o ./dist/styles.css --watch",
     "dev": "npm run build:watch & npm run build:css:watch",
+    "test": "npm run build && node --test test/*.test.mjs",
     "prepack": "npm run build && npm run build:css"
   },
   "peerDependencies": {

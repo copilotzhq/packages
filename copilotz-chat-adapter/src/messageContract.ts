@@ -229,7 +229,9 @@ export const prepareHydratedMessages = async (
       const metadata = msg.metadata ?? undefined;
       if (!metadata) return;
       try {
-        options.onToolOutput?.(metadata.output === undefined ? metadata : { output: metadata.output });
+        // Always pass full metadata so consumers can match on toolCalls/tool.id
+        // even when a top-level output field is also present.
+        options.onToolOutput?.(metadata);
       } catch (error) {
         console.warn('Error processing tool output during hydration', msg.id, error);
       }

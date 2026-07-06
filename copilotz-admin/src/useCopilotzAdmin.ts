@@ -1,23 +1,45 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
-import {
-  fetchAdminActivity,
-  fetchAdminAgents,
-  fetchAdminOverview,
-  fetchAdminParticipants,
-  fetchAdminThreads,
-} from "./adminService";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { createAdminClient } from "./api/client";
 import type {
   AdminActivityInterval,
+  AdminActivityPoint,
+  AdminAgentSummary,
   AdminDatePreset,
-  UseCopilotzAdminOptions,
-  UseCopilotzAdminResult,
-} from "./types";
+  AdminOverview,
+  AdminParticipantSummary,
+  AdminThreadSummary,
+  RequestHeadersProvider,
+} from "./api/types";
 
+export interface UseCopilotzAdminOptions {
+  agentSearch?: string;
+  baseUrl?: string;
+  getRequestHeaders?: RequestHeadersProvider;
+  interval?: AdminActivityInterval;
+  namespace?: string;
+  participantSearch?: string;
+  range?: AdminDatePreset;
+  threadSearch?: string;
+}
+
+export interface UseCopilotzAdminResult {
+  activity: AdminActivityPoint[];
+  agents: AdminAgentSummary[];
+  error: Error | null;
+  filters: UseCopilotzAdminOptions & {
+    interval: AdminActivityInterval;
+    range: AdminDatePreset;
+  };
+  isLoading: boolean;
+  overview: AdminOverview | null;
+  participants: AdminParticipantSummary[];
+  refresh: () => Promise<void>;
+  setInterval: (interval: AdminActivityInterval) => void;
+  setRange: (range: AdminDatePreset) => void;
+  threads: AdminThreadSummary[];
+}
+
+/** @deprecated Prefer the module-based CopilotzAdmin shell and createAdminClient. */
 export function useCopilotzAdmin(
   options: UseCopilotzAdminOptions = {},
 ): UseCopilotzAdminResult {
@@ -25,28 +47,27 @@ export function useCopilotzAdmin(
   const [interval, setInterval] = useState<AdminActivityInterval>(
     options.interval ?? "day",
   );
-  const [overview, setOverview] = useState<UseCopilotzAdminResult["overview"]>(
-    null,
-  );
-  const [activity, setActivity] = useState<UseCopilotzAdminResult["activity"]>(
-    [],
-  );
-  const [threads, setThreads] = useState<UseCopilotzAdminResult["threads"]>([]);
-  const [participants, setParticipants] = useState<
-    UseCopilotzAdminResult["participants"]
-  >([]);
-  const [agents, setAgents] = useState<UseCopilotzAdminResult["agents"]>([]);
+  const [overview, setOverview] = useState<AdminOverview | null>(null);
+  const [activity, setActivity] = useState<AdminActivityPoint[]>([]);
+  const [threads, setThreads] = useState<AdminThreadSummary[]>([]);
+  const [participants, setParticipants] = useState<AdminParticipantSummary[]>([]);
+  const [agents, setAgents] = useState<AdminAgentSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
+
+  const client = useMemo(
+    () =>
+      createAdminClient({
+        baseUrl: options.baseUrl,
+        getRequestHeaders: options.getRequestHeaders,
+      }),
+    [options.baseUrl, options.getRequestHeaders],
+  );
 
   const fetchAll = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const shared = {
-        baseUrl: options.baseUrl,
-        getRequestHeaders: options.getRequestHeaders,
-      };
       const [
         nextOverview,
         nextActivity,
@@ -54,34 +75,38 @@ export function useCopilotzAdmin(
         nextParticipants,
         nextAgents,
       ] = await Promise.all([
-        fetchAdminOverview(range, options.namespace, shared),
-        fetchAdminActivity(range, interval, options.namespace, shared),
-        fetchAdminThreads(options.threadSearch, options.namespace, shared),
-        fetchAdminParticipants(
-          options.participantSearch,
-          options.namespace,
-          shared,
-        ),
-        fetchAdminAgents(options.agentSearch, options.namespace, shared),
+        client.getOverview({ namespace: options.namespace, range }),
+        client.getActivity({ interval, namespace: options.namespace, range }),
+        client.listThreads({
+          namespace: options.namespace,
+          search: options.threadSearch,
+        }),
+        client.listParticipants({
+          namespace: options.namespace,
+          search: options.participantSearch,
+        }),
+        client.listAgents({
+          namespace: options.namespace,
+          range,
+          search: options.agentSearch,
+        }),
       ]);
-
       setOverview(nextOverview);
       setActivity(nextActivity);
       setThreads(nextThreads);
       setParticipants(nextParticipants);
       setAgents(nextAgents);
-    } catch (nextError) {
-      setError(nextError instanceof Error
-        ? nextError
+    } catch (cause) {
+      setError(cause instanceof Error
+        ? cause
         : new Error("Failed to load admin data"));
     } finally {
       setIsLoading(false);
     }
   }, [
+    client,
     interval,
     options.agentSearch,
-    options.baseUrl,
-    options.getRequestHeaders,
     options.namespace,
     options.participantSearch,
     options.threadSearch,
@@ -92,39 +117,21 @@ export function useCopilotzAdmin(
     void fetchAll();
   }, [fetchAll]);
 
-  return useMemo(() => ({
-    overview,
+  return {
     activity,
-    threads,
-    participants,
     agents,
+    error,
     filters: {
-      namespace: options.namespace,
-      threadSearch: options.threadSearch,
-      participantSearch: options.participantSearch,
-      agentSearch: options.agentSearch,
-      range,
+      ...options,
       interval,
+      range,
     },
     isLoading,
-    error,
-    refresh: fetchAll,
-    setRange,
-    setInterval,
-  }), [
-    activity,
-    agents,
-    error,
-    fetchAll,
-    interval,
-    isLoading,
-    options.agentSearch,
-    options.namespace,
-    options.participantSearch,
-    options.threadSearch,
     overview,
     participants,
-    range,
+    refresh: fetchAll,
+    setInterval,
+    setRange,
     threads,
-  ]);
+  };
 }

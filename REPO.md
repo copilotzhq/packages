@@ -1,7 +1,7 @@
 ---
 name: packages
 kind: lib
-summary: Shared React chat UI and Copilotz adapter packages used by client web apps.
+summary: Shared React chat UI, Copilotz adapter, and admin packages used by client web apps.
 depends_on:
   - copilotz
 tags:
@@ -15,12 +15,14 @@ entrypoints:
   - copilotz-chat-ui/src/components/chat/ChatUI.tsx
   - copilotz-chat-adapter/src/CopilotzChat.tsx
   - copilotz-chat-adapter/src/useCopilotzChat.ts
+  - copilotz-admin/src/index.ts
+  - copilotz-admin/src/core/CopilotzAdmin.tsx
 status: active
 ---
 
 ## Purpose
 
-Shared npm packages for the Copilotz web chat experience: `@copilotz/chat-ui` provides the reusable React UI layer, and `@copilotz/chat-adapter` binds that UI to Copilotz backend APIs, SSE streaming, threads, tools, assets, and user context.
+Shared npm packages for Copilotz web experiences: `@copilotz/chat-ui` provides the reusable React chat UI layer, `@copilotz/chat-adapter` binds that UI to Copilotz backend APIs, SSE streaming, threads, tools, assets, and user context, and `@copilotz/admin` provides the reusable admin shell and default Copilotz admin modules.
 
 ## Read These First
 
@@ -30,6 +32,9 @@ Shared npm packages for the Copilotz web chat experience: `@copilotz/chat-ui` pr
 - `copilotz-chat-adapter/src/CopilotzChat.tsx`
 - `copilotz-chat-adapter/src/useCopilotzChat.ts`
 - `copilotz-chat-adapter/src/copilotzService.ts`
+- `copilotz-admin/src/index.ts`
+- `copilotz-admin/src/core/CopilotzAdmin.tsx`
+- `copilotz-admin/src/modules/index.ts`
 
 ## Common Task Locations
 
@@ -38,6 +43,10 @@ Shared npm packages for the Copilotz web chat experience: `@copilotz/chat-ui` pr
 - Copilotz API integration and SSE parsing: `copilotz-chat-adapter/src/copilotzService.ts`
 - Chat state, optimistic updates, and thread sync: `copilotz-chat-adapter/src/useCopilotzChat.ts`
 - Asset resolution and special adapter states: `copilotz-chat-adapter/src/assetsService.ts`, `copilotz-chat-adapter/src/specialState.ts`
+- Admin shell and extension model: `copilotz-admin/src/core/`
+- Admin API client and DTOs: `copilotz-admin/src/api/`
+- Built-in admin modules: `copilotz-admin/src/modules/`
+- Reusable admin UI patterns: `copilotz-admin/src/components/patterns/`
 
 ## Warnings
 

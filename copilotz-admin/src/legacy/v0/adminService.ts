@@ -201,11 +201,15 @@ export async function fetchAdminParticipants(
 export async function fetchAdminAgents(
   search?: string,
   namespace?: string,
+  range: AdminDatePreset = "7d",
   options?: FetchOptions,
 ): Promise<AdminAgentSummary[]> {
+  const windowRange = getRangeWindow(range);
   return await fetchAdminJson<AdminAgentSummary[]>("/v1/admin/agents", {
     search,
     namespace,
+    from: windowRange.from,
+    to: windowRange.to,
     limit: "8",
   }, options);
 }
