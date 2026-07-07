@@ -5,8 +5,27 @@ export type RequestHeadersProvider = () =>
 export type AdminDatePreset = "24h" | "7d" | "30d";
 export type AdminActivityInterval = "hour" | "day";
 export type AdminUsageInterval = "minute" | "hour" | "day" | "week" | "month";
-export type AdminUsageMetricKind = "tokens" | "cost" | "calls";
+export type AdminUsageKind =
+  | "all"
+  | "llm"
+  | "tool"
+  | "asset"
+  | "rag"
+  | "embedding"
+  | (string & {});
+export type AdminUsageMetricKind =
+  | "tokens"
+  | "cost"
+  | "calls"
+  | "duration"
+  | "credits"
+  | "failures"
+  | "unpriced";
 export type AdminUsageGroupBy =
+  | "kind"
+  | "resource"
+  | "operation"
+  | "status"
   | "thread"
   | "participant"
   | "namespace"
@@ -38,6 +57,10 @@ export interface AdminUsageBreakdown {
 
 export interface AdminUsageTotals extends AdminUsageBreakdown {
   totalCalls: number;
+  failedCalls: number;
+  unpricedCalls: number;
+  totalDurationMs: number;
+  totalCredits: number;
 }
 
 export interface AdminOverview {
@@ -131,12 +154,16 @@ export interface AdminUsageFilters {
   metric?: AdminUsageMetricKind;
   groupBy?: AdminUsageGroupBy;
   attribution?: AdminUsageAttribution;
+  kind?: AdminUsageKind;
   threadId?: string;
   participantId?: string;
   participantType?: "all" | "human" | "agent" | "job";
   namespace?: string;
   provider?: string;
   model?: string;
+  resource?: string;
+  operation?: string;
+  status?: string;
 }
 
 export interface AdminThreadDetail {

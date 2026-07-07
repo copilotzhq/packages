@@ -8,12 +8,21 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { Activity, BarChart3, DollarSign, Sparkles } from "lucide-react";
+import {
+  Activity,
+  AlertTriangle,
+  BarChart3,
+  Clock,
+  Coins,
+  DollarSign,
+  Sparkles,
+} from "lucide-react";
 import type {
   AdminUsageAttribution,
   AdminUsageDimension,
   AdminUsageGroupBy,
   AdminUsageInterval,
+  AdminUsageKind,
   AdminUsageMetricKind,
   AdminUsageResponse,
 } from "../../api/types";
@@ -48,6 +57,7 @@ import {
   formatPercent,
   getUsageDimensionLabel,
   getUsageGroupLabel,
+  getUsageMetricLabel,
   getUsageRange,
   getUsageTotalValue,
 } from "./calculations";
@@ -61,6 +71,24 @@ const USAGE_DIMENSIONS: AdminUsageDimension[] = [
   "cacheRead",
   "cacheWrite",
 ];
+
+const USAGE_WORKLOADS: AdminUsageKind[] = [
+  "all",
+  "llm",
+  "tool",
+  "asset",
+  "rag",
+  "embedding",
+];
+
+const STATUS_OPTIONS = [
+  "all",
+  "completed",
+  "failed",
+  "cancelled",
+  "aborted",
+  "error",
+] as string[];
 
 export function usageModule(): AdminModule {
   return {
@@ -89,11 +117,12 @@ function UsagePage({ context }: { context: AdminRuntimeContext }) {
     "7d",
   );
   const [interval, setInterval] = React.useState<AdminUsageInterval>("day");
+  const [workload, setWorkload] = React.useState<AdminUsageKind>("all");
   const [metricKind, setMetricKind] = React.useState<AdminUsageMetricKind>(
-    "cost",
+    "calls",
   );
   const [dimension, setDimension] = React.useState<AdminUsageDimension>("total");
-  const [groupBy, setGroupBy] = React.useState<AdminUsageGroupBy>("participant");
+  const [groupBy, setGroupBy] = React.useState<AdminUsageGroupBy>("kind");
   const [attribution, setAttribution] = React.useState<AdminUsageAttribution>(
     "initiatedBy",
   );
@@ -104,6 +133,11 @@ function UsagePage({ context }: { context: AdminRuntimeContext }) {
   const [participantId, setParticipantId] = React.useState("");
   const [provider, setProvider] = React.useState("");
   const [model, setModel] = React.useState("");
+  const [resource, setResource] = React.useState("");
+  const [operation, setOperation] = React.useState("");
+  const [status, setStatus] = React.useState<(typeof STATUS_OPTIONS)[number]>(
+    "all",
+  );
   const [customFrom, setCustomFrom] = React.useState("");
   const [customTo, setCustomTo] = React.useState("");
   const [usage, setUsage] = React.useState<AdminUsageResponse | null>(null);
@@ -114,6 +148,36 @@ function UsagePage({ context }: { context: AdminRuntimeContext }) {
     () => getUsageRange(period, customFrom, customTo),
     [customFrom, customTo, period],
   );
+  const metricOptions = React.useMemo(
+    () => getUsageMetricOptions(workload),
+    [workload],
+  );
+  const groupOptions = React.useMemo(
+    () => getUsageGroupOptions(workload),
+    [workload],
+  );
+  const showLlmFields = workload === "llm";
+  const showResourceFields = workload !== "llm";
+  const showDimension =
+    metricKind === "tokens" || (metricKind === "cost" && workload === "llm");
+
+  React.useEffect(() => {
+    if (!metricOptions.includes(metricKind)) {
+      setMetricKind(metricOptions[0]);
+    }
+  }, [metricKind, metricOptions]);
+
+  React.useEffect(() => {
+    if (!groupOptions.includes(groupBy)) {
+      setGroupBy(groupOptions[0]);
+    }
+  }, [groupBy, groupOptions]);
+
+  React.useEffect(() => {
+    if (!showDimension && dimension !== "total") {
+      setDimension("total");
+    }
+  }, [dimension, showDimension]);
 
   React.useEffect(() => {
     let active = true;
@@ -123,13 +187,17 @@ function UsagePage({ context }: { context: AdminRuntimeContext }) {
       attribution,
       from: range.from,
       groupBy,
+      kind: workload,
       interval,
       metric: metricKind,
-      model: emptyToUndefined(model),
+      model: showLlmFields ? emptyToUndefined(model) : undefined,
       namespace: context.scope.namespace || undefined,
+      operation: showResourceFields ? emptyToUndefined(operation) : undefined,
       participantId: emptyToUndefined(participantId),
       participantType,
-      provider: emptyToUndefined(provider),
+      provider: showLlmFields ? emptyToUndefined(provider) : undefined,
+      resource: showResourceFields ? emptyToUndefined(resource) : undefined,
+      status: status === "all" ? undefined : status,
       threadId: emptyToUndefined(threadId),
       to: range.to,
     }).then((next) => {
@@ -154,12 +222,18 @@ function UsagePage({ context }: { context: AdminRuntimeContext }) {
     interval,
     metricKind,
     model,
+    operation,
     participantId,
     participantType,
     provider,
     range.from,
     range.to,
+    resource,
+    showLlmFields,
+    showResourceFields,
+    status,
     threadId,
+    workload,
   ]);
 
   const points = usage?.points ?? [];
@@ -177,9 +251,10 @@ function UsagePage({ context }: { context: AdminRuntimeContext }) {
     <div className="space-y-4">
       <PageHeader
         title="Usage"
-        description="Inspect cost, token, and call attribution across namespaces, models, participants, threads, and providers."
+        description="Inspect metered LLM, tool, and resource activity by workload, actor, status, cost, duration, tokens, and credits."
         badges={[
-          { label: period },
+          { label: workload },
+          { label: getUsageMetricLabel(metricKind), variant: "secondary" },
           { label: getUsageGroupLabel(groupBy), variant: "secondary" },
           ...(isLoading ? [{ label: "Loading" as const }] : []),
         ]}
@@ -198,32 +273,44 @@ function UsagePage({ context }: { context: AdminRuntimeContext }) {
           value={interval}
         />
         <UsageSelect
-          label="Metric"
+          label="Workload"
+          onValueChange={(value) => setWorkload(value as AdminUsageKind)}
+          options={USAGE_WORKLOADS}
+          value={workload}
+          formatOption={getUsageKindLabel}
+        />
+        <UsageSelect
+          label="Measure"
           onValueChange={(value) => setMetricKind(value as AdminUsageMetricKind)}
-          options={["cost", "tokens", "calls"]}
+          options={metricOptions}
           value={metricKind}
+          formatOption={getUsageMetricLabel}
         />
         <UsageSelect
           label="Group"
           onValueChange={(value) => setGroupBy(value as AdminUsageGroupBy)}
-          options={["participant", "thread", "namespace", "provider", "model"]}
+          options={groupOptions}
           value={groupBy}
+          formatOption={getUsageGroupLabel}
         />
         <UsageSelect
-          label="Attribution"
+          label="Actor"
           onValueChange={(value) =>
             setAttribution(value as AdminUsageAttribution)}
           options={["initiatedBy", "generatedBy"]}
           value={attribution}
+          formatOption={getUsageAttributionLabel}
         />
-        <UsageSelect
-          label="Dimension"
-          onValueChange={(value) =>
-            setDimension(value as AdminUsageDimension)}
-          options={USAGE_DIMENSIONS}
-          value={dimension}
-          formatOption={getUsageDimensionLabel}
-        />
+        {showDimension && (
+          <UsageSelect
+            label="Dimension"
+            onValueChange={(value) =>
+              setDimension(value as AdminUsageDimension)}
+            options={USAGE_DIMENSIONS}
+            value={dimension}
+            formatOption={getUsageDimensionLabel}
+          />
+        )}
       </FilterBar>
       <FilterBar>
         {period === "custom" && (
@@ -243,11 +330,17 @@ function UsagePage({ context }: { context: AdminRuntimeContext }) {
           </>
         )}
         <UsageSelect
-          label="Type"
+          label="Actor type"
           onValueChange={(value) =>
             setParticipantType(value as typeof participantType)}
           options={["all", "human", "agent", "job"]}
           value={participantType}
+        />
+        <UsageSelect
+          label="Status"
+          onValueChange={(value) => setStatus(value as typeof status)}
+          options={STATUS_OPTIONS}
+          value={status}
         />
         <Input
           className="h-8 w-[170px]"
@@ -261,38 +354,76 @@ function UsagePage({ context }: { context: AdminRuntimeContext }) {
           placeholder="Participant ID"
           value={participantId}
         />
-        <Input
-          className="h-8 w-[140px]"
-          onChange={(event) => setProvider(event.target.value)}
-          placeholder="Provider"
-          value={provider}
-        />
-        <Input
-          className="h-8 w-[140px]"
-          onChange={(event) => setModel(event.target.value)}
-          placeholder="Model"
-          value={model}
-        />
+        {showResourceFields && (
+          <>
+            <Input
+              className="h-8 w-[170px]"
+              onChange={(event) => setResource(event.target.value)}
+              placeholder="Resource / tool"
+              value={resource}
+            />
+            <Input
+              className="h-8 w-[150px]"
+              onChange={(event) => setOperation(event.target.value)}
+              placeholder="Operation"
+              value={operation}
+            />
+          </>
+        )}
+        {showLlmFields && (
+          <>
+            <Input
+              className="h-8 w-[140px]"
+              onChange={(event) => setProvider(event.target.value)}
+              placeholder="Provider"
+              value={provider}
+            />
+            <Input
+              className="h-8 w-[140px]"
+              onChange={(event) => setModel(event.target.value)}
+              placeholder="Model"
+              value={model}
+            />
+          </>
+        )}
       </FilterBar>
       <MetricStrip
         items={[
           {
-            detail: `${totals.totalCalls} calls`,
+            detail: `${formatMetricValue(totals.unpricedCalls, "unpriced")} unpriced`,
             icon: DollarSign,
-            label: "Cost",
+            label: "Spend",
             value: formatMetricValue(totals.totalCostUsd, "cost"),
           },
           {
-            detail: `${formatMetricValue(totals.inputTokens, "tokens")} input`,
+            detail: `${formatMetricValue(totals.failedCalls, "failures")} failed`,
             icon: Activity,
+            label: "Calls",
+            value: formatMetricValue(totals.totalCalls, "calls"),
+          },
+          {
+            detail: "Tool and resource runtime",
+            icon: Clock,
+            label: "Duration",
+            value: formatMetricValue(totals.totalDurationMs, "duration"),
+          },
+          {
+            detail: `${formatMetricValue(totals.inputTokens, "tokens")} input`,
+            icon: Sparkles,
             label: "Tokens",
             value: formatMetricValue(totals.totalTokens, "tokens"),
           },
           {
-            detail: `${formatMetricValue(totals.reasoningTokens, "tokens")} reasoning`,
-            icon: Sparkles,
-            label: "Calls",
-            value: formatMetricValue(totals.totalCalls, "calls"),
+            detail: "Custom metering",
+            icon: Coins,
+            label: "Credits",
+            value: formatMetricValue(totals.totalCredits, "credits"),
+          },
+          {
+            detail: "Failed or aborted work",
+            icon: AlertTriangle,
+            label: "Failures",
+            value: formatMetricValue(totals.failedCalls, "failures"),
           },
         ]}
       />
@@ -301,7 +432,7 @@ function UsagePage({ context }: { context: AdminRuntimeContext }) {
       ) : chartState.data.length === 0 ? (
         <EmptyState
           title="No usage"
-          description="Usage records will appear here when provider-native usage is captured."
+          description="Metered LLM, tool, and resource records will appear here after work is captured in the usage ledger."
         />
       ) : (
         <>
@@ -409,6 +540,10 @@ function UsageRowsTable({
   totals: typeof EMPTY_USAGE_TOTALS;
 }) {
   const totalValue = getUsageTotalValue(totals, metricKind, dimension);
+  const valueHeader =
+    (metricKind === "tokens" || metricKind === "cost") && dimension !== "total"
+      ? `${getUsageDimensionLabel(dimension)} ${getUsageMetricLabel(metricKind)}`
+      : getUsageMetricLabel(metricKind);
   return (
     <ResourceTable
       rows={rows.slice(0, 80)}
@@ -431,7 +566,7 @@ function UsageRowsTable({
         {
           align: "right",
           id: "value",
-          header: `${getUsageDimensionLabel(dimension)} ${metricKind}`,
+          header: valueHeader,
           render: (row) => formatMetricValue(row.value, metricKind),
         },
         {
@@ -448,21 +583,106 @@ function UsageRowsTable({
         },
         {
           align: "right",
-          id: "input",
-          header: "Input",
-          render: (row) =>
-            formatMetricValue(getUsageTotalValue(row, metricKind, "input"), metricKind),
+          id: "spend",
+          header: "Spend",
+          render: (row) => formatMetricValue(row.totalCostUsd, "cost"),
         },
         {
           align: "right",
-          id: "output",
-          header: "Output",
+          id: "duration",
+          header: "Duration",
           render: (row) =>
-            formatMetricValue(getUsageTotalValue(row, metricKind, "output"), metricKind),
+            formatMetricValue(row.totalDurationMs, "duration"),
+        },
+        {
+          align: "right",
+          id: "tokens",
+          header: "Tokens",
+          render: (row) => formatMetricValue(row.totalTokens, "tokens"),
+        },
+        {
+          align: "right",
+          id: "failures",
+          header: "Failures",
+          render: (row) => formatMetricValue(row.failedCalls, "failures"),
+        },
+        {
+          align: "right",
+          id: "unpriced",
+          header: "Unpriced",
+          render: (row) => formatMetricValue(row.unpricedCalls, "unpriced"),
         },
       ]}
     />
   );
+}
+
+function getUsageMetricOptions(
+  workload: AdminUsageKind,
+): AdminUsageMetricKind[] {
+  if (workload === "llm") {
+    return ["cost", "tokens", "calls", "failures", "unpriced"];
+  }
+  if (workload === "tool") {
+    return ["calls", "duration", "cost", "credits", "failures", "unpriced"];
+  }
+  return [
+    "calls",
+    "cost",
+    "duration",
+    "tokens",
+    "credits",
+    "failures",
+    "unpriced",
+  ];
+}
+
+function getUsageGroupOptions(workload: AdminUsageKind): AdminUsageGroupBy[] {
+  if (workload === "llm") {
+    return ["participant", "model", "provider", "thread", "namespace", "status"];
+  }
+  if (workload === "tool") {
+    return [
+      "resource",
+      "operation",
+      "status",
+      "participant",
+      "thread",
+      "namespace",
+    ];
+  }
+  return [
+    "kind",
+    "resource",
+    "operation",
+    "status",
+    "participant",
+    "thread",
+    "namespace",
+  ];
+}
+
+function getUsageKindLabel(kind: AdminUsageKind) {
+  switch (kind) {
+    case "all":
+      return "All";
+    case "llm":
+      return "LLM";
+    case "tool":
+      return "Tools";
+    case "asset":
+      return "Assets";
+    case "rag":
+      return "RAG";
+    case "embedding":
+      return "Embeddings";
+    default:
+      return kind;
+  }
+}
+
+function getUsageAttributionLabel(attribution: AdminUsageAttribution) {
+  return attribution === "initiatedBy" ? "Initiator" : "Performer";
 }
 
 function emptyToUndefined(value: string): string | undefined {

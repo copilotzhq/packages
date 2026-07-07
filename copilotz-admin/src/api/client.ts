@@ -300,12 +300,16 @@ export function createAdminClient(
         metric: filters.metric,
         groupBy: filters.groupBy,
         attribution: filters.attribution,
+        kind: filters.kind,
         threadId: filters.threadId,
         participantId: filters.participantId,
         participantType: filters.participantType,
         namespace: filters.namespace,
         provider: filters.provider,
         model: filters.model,
+        resource: filters.resource,
+        operation: filters.operation,
+        status: filters.status,
       }),
     listThreads: async (listOptions = {}) =>
       await requestJson<AdminThreadSummary[]>(`${paths.adminBase}/threads`, {

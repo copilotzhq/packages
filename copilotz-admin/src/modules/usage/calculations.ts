@@ -23,7 +23,11 @@ export const EMPTY_USAGE_TOTALS: AdminUsageTotals = {
   reasoningTokens: 0,
   totalCalls: 0,
   totalCostUsd: 0,
+  failedCalls: 0,
+  totalCredits: 0,
+  totalDurationMs: 0,
   totalTokens: 0,
+  unpricedCalls: 0,
 };
 
 const USAGE_CHART_COLORS = [
@@ -39,19 +43,27 @@ export function addUsageTotals(
   target: AdminUsageTotals,
   source: AdminUsageTotals,
 ) {
-  target.cacheCreationInputCostUsd += source.cacheCreationInputCostUsd;
-  target.cacheCreationInputTokens += source.cacheCreationInputTokens;
-  target.cacheReadInputCostUsd += source.cacheReadInputCostUsd;
-  target.cacheReadInputTokens += source.cacheReadInputTokens;
-  target.inputCostUsd += source.inputCostUsd;
-  target.inputTokens += source.inputTokens;
-  target.outputCostUsd += source.outputCostUsd;
-  target.outputTokens += source.outputTokens;
-  target.reasoningCostUsd += source.reasoningCostUsd;
-  target.reasoningTokens += source.reasoningTokens;
-  target.totalCalls += source.totalCalls;
-  target.totalCostUsd += source.totalCostUsd;
-  target.totalTokens += source.totalTokens;
+  target.cacheCreationInputCostUsd += safeUsageNumber(source.cacheCreationInputCostUsd);
+  target.cacheCreationInputTokens += safeUsageNumber(source.cacheCreationInputTokens);
+  target.cacheReadInputCostUsd += safeUsageNumber(source.cacheReadInputCostUsd);
+  target.cacheReadInputTokens += safeUsageNumber(source.cacheReadInputTokens);
+  target.inputCostUsd += safeUsageNumber(source.inputCostUsd);
+  target.inputTokens += safeUsageNumber(source.inputTokens);
+  target.outputCostUsd += safeUsageNumber(source.outputCostUsd);
+  target.outputTokens += safeUsageNumber(source.outputTokens);
+  target.reasoningCostUsd += safeUsageNumber(source.reasoningCostUsd);
+  target.reasoningTokens += safeUsageNumber(source.reasoningTokens);
+  target.totalCalls += safeUsageNumber(source.totalCalls);
+  target.totalCostUsd += safeUsageNumber(source.totalCostUsd);
+  target.failedCalls += safeUsageNumber(source.failedCalls);
+  target.totalCredits += safeUsageNumber(source.totalCredits);
+  target.totalDurationMs += safeUsageNumber(source.totalDurationMs);
+  target.totalTokens += safeUsageNumber(source.totalTokens);
+  target.unpricedCalls += safeUsageNumber(source.unpricedCalls);
+}
+
+function safeUsageNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 export function getUsageTotalValue(
@@ -59,38 +71,44 @@ export function getUsageTotalValue(
   metricKind: AdminUsageMetricKind,
   dimension: AdminUsageDimension,
 ) {
-  if (metricKind === "calls") return totals.totalCalls;
+  if (metricKind === "calls") return safeUsageNumber(totals.totalCalls);
+  if (metricKind === "duration") {
+    return safeUsageNumber(totals.totalDurationMs);
+  }
+  if (metricKind === "credits") return safeUsageNumber(totals.totalCredits);
+  if (metricKind === "failures") return safeUsageNumber(totals.failedCalls);
+  if (metricKind === "unpriced") return safeUsageNumber(totals.unpricedCalls);
   if (metricKind === "cost") {
     switch (dimension) {
       case "input":
-        return totals.inputCostUsd;
+        return safeUsageNumber(totals.inputCostUsd);
       case "output":
-        return totals.outputCostUsd;
+        return safeUsageNumber(totals.outputCostUsd);
       case "reasoning":
-        return totals.reasoningCostUsd;
+        return safeUsageNumber(totals.reasoningCostUsd);
       case "cacheRead":
-        return totals.cacheReadInputCostUsd;
+        return safeUsageNumber(totals.cacheReadInputCostUsd);
       case "cacheWrite":
-        return totals.cacheCreationInputCostUsd;
+        return safeUsageNumber(totals.cacheCreationInputCostUsd);
       case "total":
       default:
-        return totals.totalCostUsd;
+        return safeUsageNumber(totals.totalCostUsd);
     }
   }
   switch (dimension) {
     case "input":
-      return totals.inputTokens;
+      return safeUsageNumber(totals.inputTokens);
     case "output":
-      return totals.outputTokens;
+      return safeUsageNumber(totals.outputTokens);
     case "reasoning":
-      return totals.reasoningTokens;
+      return safeUsageNumber(totals.reasoningTokens);
     case "cacheRead":
-      return totals.cacheReadInputTokens;
+      return safeUsageNumber(totals.cacheReadInputTokens);
     case "cacheWrite":
-      return totals.cacheCreationInputTokens;
+      return safeUsageNumber(totals.cacheCreationInputTokens);
     case "total":
     default:
-      return totals.totalTokens;
+      return safeUsageNumber(totals.totalTokens);
   }
 }
 
@@ -231,6 +249,14 @@ export function getUsageDimensionLabel(dimension: AdminUsageDimension) {
 
 export function getUsageGroupLabel(groupBy: string) {
   switch (groupBy) {
+    case "kind":
+      return "Kind";
+    case "resource":
+      return "Resource";
+    case "operation":
+      return "Operation";
+    case "status":
+      return "Status";
     case "thread":
       return "Thread";
     case "namespace":
@@ -242,6 +268,26 @@ export function getUsageGroupLabel(groupBy: string) {
     case "participant":
     default:
       return "Participant";
+  }
+}
+
+export function getUsageMetricLabel(metricKind: AdminUsageMetricKind) {
+  switch (metricKind) {
+    case "cost":
+      return "Spend";
+    case "tokens":
+      return "Tokens";
+    case "duration":
+      return "Duration";
+    case "credits":
+      return "Credits";
+    case "failures":
+      return "Failures";
+    case "unpriced":
+      return "Unpriced";
+    case "calls":
+    default:
+      return "Calls";
   }
 }
 
@@ -297,6 +343,9 @@ export function formatMetricValue(
       style: "currency",
     }).format(value);
   }
+  if (metricKind === "duration") {
+    return formatDuration(value);
+  }
   return formatNumber(value);
 }
 
@@ -313,9 +362,28 @@ export function formatCompactMetric(
       style: "currency",
     }).format(value);
   }
+  if (metricKind === "duration") {
+    if (value >= 3_600_000) return `${(value / 3_600_000).toFixed(1)}h`;
+    if (value >= 60_000) return `${(value / 60_000).toFixed(1)}m`;
+    if (value >= 1_000) return `${(value / 1_000).toFixed(1)}s`;
+    return `${Math.round(value)}ms`;
+  }
   return new Intl.NumberFormat(undefined, {
     compactDisplay: "short",
     maximumFractionDigits: 1,
     notation: "compact",
   }).format(value);
+}
+
+function formatDuration(value: number) {
+  if (value >= 3_600_000) {
+    return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value / 3_600_000)} h`;
+  }
+  if (value >= 60_000) {
+    return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value / 60_000)} min`;
+  }
+  if (value >= 1_000) {
+    return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value / 1_000)} sec`;
+  }
+  return `${formatNumber(Math.round(value))} ms`;
 }

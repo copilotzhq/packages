@@ -108,6 +108,31 @@ test("admin client builds configurable paths and headers", async () => {
   assert.equal(seen[0].init.headers.Authorization, "Bearer test");
 });
 
+test("admin client sends generic usage filters", async () => {
+  const seen = [];
+  globalThis.fetch = async (url, init) => {
+    seen.push({ url, init });
+    return new Response(JSON.stringify({ data: { points: [], rows: [], totals: {} } }), {
+      headers: { "Content-Type": "application/json" },
+      status: 200,
+    });
+  };
+
+  const client = createAdminClient({ baseUrl: "/custom" });
+  await client.getUsage({
+    kind: "tool",
+    operation: "tool.exec",
+    resource: "sandbox.exec",
+    status: "failed",
+  });
+
+  assert.equal(seen.length, 1);
+  assert.equal(
+    seen[0].url,
+    "http://localhost/custom/v1/admin/usage?kind=tool&resource=sandbox.exec&operation=tool.exec&status=failed",
+  );
+});
+
 test("admin client preserves thread message pagination envelope", async () => {
   const seen = [];
   const message = {
@@ -178,6 +203,33 @@ test("usage calculations aggregate and build chart state", () => {
   assert.equal(chart.data.length, 2);
 });
 
+test("usage calculations aggregate generic metering fields", () => {
+  const points = [
+    {
+      ...usagePoint("2026-01-01T00:00:00.000Z", "tool-a", "Tool A", 0, 0),
+      failedCalls: 1,
+      totalCalls: 2,
+      totalDurationMs: 1500,
+      unpricedCalls: 1,
+    },
+    {
+      ...usagePoint("2026-01-01T00:00:00.000Z", "tool-a", "Tool A", 0, 0),
+      totalCalls: 1,
+      totalCredits: 3,
+      totalDurationMs: 500,
+    },
+  ];
+
+  const durationRows = aggregateUsageRows(points, "duration", "total");
+  assert.equal(durationRows[0].totalDurationMs, 2000);
+  assert.equal(durationRows[0].value, 2000);
+
+  const failureRows = aggregateUsageRows(points, "failures", "total");
+  assert.equal(failureRows[0].failedCalls, 1);
+  assert.equal(failureRows[0].unpricedCalls, 1);
+  assert.equal(failureRows[0].totalCredits, 3);
+});
+
 function usagePoint(bucket, groupKey, groupLabel, totalTokens, totalCostUsd) {
   return {
     bucket,
@@ -193,8 +245,12 @@ function usagePoint(bucket, groupKey, groupLabel, totalTokens, totalCostUsd) {
     outputTokens: totalTokens / 2,
     reasoningCostUsd: 0,
     reasoningTokens: 0,
+    failedCalls: 0,
     totalCalls: 1,
     totalCostUsd,
+    totalCredits: 0,
+    totalDurationMs: 0,
     totalTokens,
+    unpricedCalls: 0,
   };
 }

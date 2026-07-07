@@ -35,6 +35,7 @@ export {
   formatUsageBucket,
   getUsageDimensionLabel,
   getUsageGroupLabel,
+  getUsageMetricLabel,
   getUsageRange,
   getUsageTotalValue,
 } from "./modules";
