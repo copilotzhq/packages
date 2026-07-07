@@ -2,6 +2,7 @@ import React from "react";
 import {
   Brain,
   CircleDot,
+  GitBranch,
   Network,
   RefreshCw,
   Search,
@@ -9,8 +10,12 @@ import {
 } from "lucide-react";
 import type {
   AdminBrainCluster,
+  AdminBrainMatch,
   AdminBrainNode,
+  AdminBrainRelated,
   AdminBrainResponse,
+  AdminBrainSearchMode,
+  AdminBrainSimilar,
 } from "../../api/types";
 import type { AdminModule, AdminRuntimeContext } from "../../core/types";
 import { Badge } from "../../components/ui/badge";
@@ -36,6 +41,7 @@ import {
 import { cn } from "../../lib/utils";
 
 const BRAIN_LAYERS = ["all", "knowledge", "working"] as const;
+const BRAIN_SEARCH_MODES = ["hybrid", "semantic", "keyword"] as const;
 const BRAIN_STATUSES = ["active", "all", "superseded", "archived"] as const;
 const BRAIN_KINDS = [
   "all",
@@ -75,6 +81,9 @@ export function brainModule(): AdminModule {
 
 function BrainPage({ context }: { context: AdminRuntimeContext }) {
   const [search, setSearch] = React.useState("");
+  const [searchMode, setSearchMode] = React.useState<AdminBrainSearchMode>(
+    "hybrid",
+  );
   const [layer, setLayer] = React.useState<typeof BRAIN_LAYERS[number]>("all");
   const [status, setStatus] = React.useState<typeof BRAIN_STATUSES[number]>(
     "active",
@@ -87,26 +96,39 @@ function BrainPage({ context }: { context: AdminRuntimeContext }) {
   const [selectedNode, setSelectedNode] = React.useState<AdminBrainNode | null>(
     null,
   );
+  const [focusNodeId, setFocusNodeId] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  const loadBrain = React.useCallback(async () => {
+  const loadBrain = React.useCallback(async (focusOverride?: string | null) => {
     setLoading(true);
     setError(null);
+    const effectiveFocusNodeId = focusOverride === undefined
+      ? focusNodeId
+      : focusOverride;
     try {
       const next = await context.client.getBrain({
         namespace: context.scope.namespace || undefined,
         search: search.trim() || undefined,
+        searchMode,
         layer,
         status,
         kind,
         agentId: agentId.trim() || undefined,
+        focusNodeId: effectiveFocusNodeId || undefined,
+        includeRelated: Boolean(effectiveFocusNodeId),
+        includeSimilar: Boolean(effectiveFocusNodeId),
+        similarLimit: 24,
+        minSimilarity: 0.2,
         limit: 180,
       });
       setResponse(next);
       setSelectedNode((current) =>
-        current && next.nodes.some((node) => node.id === current.id)
-          ? current
+        effectiveFocusNodeId
+          ? next.nodes.find((node) => node.id === effectiveFocusNodeId) ??
+            current
+          : current && next.nodes.some((node) => node.id === current.id)
+          ? next.nodes.find((node) => node.id === current.id) ?? current
           : next.nodes[0] ?? null
       );
     } catch (cause) {
@@ -120,19 +142,32 @@ function BrainPage({ context }: { context: AdminRuntimeContext }) {
     agentId,
     context.client,
     context.scope.namespace,
+    focusNodeId,
     kind,
     layer,
     search,
+    searchMode,
     status,
   ]);
 
   React.useEffect(() => {
     void loadBrain();
-  }, [context.refreshKey, context.scope.namespace, loadBrain]);
+  }, [context.refreshKey, context.scope.namespace, focusNodeId, loadBrain]);
 
   const data = response ?? emptyBrainResponse();
+  const matches = data.matches ?? {};
+  const related = data.related ?? [];
+  const similar = data.similar ?? [];
   const knowledgeCount = data.stats.byLayer.knowledge ?? 0;
   const workingCount = data.stats.byLayer.working ?? 0;
+  const selectNode = React.useCallback((node: AdminBrainNode) => {
+    setSelectedNode(node);
+    setFocusNodeId(node.id);
+  }, []);
+  const runSearch = React.useCallback(() => {
+    setFocusNodeId(null);
+    void loadBrain(null);
+  }, [loadBrain]);
 
   return (
     <div className="space-y-4">
@@ -192,7 +227,7 @@ function BrainPage({ context }: { context: AdminRuntimeContext }) {
         actions={
           <Button
             disabled={loading}
-            onClick={() => void loadBrain()}
+            onClick={runSearch}
             size="sm"
             type="button"
           >
@@ -204,6 +239,23 @@ function BrainPage({ context }: { context: AdminRuntimeContext }) {
         searchPlaceholder="Search brain"
         searchValue={search}
       >
+        <div className="inline-flex h-8 overflow-hidden rounded-md border bg-background">
+          {BRAIN_SEARCH_MODES.map((mode) => (
+            <button
+              className={cn(
+                "px-3 text-xs transition-colors",
+                searchMode === mode
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted",
+              )}
+              key={mode}
+              onClick={() => setSearchMode(mode)}
+              type="button"
+            >
+              {formatLabel(mode)}
+            </button>
+          ))}
+        </div>
         <Select
           value={layer}
           onValueChange={(value) =>
@@ -256,19 +308,35 @@ function BrainPage({ context }: { context: AdminRuntimeContext }) {
           className="h-8 w-[190px]"
           onChange={(event) => setAgentId(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter") void loadBrain();
+            if (event.key === "Enter") runSearch();
           }}
           placeholder="Agent ID"
           value={agentId}
         />
       </FilterBar>
 
+      {data.semantic?.requested && data.semantic.error
+        ? (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+            Semantic search unavailable: {data.semantic.error}
+          </div>
+        )
+        : null}
+
       {error
         ? <EmptyState title="Unable to load brain" description={error} />
         : (
           <InspectorPanel
             side={selectedNode
-              ? <BrainNodeInspector node={selectedNode} />
+              ? (
+                <BrainNodeInspector
+                  match={matches[selectedNode.id]}
+                  node={selectedNode}
+                  onSelectNode={selectNode}
+                  related={related}
+                  similar={similar}
+                />
+              )
               : (
                 <EmptyState
                   icon={Brain}
@@ -283,13 +351,14 @@ function BrainPage({ context }: { context: AdminRuntimeContext }) {
                 edges={data.edges}
                 loading={loading}
                 nodes={data.nodes}
-                onSelectNode={setSelectedNode}
+                onSelectNode={selectNode}
+                similar={similar}
                 selectedNodeId={selectedNode?.id ?? null}
               />
               <ResourceTable
                 rows={data.nodes}
                 getRowKey={(row) => row.id}
-                onRowClick={setSelectedNode}
+                onRowClick={selectNode}
                 empty={
                   <EmptyState
                     icon={Brain}
@@ -310,6 +379,7 @@ function BrainPage({ context }: { context: AdminRuntimeContext }) {
                         <div className="truncate text-xs text-muted-foreground">
                           {row.content || "-"}
                         </div>
+                        <MatchBadges match={matches[row.id]} />
                       </div>
                     ),
                   },
@@ -349,6 +419,7 @@ function BrainMap({
   loading,
   nodes,
   onSelectNode,
+  similar,
   selectedNodeId,
 }: {
   clusters: AdminBrainCluster[];
@@ -356,6 +427,7 @@ function BrainMap({
   loading: boolean;
   nodes: AdminBrainNode[];
   onSelectNode: (node: AdminBrainNode) => void;
+  similar: AdminBrainSimilar[];
   selectedNodeId: string | null;
 }) {
   const nodeById = React.useMemo(
@@ -410,12 +482,17 @@ function BrainMap({
           const source = nodeById.get(edge.sourceNodeId);
           const target = nodeById.get(edge.targetNodeId);
           if (!source || !target) return null;
+          const isSelectedEdge = Boolean(
+            selectedNodeId &&
+              (edge.sourceNodeId === selectedNodeId ||
+                edge.targetNodeId === selectedNodeId),
+          );
           return (
             <line
               key={edge.id}
               stroke={edge.type === "contradicts" ? "#dc2626" : "#64748b"}
-              strokeOpacity="0.32"
-              strokeWidth={edge.type === "supports" ? 2 : 1.3}
+              strokeOpacity={isSelectedEdge ? "0.75" : "0.32"}
+              strokeWidth={isSelectedEdge ? 2.6 : edge.type === "supports" ? 2 : 1.3}
               x1={source.x * 1000}
               x2={target.x * 1000}
               y1={source.y * 600}
@@ -423,6 +500,26 @@ function BrainMap({
             />
           );
         })}
+        {selectedNodeId
+          ? similar.map((item) => {
+            const source = nodeById.get(selectedNodeId);
+            const target = nodeById.get(item.node.id);
+            if (!source || !target) return null;
+            return (
+              <line
+                key={`similar-${item.node.id}`}
+                stroke="#0ea5e9"
+                strokeDasharray="5 6"
+                strokeOpacity="0.42"
+                strokeWidth="1.8"
+                x1={source.x * 1000}
+                x2={target.x * 1000}
+                y1={source.y * 600}
+                y2={target.y * 600}
+              />
+            );
+          })
+          : null}
         {nodes.map((node) => {
           const isSelected = node.id === selectedNodeId;
           return (
@@ -449,7 +546,23 @@ function BrainMap({
   );
 }
 
-function BrainNodeInspector({ node }: { node: AdminBrainNode }) {
+type InspectorTab = "overview" | "related" | "similar" | "evidence" | "json";
+
+function BrainNodeInspector({
+  match,
+  node,
+  onSelectNode,
+  related,
+  similar,
+}: {
+  match?: AdminBrainMatch;
+  node: AdminBrainNode;
+  onSelectNode: (node: AdminBrainNode) => void;
+  related: AdminBrainRelated[];
+  similar: AdminBrainSimilar[];
+}) {
+  const [tab, setTab] = React.useState<InspectorTab>("overview");
+
   return (
     <div className="space-y-3">
       <div className="rounded-lg border bg-background p-4">
@@ -462,19 +575,178 @@ function BrainNodeInspector({ node }: { node: AdminBrainNode }) {
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
           {node.content || "-"}
         </p>
-        <dl className="mt-4 grid gap-2 text-xs">
-          <InspectorRow label="Agent" value={node.agentId} />
-          <InspectorRow label="Thread" value={node.threadId} />
-          <InspectorRow label="Memory space" value={node.memorySpaceId} />
-          <InspectorRow label="Checkpoint" value={node.checkpointId} />
-          <InspectorRow label="Source field" value={node.sourceField} />
-          <InspectorRow
-            label="Updated"
-            value={formatDateTime(node.updatedAt)}
-          />
-        </dl>
+        <MatchBadges match={match} />
       </div>
-      <JsonPanel title="Node JSON" value={node} minHeight={300} />
+
+      <div className="inline-flex w-full overflow-hidden rounded-md border bg-background">
+        {(["overview", "related", "similar", "evidence", "json"] as const)
+          .map((item) => (
+            <button
+              className={cn(
+                "min-w-0 flex-1 px-2 py-2 text-xs transition-colors",
+                tab === item
+                  ? "bg-muted font-medium text-foreground"
+                  : "text-muted-foreground hover:bg-muted/60",
+              )}
+              key={item}
+              onClick={() => setTab(item)}
+              type="button"
+            >
+              {formatLabel(item)}
+            </button>
+          ))}
+      </div>
+
+      {tab === "overview" ? <BrainOverview node={node} /> : null}
+      {tab === "related"
+        ? <RelatedPanel onSelectNode={onSelectNode} related={related} />
+        : null}
+      {tab === "similar"
+        ? <SimilarPanel onSelectNode={onSelectNode} similar={similar} />
+        : null}
+      {tab === "evidence" ? <EvidencePanel node={node} /> : null}
+      {tab === "json"
+        ? <JsonPanel title="Node JSON" value={node} minHeight={300} />
+        : null}
+    </div>
+  );
+}
+
+function BrainOverview({ node }: { node: AdminBrainNode }) {
+  return (
+    <div className="rounded-lg border bg-background p-4">
+      <dl className="grid gap-2 text-xs">
+        <InspectorRow label="Agent" value={node.agentId} />
+        <InspectorRow label="Thread" value={node.threadId} />
+        <InspectorRow label="Memory space" value={node.memorySpaceId} />
+        <InspectorRow label="Checkpoint" value={node.checkpointId} />
+        <InspectorRow label="Source field" value={node.sourceField} />
+        <InspectorRow label="Confidence" value={formatNullableNumber(node.confidence)} />
+        <InspectorRow label="Updated" value={formatDateTime(node.updatedAt)} />
+      </dl>
+    </div>
+  );
+}
+
+function RelatedPanel({
+  onSelectNode,
+  related,
+}: {
+  onSelectNode: (node: AdminBrainNode) => void;
+  related: AdminBrainRelated[];
+}) {
+  if (related.length === 0) {
+    return (
+      <EmptyState
+        icon={GitBranch}
+        title="No explicit relations"
+        description="Relation edges will appear here when this node is connected to other concepts."
+      />
+    );
+  }
+  return (
+    <div className="space-y-2">
+      {related.map((item) => (
+        <button
+          className="w-full rounded-lg border bg-background p-3 text-left transition-colors hover:bg-muted/40"
+          key={item.edge.id}
+          onClick={() => onSelectNode(item.node)}
+          type="button"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline">{formatLabel(item.edge.type)}</Badge>
+            <Badge variant="secondary">
+              {item.direction === "out" ? "Outgoing" : "Incoming"}
+            </Badge>
+          </div>
+          <div className="mt-2 text-sm font-medium">{item.node.name}</div>
+          <p className="mt-1 line-clamp-3 text-xs leading-5 text-muted-foreground">
+            {item.node.content || "-"}
+          </p>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function SimilarPanel({
+  onSelectNode,
+  similar,
+}: {
+  onSelectNode: (node: AdminBrainNode) => void;
+  similar: AdminBrainSimilar[];
+}) {
+  if (similar.length === 0) {
+    return (
+      <EmptyState
+        icon={Sparkles}
+        title="No semantic neighbors"
+        description="Similar nodes appear here when the selected node has an embedding."
+      />
+    );
+  }
+  return (
+    <div className="space-y-2">
+      {similar.map((item) => (
+        <button
+          className="w-full rounded-lg border bg-background p-3 text-left transition-colors hover:bg-muted/40"
+          key={item.node.id}
+          onClick={() => onSelectNode(item.node)}
+          type="button"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">
+              {formatSimilarityScore(item.similarity)}
+            </Badge>
+            <LayerBadge layer={item.node.layer} />
+            <Badge variant="outline">{formatLabel(item.node.kind)}</Badge>
+          </div>
+          <div className="mt-2 text-sm font-medium">{item.node.name}</div>
+          <p className="mt-1 line-clamp-3 text-xs leading-5 text-muted-foreground">
+            {item.node.content || "-"}
+          </p>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function EvidencePanel({ node }: { node: AdminBrainNode }) {
+  return (
+    <div className="rounded-lg border bg-background p-4">
+      <dl className="grid gap-2 text-xs">
+        <InspectorRow label="Source" value={node.sourceType} />
+        <InspectorRow label="Source ID" value={node.sourceId} />
+        <InspectorRow label="Thread" value={node.threadId} />
+        <InspectorRow label="Checkpoint" value={node.checkpointId} />
+      </dl>
+      <div className="mt-4">
+        <div className="text-xs font-medium text-muted-foreground">
+          Source messages
+        </div>
+        <div className="mt-2 flex flex-wrap gap-1">
+          {node.sourceMessageIds.length
+            ? node.sourceMessageIds.map((id) => (
+              <Badge className="max-w-full truncate" key={id} variant="outline">
+                {id}
+              </Badge>
+            ))
+            : <span className="text-xs text-muted-foreground">-</span>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MatchBadges({ match }: { match?: AdminBrainMatch }) {
+  if (!match?.reasons.length) return null;
+  return (
+    <div className="mt-2 flex flex-wrap gap-1">
+      {match.reasons.slice(0, 4).map((reason) => (
+        <Badge className="text-[10px]" key={reason} variant="outline">
+          {reason}
+        </Badge>
+      ))}
     </div>
   );
 }
@@ -523,6 +795,16 @@ function formatDateTime(value: string | null) {
   return date.toLocaleString();
 }
 
+function formatNullableNumber(value: number | null) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value.toFixed(2)
+    : "-";
+}
+
+function formatSimilarityScore(value: number) {
+  return Number.isFinite(value) ? `Similarity ${value.toFixed(2)}` : "-";
+}
+
 function emptyBrainResponse(): AdminBrainResponse {
   return {
     nodes: [],
@@ -533,6 +815,14 @@ function emptyBrainResponse(): AdminBrainResponse {
       byLayer: {},
       byKind: {},
       byStatus: {},
+    },
+    matches: {},
+    related: [],
+    similar: [],
+    semantic: {
+      requested: false,
+      available: false,
+      error: null,
     },
     pageInfo: {
       limit: 0,

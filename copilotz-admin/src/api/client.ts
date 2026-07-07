@@ -409,6 +409,20 @@ export function createAdminClient(
         kind: filters.kind === "all" ? undefined : filters.kind,
         status: filters.status === "all" ? undefined : filters.status,
         search: filters.search,
+        searchMode: filters.searchMode,
+        focusNodeId: filters.focusNodeId,
+        includeRelated: filters.includeRelated ? "true" : undefined,
+        includeSimilar: filters.includeSimilar ? "true" : undefined,
+        similarLimit: filters.similarLimit
+          ? String(filters.similarLimit)
+          : undefined,
+        minSimilarity: typeof filters.minSimilarity === "number"
+          ? String(filters.minSimilarity)
+          : undefined,
+        relationDepth: filters.relationDepth
+          ? String(filters.relationDepth)
+          : undefined,
+        relationTypes: filters.relationTypes?.join(","),
         limit: String(filters.limit ?? 160),
         offset: filters.offset ? String(filters.offset) : undefined,
       }),

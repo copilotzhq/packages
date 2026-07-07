@@ -184,6 +184,7 @@ export type AdminBrainStatus =
   | "superseded"
   | "archived"
   | (string & {});
+export type AdminBrainSearchMode = "keyword" | "semantic" | "hybrid";
 
 export interface AdminBrainFilters {
   namespace?: string;
@@ -195,6 +196,14 @@ export interface AdminBrainFilters {
   kind?: string;
   status?: AdminBrainStatus;
   search?: string;
+  searchMode?: AdminBrainSearchMode;
+  focusNodeId?: string;
+  includeRelated?: boolean;
+  includeSimilar?: boolean;
+  similarLimit?: number;
+  minSimilarity?: number;
+  relationDepth?: 1;
+  relationTypes?: string[];
   limit?: number;
   offset?: number;
 }
@@ -224,6 +233,13 @@ export interface AdminBrainNode {
   data: Record<string, unknown>;
 }
 
+export interface AdminBrainMatch {
+  keyword?: boolean;
+  similarity?: number;
+  relationDistance?: number;
+  reasons: string[];
+}
+
 export interface AdminBrainEdge {
   id: string;
   sourceNodeId: string;
@@ -251,11 +267,30 @@ export interface AdminBrainStats {
   byStatus: Record<string, number>;
 }
 
+export interface AdminBrainRelated {
+  node: AdminBrainNode;
+  edge: AdminBrainEdge;
+  direction: "in" | "out";
+}
+
+export interface AdminBrainSimilar {
+  node: AdminBrainNode;
+  similarity: number;
+}
+
 export interface AdminBrainResponse {
   nodes: AdminBrainNode[];
   edges: AdminBrainEdge[];
   clusters: AdminBrainCluster[];
   stats: AdminBrainStats;
+  matches?: Record<string, AdminBrainMatch>;
+  related?: AdminBrainRelated[];
+  similar?: AdminBrainSimilar[];
+  semantic?: {
+    requested: boolean;
+    available: boolean;
+    error: string | null;
+  };
   pageInfo: {
     limit: number;
     offset: number;

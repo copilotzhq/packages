@@ -133,6 +133,53 @@ test("admin client sends generic usage filters", async () => {
   );
 });
 
+test("admin client sends semantic brain filters", async () => {
+  const seen = [];
+  globalThis.fetch = async (url, init) => {
+    seen.push({ url, init });
+    return new Response(JSON.stringify({
+      data: {
+        nodes: [],
+        edges: [],
+        clusters: [],
+        stats: { totalNodes: 0, byLayer: {}, byKind: {}, byStatus: {} },
+        matches: {},
+        related: [],
+        similar: [],
+        semantic: { requested: true, available: true, error: null },
+        pageInfo: { limit: 24, offset: 0, total: 0 },
+      },
+    }), {
+      headers: { "Content-Type": "application/json" },
+      status: 200,
+    });
+  };
+
+  const client = createAdminClient({ baseUrl: "/custom" });
+  const brain = await client.getBrain({
+    namespace: "tenant_a",
+    search: "tenant policy",
+    searchMode: "hybrid",
+    focusNodeId: "node-1",
+    includeRelated: true,
+    includeSimilar: true,
+    similarLimit: 12,
+    minSimilarity: 0.45,
+    relationDepth: 1,
+    relationTypes: ["supports", "depends_on"],
+    limit: 24,
+  });
+
+  assert.equal(seen.length, 1);
+  assert.equal(
+    seen[0].url,
+    "http://localhost/custom/v1/admin/brain?namespace=tenant_a&search=tenant+policy&searchMode=hybrid&focusNodeId=node-1&includeRelated=true&includeSimilar=true&similarLimit=12&minSimilarity=0.45&relationDepth=1&relationTypes=supports%2Cdepends_on&limit=24",
+  );
+  assert.deepEqual(brain.matches, {});
+  assert.deepEqual(brain.related, []);
+  assert.deepEqual(brain.similar, []);
+});
+
 test("admin client lists events through the admin events endpoint", async () => {
   const seen = [];
   const event = {
