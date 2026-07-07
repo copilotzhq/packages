@@ -133,6 +133,72 @@ test("admin client sends generic usage filters", async () => {
   );
 });
 
+test("admin client lists events through the admin events endpoint", async () => {
+  const seen = [];
+  const event = {
+    id: "event-1",
+    threadId: "thread-1",
+    eventType: "TOOL_CALL",
+    payload: { toolName: "sandbox.exec" },
+    parentEventId: null,
+    traceId: "trace-1",
+    priority: 5,
+    status: "completed",
+    namespace: "tenant_a",
+    metadata: null,
+    createdAt: "2026-07-07T00:00:00.000Z",
+    updatedAt: "2026-07-07T00:00:01.000Z",
+  };
+
+  globalThis.fetch = async (url, init) => {
+    seen.push({ url, init });
+    return new Response(JSON.stringify({ data: [event] }), {
+      headers: { "Content-Type": "application/json" },
+      status: 200,
+    });
+  };
+
+  const client = createAdminClient({ baseUrl: "/custom" });
+  const events = await client.listEvents({
+    namespace: "tenant_a",
+    threadId: "thread-1",
+    status: "completed",
+    eventType: "TOOL_CALL",
+    traceId: "trace-1",
+    limit: 10,
+  });
+
+  assert.equal(seen.length, 1);
+  assert.equal(
+    seen[0].url,
+    "http://localhost/custom/v1/admin/events?namespace=tenant_a&threadId=thread-1&status=completed&eventType=TOOL_CALL&traceId=trace-1&limit=10",
+  );
+  assert.equal(events.length, 1);
+  assert.equal(events[0].id, "event-1");
+  assert.deepEqual(events[0].payload, { toolName: "sandbox.exec" });
+});
+
+test("admin client treats empty thread event responses as no event", async () => {
+  const seen = [];
+  globalThis.fetch = async (url, init) => {
+    seen.push({ url, init });
+    return new Response(JSON.stringify({}), {
+      headers: { "Content-Type": "application/json" },
+      status: 200,
+    });
+  };
+
+  const client = createAdminClient({ baseUrl: "/custom" });
+  const event = await client.getThreadEvent("thread-1");
+
+  assert.equal(seen.length, 1);
+  assert.equal(
+    seen[0].url,
+    "http://localhost/custom/v1/threads/thread-1/events",
+  );
+  assert.equal(event, undefined);
+});
+
 test("admin client preserves thread message pagination envelope", async () => {
   const seen = [];
   const message = {

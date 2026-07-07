@@ -4,6 +4,7 @@ import type {
   AdminAgentSummary,
   AdminCollectionItem,
   AdminDatePreset,
+  AdminEventFilters,
   AdminMessage,
   AdminMessagePage,
   AdminMessagePageInfo,
@@ -67,6 +68,7 @@ export interface CopilotzAdminClient {
     threadId: string,
     options?: { limit?: number; before?: string },
   ): Promise<AdminMessagePage>;
+  listEvents(options?: AdminEventFilters): Promise<AdminQueueEvent[]>;
   getThreadEvent(threadId: string): Promise<AdminQueueEvent | undefined>;
   listCollections(): Promise<string[]>;
   listCollectionItems(
@@ -223,6 +225,25 @@ function normalizeMessagePage(payload: unknown): AdminMessagePage {
   return { data, pageInfo };
 }
 
+function isQueueEvent(value: unknown): value is AdminQueueEvent {
+  return isRecord(value) && typeof value.id === "string" &&
+    typeof value.threadId === "string" && typeof value.eventType === "string";
+}
+
+function normalizeQueueEvent(value: unknown): AdminQueueEvent | undefined {
+  if (isQueueEvent(value)) return value;
+  if (isRecord(value) && isQueueEvent(value.data)) return value.data;
+  return undefined;
+}
+
+function normalizeQueueEvents(value: unknown): AdminQueueEvent[] {
+  if (Array.isArray(value)) return value.filter(isQueueEvent);
+  if (isRecord(value) && Array.isArray(value.data)) {
+    return value.data.filter(isQueueEvent);
+  }
+  return [];
+}
+
 export function createAdminClient(
   options: AdminClientOptions = {},
 ): CopilotzAdminClient {
@@ -350,10 +371,25 @@ export function createAdminClient(
       );
       return normalizeMessagePage(payload);
     },
-    getThreadEvent: async (threadId) =>
-      await requestJson<AdminQueueEvent | undefined>(
+    listEvents: async (eventOptions = {}) => {
+      const payload = await requestJson<unknown>(`${paths.adminBase}/events`, {
+        namespace: eventOptions.namespace,
+        threadId: eventOptions.threadId,
+        status: eventOptions.status,
+        eventType: eventOptions.eventType,
+        traceId: eventOptions.traceId,
+        search: eventOptions.search,
+        limit: String(eventOptions.limit ?? 50),
+        offset: eventOptions.offset ? String(eventOptions.offset) : undefined,
+      });
+      return normalizeQueueEvents(payload);
+    },
+    getThreadEvent: async (threadId) => {
+      const payload = await requestJson<unknown>(
         `${paths.threadsBase}/${encodeURIComponent(threadId)}/events`,
-      ),
+      );
+      return normalizeQueueEvent(payload);
+    },
     listCollections: async () =>
       await requestJson<string[]>(paths.collectionsBase),
     listCollectionItems: async (collection, listOptions = {}) =>

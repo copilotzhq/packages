@@ -166,6 +166,17 @@ export interface AdminUsageFilters {
   status?: string;
 }
 
+export interface AdminEventFilters {
+  namespace?: string;
+  threadId?: string;
+  status?: string;
+  eventType?: string;
+  traceId?: string;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
 export interface AdminThreadDetail {
   id: string;
   name: string;

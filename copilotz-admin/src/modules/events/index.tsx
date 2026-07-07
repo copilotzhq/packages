@@ -5,6 +5,13 @@ import type { AdminModule, AdminRuntimeContext } from "../../core/types";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../components/ui/select";
+import {
   EmptyState,
   FilterBar,
   JsonPanel,
@@ -35,51 +42,80 @@ export function eventsModule(): AdminModule {
   };
 }
 
+const EVENT_STATUSES = [
+  "all",
+  "pending",
+  "processing",
+  "completed",
+  "failed",
+  "expired",
+  "overwritten",
+] as const;
+
 function EventsPage({ context }: { context: AdminRuntimeContext }) {
   const [threadId, setThreadId] = React.useState("");
-  const [status, setStatus] = React.useState("");
-  const [type, setType] = React.useState("");
+  const [status, setStatus] = React.useState<typeof EVENT_STATUSES[number]>(
+    "all",
+  );
+  const [eventType, setEventType] = React.useState("");
   const [traceId, setTraceId] = React.useState("");
-  const [event, setEvent] = React.useState<AdminQueueEvent | null>(null);
+  const [events, setEvents] = React.useState<AdminQueueEvent[]>([]);
+  const [selectedEvent, setSelectedEvent] = React.useState<
+    AdminQueueEvent | null
+  >(null);
   const [error, setError] = React.useState<string | null>(null);
-  const [hasSearched, setHasSearched] = React.useState(false);
+  const [loading, setLoading] = React.useState(false);
+  const [hasLoaded, setHasLoaded] = React.useState(false);
 
   const inspect = async () => {
-    if (!threadId.trim()) return;
-    setHasSearched(true);
+    setHasLoaded(true);
+    setLoading(true);
     setError(null);
     try {
-      const next = await context.client.getThreadEvent(threadId.trim());
-      setEvent(next ?? null);
+      const next = await context.client.listEvents({
+        namespace: context.scope.namespace || undefined,
+        threadId: threadId.trim() || undefined,
+        status: status === "all" ? undefined : status,
+        eventType: eventType.trim() || undefined,
+        traceId: traceId.trim() || undefined,
+        limit: 50,
+      });
+      setEvents(next);
+      setSelectedEvent((current) =>
+        current && next.some((event) => event.id === current.id)
+          ? current
+          : next[0] ?? null
+      );
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to load event");
-      setEvent(null);
+      setEvents([]);
+      setSelectedEvent(null);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const rows = event &&
-      (!status || event.status.includes(status)) &&
-      (!type || event.eventType.includes(type)) &&
-      (!traceId || event.traceId?.includes(traceId))
-    ? [event]
-    : [];
+  React.useEffect(() => {
+    void inspect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [context.client, context.refreshKey, context.scope.namespace]);
 
   return (
     <div className="space-y-4">
       <PageHeader
         title="Events"
-        description="Queue and event inspection. Current backend support is thread-focused; filters are ready for broader event listing."
+        description="Queue and event inspection across the active namespace."
       />
       <FilterBar
         actions={
           <Button
-            disabled={!threadId.trim()}
+            disabled={loading}
             onClick={() => void inspect()}
             size="sm"
             type="button"
           >
             <Search className="size-3" />
-            Inspect
+            {loading ? "Loading" : "Inspect"}
           </Button>
         }
       >
@@ -92,45 +128,68 @@ function EventsPage({ context }: { context: AdminRuntimeContext }) {
           placeholder="Thread ID"
           value={threadId}
         />
-        <Input
-          className="h-8 w-[150px]"
-          onChange={(event) => setStatus(event.target.value)}
-          placeholder="Status"
+        <Select
           value={status}
-        />
+          onValueChange={(value) =>
+            setStatus(value as typeof EVENT_STATUSES[number])}
+        >
+          <SelectTrigger className="h-8 w-[150px] text-xs" aria-label="Status">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {EVENT_STATUSES.map((option) => (
+              <SelectItem key={option} value={option}>
+                {option === "all" ? "All statuses" : option}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         <Input
           className="h-8 w-[180px]"
-          onChange={(event) => setType(event.target.value)}
+          onChange={(event) => setEventType(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") void inspect();
+          }}
           placeholder="Event type"
-          value={type}
+          value={eventType}
         />
         <Input
           className="h-8 w-[180px]"
           onChange={(event) => setTraceId(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") void inspect();
+          }}
           placeholder="Trace ID"
           value={traceId}
         />
       </FilterBar>
       {error ? (
         <EmptyState title="Unable to inspect event" description={error} />
-      ) : !hasSearched ? (
+      ) : !hasLoaded && loading ? (
         <EmptyState
           icon={Activity}
-          title="Choose a thread"
-          description="Enter a thread ID to inspect its next pending event."
+          title="Loading events"
+          description="Fetching recent queue events for the active namespace."
         />
       ) : (
         <div className="grid gap-4 xl:grid-cols-[1fr_420px]">
           <ResourceTable
-            rows={rows}
+            rows={events}
             getRowKey={(row) => row.id}
+            onRowClick={setSelectedEvent}
             empty={
               <EmptyState
-                title="No matching event"
-                description="No pending event matched the current filters."
+                title="No matching events"
+                description="No event rows matched the current filters."
               />
             }
             columns={[
+              {
+                id: "thread",
+                header: "Thread",
+                className: "max-w-[180px] truncate font-mono text-xs",
+                render: (row) => row.threadId,
+              },
               {
                 id: "type",
                 header: "Type",
@@ -153,7 +212,18 @@ function EventsPage({ context }: { context: AdminRuntimeContext }) {
               },
             ]}
           />
-          <JsonPanel title="Event JSON" value={event} minHeight={420} />
+          {selectedEvent ? (
+            <JsonPanel
+              title="Event JSON"
+              value={selectedEvent}
+              minHeight={420}
+            />
+          ) : (
+            <EmptyState
+              title="No event selected"
+              description="Select an event row to inspect its payload."
+            />
+          )}
         </div>
       )}
     </div>
