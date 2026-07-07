@@ -7,6 +7,14 @@ import {
   collectAdminRoutes,
   collectCollectionEditors,
   createAdminClient,
+  EmptyState,
+  FilterBar,
+  InspectorPanel,
+  JsonPanel,
+  MetricStrip,
+  PageHeader,
+  ResourceTable,
+  StatusBadge,
 } from "../dist/index.js";
 
 Object.defineProperty(globalThis, "location", {
@@ -61,6 +69,17 @@ test("collection editors are collected from modules", () => {
   ]);
 
   assert.equal(editors.tenantPolicy, TenantPolicyEditor);
+});
+
+test("root export includes reusable admin patterns", () => {
+  assert.equal(typeof EmptyState, "function");
+  assert.equal(typeof FilterBar, "function");
+  assert.equal(typeof InspectorPanel, "function");
+  assert.equal(typeof JsonPanel, "function");
+  assert.equal(typeof MetricStrip, "function");
+  assert.equal(typeof PageHeader, "function");
+  assert.equal(typeof ResourceTable, "function");
+  assert.equal(typeof StatusBadge, "function");
 });
 
 test("admin client builds configurable paths and headers", async () => {

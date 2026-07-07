@@ -45,3 +45,4 @@ export type {
   UseCopilotzAdminOptions,
   UseCopilotzAdminResult,
 } from "./useCopilotzAdmin";
+export * from "./components/patterns";
