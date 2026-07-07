@@ -1,5 +1,9 @@
 export { createAdminClient } from "./api/client";
-export type { AdminClientOptions, AdminClientPaths, CopilotzAdminClient } from "./api/client";
+export type {
+  AdminClientOptions,
+  AdminClientPaths,
+  CopilotzAdminClient,
+} from "./api/client";
 export type * from "./api/types";
 export { CopilotzAdmin } from "./core";
 export {
@@ -15,6 +19,7 @@ export {
 export type * from "./core";
 export {
   agentsModule,
+  brainModule,
   collectionsModule,
   defaultCopilotzModules,
   eventsModule,

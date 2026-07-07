@@ -1,5 +1,6 @@
 import type { AdminModule } from "../core/types";
 import { agentsModule } from "./agents";
+import { brainModule } from "./brain";
 import { collectionsModule } from "./collections";
 import { eventsModule } from "./events";
 import { overviewModule } from "./overview";
@@ -13,6 +14,7 @@ export function defaultCopilotzModules(): AdminModule[] {
     usageModule(),
     eventsModule(),
     threadsModule(),
+    brainModule(),
     agentsModule(),
     participantsModule(),
     collectionsModule(),
@@ -20,6 +22,7 @@ export function defaultCopilotzModules(): AdminModule[] {
 }
 
 export { agentsModule } from "./agents";
+export { brainModule } from "./brain";
 export { collectionsModule } from "./collections";
 export { eventsModule } from "./events";
 export { overviewModule } from "./overview";

@@ -177,6 +177,92 @@ export interface AdminEventFilters {
   offset?: number;
 }
 
+export type AdminBrainLayer = "all" | "knowledge" | "working" | (string & {});
+export type AdminBrainStatus =
+  | "all"
+  | "active"
+  | "superseded"
+  | "archived"
+  | (string & {});
+
+export interface AdminBrainFilters {
+  namespace?: string;
+  memorySpaceId?: string;
+  checkpointId?: string;
+  agentId?: string;
+  threadId?: string;
+  layer?: AdminBrainLayer;
+  kind?: string;
+  status?: AdminBrainStatus;
+  search?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface AdminBrainNode {
+  id: string;
+  namespace: string;
+  name: string;
+  content: string;
+  layer: string;
+  kind: string;
+  status: string;
+  memorySpaceId: string | null;
+  checkpointId: string | null;
+  agentId: string | null;
+  threadId: string | null;
+  confidence: number | null;
+  sourceMessageIds: string[];
+  sourceField: string | null;
+  sourceType: string | null;
+  sourceId: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  clusterId: string;
+  x: number;
+  y: number;
+  data: Record<string, unknown>;
+}
+
+export interface AdminBrainEdge {
+  id: string;
+  sourceNodeId: string;
+  targetNodeId: string;
+  type: string;
+  weight: number | null;
+  createdAt: string | null;
+  data: Record<string, unknown> | null;
+}
+
+export interface AdminBrainCluster {
+  id: string;
+  label: string;
+  layer: string;
+  kind: string;
+  count: number;
+  x: number;
+  y: number;
+}
+
+export interface AdminBrainStats {
+  total: number;
+  byLayer: Record<string, number>;
+  byKind: Record<string, number>;
+  byStatus: Record<string, number>;
+}
+
+export interface AdminBrainResponse {
+  nodes: AdminBrainNode[];
+  edges: AdminBrainEdge[];
+  clusters: AdminBrainCluster[];
+  stats: AdminBrainStats;
+  pageInfo: {
+    limit: number;
+    offset: number;
+    returned: number;
+  };
+}
+
 export interface AdminThreadDetail {
   id: string;
   name: string;

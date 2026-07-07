@@ -2,6 +2,8 @@ import type {
   AdminActivityInterval,
   AdminActivityPoint,
   AdminAgentSummary,
+  AdminBrainFilters,
+  AdminBrainResponse,
   AdminCollectionItem,
   AdminDatePreset,
   AdminEventFilters,
@@ -70,6 +72,7 @@ export interface CopilotzAdminClient {
   ): Promise<AdminMessagePage>;
   listEvents(options?: AdminEventFilters): Promise<AdminQueueEvent[]>;
   getThreadEvent(threadId: string): Promise<AdminQueueEvent | undefined>;
+  getBrain(filters?: AdminBrainFilters): Promise<AdminBrainResponse>;
   listCollections(): Promise<string[]>;
   listCollectionItems(
     collection: string,
@@ -349,13 +352,16 @@ export function createAdminClient(
       ),
     listAgents: async (listOptions = {}) => {
       const windowRange = getRangeWindow(listOptions.range ?? "7d");
-      return await requestJson<AdminAgentSummary[]>(`${paths.adminBase}/agents`, {
-        search: listOptions.search,
-        namespace: listOptions.namespace,
-        from: windowRange.from,
-        to: windowRange.to,
-        limit: String(listOptions.limit ?? 25),
-      });
+      return await requestJson<AdminAgentSummary[]>(
+        `${paths.adminBase}/agents`,
+        {
+          search: listOptions.search,
+          namespace: listOptions.namespace,
+          from: windowRange.from,
+          to: windowRange.to,
+          limit: String(listOptions.limit ?? 25),
+        },
+      );
     },
     getThread: async (threadId) =>
       await requestJson<AdminThreadDetail>(
@@ -365,7 +371,9 @@ export function createAdminClient(
       const payload = await requestEnvelopeJson<unknown>(
         `${paths.threadsBase}/${encodeURIComponent(threadId)}/messages`,
         {
-          limit: messageOptions.limit ? String(messageOptions.limit) : undefined,
+          limit: messageOptions.limit
+            ? String(messageOptions.limit)
+            : undefined,
           before: messageOptions.before,
         },
       );
@@ -390,6 +398,20 @@ export function createAdminClient(
       );
       return normalizeQueueEvent(payload);
     },
+    getBrain: async (filters = {}) =>
+      await requestJson<AdminBrainResponse>(`${paths.adminBase}/brain`, {
+        namespace: filters.namespace,
+        memorySpaceId: filters.memorySpaceId,
+        checkpointId: filters.checkpointId,
+        agentId: filters.agentId,
+        threadId: filters.threadId,
+        layer: filters.layer === "all" ? undefined : filters.layer,
+        kind: filters.kind === "all" ? undefined : filters.kind,
+        status: filters.status === "all" ? undefined : filters.status,
+        search: filters.search,
+        limit: String(filters.limit ?? 160),
+        offset: filters.offset ? String(filters.offset) : undefined,
+      }),
     listCollections: async () =>
       await requestJson<string[]>(paths.collectionsBase),
     listCollectionItems: async (collection, listOptions = {}) =>
