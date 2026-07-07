@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
   aggregateUsageRows,
+  ENTITY_FOCUS_RELATION_TYPES,
+  brainModule,
   buildUsageChartState,
   collectAdminNavItems,
   collectAdminRoutes,
@@ -9,6 +13,10 @@ import {
   createAdminClient,
   EmptyState,
   FilterBar,
+  getBrainViewBaseFilters,
+  getKnowledgeRelationGroups,
+  getWorkRelationGroups,
+  groupBrainRelationsByKind,
   InspectorPanel,
   JsonPanel,
   MetricStrip,
@@ -178,6 +186,132 @@ test("admin client sends semantic brain filters", async () => {
   assert.deepEqual(brain.matches, {});
   assert.deepEqual(brain.related, []);
   assert.deepEqual(brain.similar, []);
+});
+
+test("admin client encodes entity focus relation filters", async () => {
+  const seen = [];
+  globalThis.fetch = async (url, init) => {
+    seen.push({ url, init });
+    return new Response(JSON.stringify({
+      data: {
+        nodes: [],
+        edges: [],
+        clusters: [],
+        stats: { total: 0, byLayer: {}, byKind: {}, byStatus: {} },
+        matches: {},
+        related: [],
+        similar: [],
+        semantic: { requested: true, available: true, error: null },
+        pageInfo: { limit: 24, offset: 0, returned: 0 },
+      },
+    }), {
+      headers: { "Content-Type": "application/json" },
+      status: 200,
+    });
+  };
+
+  const client = createAdminClient({ baseUrl: "/custom" });
+  await client.getBrain({
+    namespace: "tenant_compass",
+    kind: "entity",
+    layer: "knowledge",
+    focusNodeId: "entity-1",
+    includeRelated: true,
+    includeSimilar: true,
+    relationTypes: [...ENTITY_FOCUS_RELATION_TYPES],
+    limit: 180,
+  });
+
+  assert.equal(seen.length, 1);
+  assert.equal(
+    seen[0].url,
+    "http://localhost/custom/v1/admin/brain?namespace=tenant_compass&layer=knowledge&kind=entity&focusNodeId=entity-1&includeRelated=true&includeSimilar=true&relationTypes=mentions%2Crelated_to%2Csupports%2Cdepends_on%2Ccontradicts%2Csupersedes&limit=180",
+  );
+});
+
+test("brain view model defaults to entity-first filters", () => {
+  assert.deepEqual(getBrainViewBaseFilters("entities"), {
+    kind: "entity",
+    layer: "knowledge",
+  });
+  assert.deepEqual(getBrainViewBaseFilters("knowledge"), {
+    kind: "all",
+    layer: "knowledge",
+  });
+  assert.deepEqual(getBrainViewBaseFilters("work"), {
+    kind: "all",
+    layer: "working",
+  });
+  assert.deepEqual(getBrainViewBaseFilters("map"), {
+    kind: "all",
+    layer: "all",
+  });
+  assert.deepEqual([...ENTITY_FOCUS_RELATION_TYPES], [
+    "mentions",
+    "related_to",
+    "supports",
+    "depends_on",
+    "contradicts",
+    "supersedes",
+  ]);
+});
+
+test("brain relation grouping separates knowledge and work around entities", () => {
+  const related = [
+    relatedNode("edge-decision", "decision-1", "decision", "knowledge"),
+    relatedNode("edge-fact", "fact-1", "fact", "knowledge"),
+    relatedNode("edge-task", "task-1", "task", "working"),
+    relatedNode("edge-question", "question-1", "open_question", "working"),
+    relatedNode("edge-unknown", "custom-1", "custom_kind", "knowledge"),
+  ];
+
+  assert.deepEqual(
+    groupBrainRelationsByKind(related).map((group) => [
+      group.id,
+      group.items.map((item) => item.node.id),
+    ]),
+    [
+      ["decisions", ["decision-1"]],
+      ["facts", ["fact-1"]],
+      ["tasks", ["task-1"]],
+      ["openQuestions", ["question-1"]],
+      ["other", ["custom-1"]],
+    ],
+  );
+  assert.deepEqual(
+    getKnowledgeRelationGroups(related).map((group) => group.id),
+    ["decisions", "facts"],
+  );
+  assert.deepEqual(
+    getWorkRelationGroups(related).map((group) => group.id),
+    ["tasks", "openQuestions"],
+  );
+});
+
+test("brain module renders entity-first empty state by default", () => {
+  const module = brainModule();
+  const route = module.routes.find((item) => item.id === "brain");
+  assert.ok(route);
+
+  const html = renderToStaticMarkup(route.render({
+    client: {},
+    config: {},
+    permissions: {},
+    refresh: () => {},
+    refreshKey: 0,
+    scope: { namespace: "tenant_a" },
+  }));
+
+  assert.match(html, />Entities</);
+  assert.match(html, />Knowledge</);
+  assert.match(html, />Work</);
+  assert.match(html, />Map</);
+  assert.match(html, />All nodes</);
+  assert.match(html, />Entity index</);
+  assert.match(html, /tenant_a/);
+  assert.match(html, /Select an entity/);
+  assert.match(html, /No node selected/);
+  assert.doesNotMatch(html, /All layers/);
 });
 
 test("admin client lists events through the admin events endpoint", async () => {
@@ -365,5 +499,48 @@ function usagePoint(bucket, groupKey, groupLabel, totalTokens, totalCostUsd) {
     totalDurationMs: 0,
     totalTokens,
     unpricedCalls: 0,
+  };
+}
+
+function relatedNode(edgeId, nodeId, kind, layer) {
+  return {
+    direction: "in",
+    edge: {
+      id: edgeId,
+      sourceNodeId: nodeId,
+      targetNodeId: "entity-1",
+      type: "mentions",
+      weight: null,
+      createdAt: null,
+      data: null,
+    },
+    node: brainNode(nodeId, kind, layer),
+  };
+}
+
+function brainNode(id, kind, layer) {
+  return {
+    id,
+    namespace: "tenant_a",
+    name: id,
+    content: `${kind} content`,
+    layer,
+    kind,
+    status: "active",
+    memorySpaceId: null,
+    checkpointId: null,
+    agentId: null,
+    threadId: null,
+    confidence: null,
+    sourceMessageIds: [],
+    sourceField: null,
+    sourceType: null,
+    sourceId: null,
+    createdAt: null,
+    updatedAt: null,
+    clusterId: kind,
+    x: 0,
+    y: 0,
+    data: {},
   };
 }

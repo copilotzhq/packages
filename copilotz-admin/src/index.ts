@@ -19,13 +19,21 @@ export {
 export type * from "./core";
 export {
   agentsModule,
+  BRAIN_RELATION_GROUP_DEFINITIONS,
+  BRAIN_VIEW_LABELS,
   brainModule,
   collectionsModule,
   defaultCopilotzModules,
+  ENTITY_FOCUS_RELATION_TYPES,
   eventsModule,
+  getBrainViewBaseFilters,
+  getKnowledgeRelationGroups,
   overviewModule,
   participantsModule,
   threadsModule,
+  getWorkRelationGroups,
+  groupBrainRelationsByKind,
+  isEntityBrainView,
   usageModule,
 } from "./modules";
 export {

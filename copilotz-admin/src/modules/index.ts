@@ -29,5 +29,20 @@ export { overviewModule } from "./overview";
 export { participantsModule } from "./participants";
 export { threadsModule } from "./threads";
 export { usageModule } from "./usage";
+export {
+  BRAIN_RELATION_GROUP_DEFINITIONS,
+  BRAIN_VIEW_LABELS,
+  ENTITY_FOCUS_RELATION_TYPES,
+  getBrainViewBaseFilters,
+  getKnowledgeRelationGroups,
+  getWorkRelationGroups,
+  groupBrainRelationsByKind,
+  isEntityBrainView,
+} from "./brain/view-model";
+export type {
+  AdminBrainRelationGroup,
+  AdminBrainRelationGroupId,
+  AdminBrainView,
+} from "./brain/view-model";
 export * from "./usage/calculations";
 export type * from "./usage/types";
