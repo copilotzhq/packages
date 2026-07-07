@@ -4,7 +4,9 @@ import type {
   AdminAgentSummary,
   AdminCollectionItem,
   AdminDatePreset,
+  AdminMessage,
   AdminMessagePage,
+  AdminMessagePageInfo,
   AdminOverview,
   AdminParticipantDetail,
   AdminParticipantSummary,
@@ -156,10 +158,69 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
     const message = payload?.message ?? payload?.data?.message ??
+      payload?.error?.message ??
       `Admin request failed (${response.status})`;
     throw new Error(message);
   }
   return (payload?.data ?? payload) as T;
+}
+
+async function parseJsonEnvelopeResponse<T>(response: Response): Promise<T> {
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message = payload?.message ?? payload?.data?.message ??
+      payload?.error?.message ??
+      `Admin request failed (${response.status})`;
+    throw new Error(message);
+  }
+  return payload as T;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeMessagePageInfo(
+  value: unknown,
+  messages: AdminMessage[],
+): AdminMessagePageInfo {
+  const oldestFromData = messages[0]?.id ?? null;
+  const newestFromData = messages[messages.length - 1]?.id ?? null;
+
+  if (!isRecord(value)) {
+    return {
+      hasMoreBefore: false,
+      oldestMessageId: oldestFromData,
+      newestMessageId: newestFromData,
+    };
+  }
+
+  return {
+    hasMoreBefore: value.hasMoreBefore === true,
+    oldestMessageId: typeof value.oldestMessageId === "string"
+      ? value.oldestMessageId
+      : oldestFromData,
+    newestMessageId: typeof value.newestMessageId === "string"
+      ? value.newestMessageId
+      : newestFromData,
+  };
+}
+
+function normalizeMessagePage(payload: unknown): AdminMessagePage {
+  const candidate = isRecord(payload) && isRecord(payload.data) &&
+      Array.isArray(payload.data.data)
+    ? payload.data
+    : payload;
+  const data = isRecord(candidate) && Array.isArray(candidate.data)
+    ? candidate.data as AdminMessage[]
+    : Array.isArray(candidate)
+    ? candidate as AdminMessage[]
+    : [];
+  const pageInfo = isRecord(candidate)
+    ? normalizeMessagePageInfo(candidate.pageInfo, data)
+    : normalizeMessagePageInfo(undefined, data);
+
+  return { data, pageInfo };
 }
 
 export function createAdminClient(
@@ -177,6 +238,17 @@ export function createAdminClient(
       headers: await mergeHeaders({}, options.getRequestHeaders),
     });
     return await parseJsonResponse<T>(response);
+  };
+
+  const requestEnvelopeJson = async <T>(
+    path: string,
+    params?: Record<string, string | undefined>,
+  ): Promise<T> => {
+    const url = buildUrl(baseUrl, path, params);
+    const response = await fetch(url.toString(), {
+      headers: await mergeHeaders({}, options.getRequestHeaders),
+    });
+    return await parseJsonEnvelopeResponse<T>(response);
   };
 
   const writeJson = async <T>(
@@ -264,14 +336,16 @@ export function createAdminClient(
       await requestJson<AdminThreadDetail>(
         `${paths.threadsBase}/${encodeURIComponent(threadId)}`,
       ),
-    getThreadMessages: async (threadId, messageOptions = {}) =>
-      await requestJson<AdminMessagePage>(
+    getThreadMessages: async (threadId, messageOptions = {}) => {
+      const payload = await requestEnvelopeJson<unknown>(
         `${paths.threadsBase}/${encodeURIComponent(threadId)}/messages`,
         {
           limit: messageOptions.limit ? String(messageOptions.limit) : undefined,
           before: messageOptions.before,
         },
-      ),
+      );
+      return normalizeMessagePage(payload);
+    },
     getThreadEvent: async (threadId) =>
       await requestJson<AdminQueueEvent | undefined>(
         `${paths.threadsBase}/${encodeURIComponent(threadId)}/events`,

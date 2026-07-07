@@ -137,7 +137,12 @@ function ThreadsPage({ context }: { context: AdminRuntimeContext }) {
               align: "right",
               id: "participants",
               header: "Participants",
-              render: (thread) => formatNumber(thread.participantIds.length),
+              render: (thread) =>
+                formatNumber(
+                  Array.isArray(thread.participantIds)
+                    ? thread.participantIds.length
+                    : 0,
+                ),
             },
             {
               align: "right",
@@ -194,8 +199,8 @@ function ThreadInspector({
     ]).then(([nextThread, page]) => {
       if (!active) return;
       setThread(nextThread);
-      setMessages(page.data);
-      setPageInfo(page.pageInfo);
+      setMessages(Array.isArray(page?.data) ? page.data : []);
+      setPageInfo(page?.pageInfo ?? null);
     }).catch((cause) => {
       if (active) setError(cause instanceof Error ? cause.message : "Failed to load thread");
     }).finally(() => {
@@ -216,8 +221,11 @@ function ThreadInspector({
         before: pageInfo.oldestMessageId,
         limit: MESSAGE_PAGE_SIZE,
       });
-      setMessages((current) => [...page.data, ...current]);
-      setPageInfo(page.pageInfo);
+      setMessages((current) => [
+        ...(Array.isArray(page?.data) ? page.data : []),
+        ...current,
+      ]);
+      setPageInfo(page?.pageInfo ?? null);
     } finally {
       setIsLoadingMore(false);
     }

@@ -108,6 +108,60 @@ test("admin client builds configurable paths and headers", async () => {
   assert.equal(seen[0].init.headers.Authorization, "Bearer test");
 });
 
+test("admin client preserves thread message pagination envelope", async () => {
+  const seen = [];
+  const message = {
+    id: "msg-1",
+    threadId: "thread 1",
+    senderUserId: null,
+    senderId: "agent-a",
+    senderType: "agent",
+    targetId: null,
+    content: "Hello",
+    toolCallId: null,
+    toolCalls: null,
+    reasoning: null,
+    metadata: null,
+    createdAt: "2026-07-07T00:00:00.000Z",
+    updatedAt: null,
+  };
+
+  globalThis.fetch = async (url, init) => {
+    seen.push({ url, init });
+    return new Response(JSON.stringify({
+      data: [message],
+      pageInfo: {
+        hasMoreBefore: true,
+        oldestMessageId: "msg-1",
+        newestMessageId: "msg-1",
+      },
+    }), {
+      headers: { "Content-Type": "application/json" },
+      status: 200,
+    });
+  };
+
+  const client = createAdminClient({
+    baseUrl: "/custom",
+    getRequestHeaders: () => ({ Authorization: "Bearer test" }),
+  });
+  const page = await client.getThreadMessages("thread 1", {
+    before: "msg-0",
+    limit: 50,
+  });
+
+  assert.equal(seen.length, 1);
+  assert.equal(
+    seen[0].url,
+    "http://localhost/custom/v1/threads/thread%201/messages?limit=50&before=msg-0",
+  );
+  assert.equal(seen[0].init.headers.Authorization, "Bearer test");
+  assert.equal(page.data.length, 1);
+  assert.equal(page.data[0].id, "msg-1");
+  assert.equal(page.pageInfo.hasMoreBefore, true);
+  assert.equal(page.pageInfo.oldestMessageId, "msg-1");
+});
+
 test("usage calculations aggregate and build chart state", () => {
   const points = [
     usagePoint("2026-01-01T00:00:00.000Z", "agent-a", "Agent A", 10, 0.05),
