@@ -11,6 +11,7 @@ import { resolveAgentSender, resolveAssistantFallbackSender, resolveLiveEventSen
 import { convertServerMessage, isInternalMessageMetadata, prepareHydratedMessages } from './messageContract';
 import { getStreamEventPayload, isTerminalEmptyLlmResultEvent } from './streamEvents';
 import { applyToolResultUpdateToMessages, canAttachToCurrentStreamingAssistant, canAttachToStreamingAssistant, extractLiveToolCall, extractLiveToolResultUpdate, mergePersistedToolResults, messageAgentKey, matchesToolResultUpdate, prependUniqueMessages, type ToolResultUpdate } from './toolActivity';
+import { isSameThreadIdentity } from './threadIdentity';
 
 const nowTs = () => Date.now();
 const generateId = () => (globalThis.crypto?.randomUUID?.() ?? `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`) as string;
@@ -873,12 +874,9 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       let currentAssistantSender: ChatSender | undefined = params.assistantSender;
       const streamOwnerThreadId = currentThreadIdRef.current;
       const streamOwnerThreadExternalId = params.threadExternalId ?? currentThreadExternalIdRef.current;
-      const streamStillOwnsVisibleThread = () => (
-        streamOwnerThreadId
-          ? currentThreadIdRef.current === streamOwnerThreadId
-          : !streamOwnerThreadExternalId ||
-            currentThreadExternalIdRef.current === streamOwnerThreadExternalId ||
-            currentThreadIdRef.current === streamOwnerThreadExternalId
+      const streamStillOwnsVisibleThread = () => isSameThreadIdentity(
+        { id: streamOwnerThreadId, externalId: streamOwnerThreadExternalId },
+        { id: currentThreadIdRef.current, externalId: currentThreadExternalIdRef.current },
       );
       params.onBeforeStart?.(currentAssistantId);
 
@@ -1367,12 +1365,9 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
 
       const conversationKey = threadIdForSend ?? effectiveThreadExternalId!;
       const sendOwnerThreadExternalId = effectiveThreadExternalId ?? curThreadExtId;
-      const stillShowingSendOwnerThread = () => (
-        sendOwnerThreadId
-          ? currentThreadIdRef.current === sendOwnerThreadId
-          : !sendOwnerThreadExternalId ||
-            currentThreadExternalIdRef.current === sendOwnerThreadExternalId ||
-            currentThreadIdRef.current === sendOwnerThreadExternalId
+      const stillShowingSendOwnerThread = () => isSameThreadIdentity(
+        { id: sendOwnerThreadId, externalId: sendOwnerThreadExternalId },
+        { id: currentThreadIdRef.current, externalId: currentThreadExternalIdRef.current },
       );
 
       // Get pending title for new threads if any

@@ -79,6 +79,32 @@ test('tool call then tool result updates one timeline item', () => {
   assert.deepEqual(resolved.activity?.items[0].details?.result, { ok: true });
 });
 
+test('failed tool result exposes the error in activity details', () => {
+  const withTool = appendAssistantToolCall({
+    id: 'm1',
+    role: 'assistant',
+    content: '',
+    timestamp: Date.now(),
+  }, {
+    id: 'tool-1',
+    name: 'browser',
+    arguments: { url: 'https://example.com' },
+    status: 'running',
+  });
+
+  const failed = applyAssistantToolResult(withTool, {
+    id: 'tool-1',
+    name: 'browser',
+    status: 'failed',
+    error: 'page crashed',
+    endTime: 2,
+  });
+
+  assert.equal(failed.activity?.items[0].status, 'failed');
+  assert.equal(failed.activity?.items[0].details?.error, 'page crashed');
+  assert.equal(failed.activity?.items[0].details?.result, undefined);
+});
+
 test('finalizeAssistantMessage removes transient answering activity', () => {
   const answering = updateAssistantMessageToken({
     id: 'm1',

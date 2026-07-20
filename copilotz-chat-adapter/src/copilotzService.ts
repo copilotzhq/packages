@@ -201,8 +201,8 @@ type StreamCallbacks = {
     raw?: any,
     options?: { isReasoning?: boolean },
   ) => void;
-  onMessageEvent?: (payload: any) => void;
-  onAssetEvent?: (payload: any) => void;
+  onMessageEvent?: (payload: any) => void | Promise<void>;
+  onAssetEvent?: (payload: any) => void | Promise<void>;
   signal?: AbortSignal;
 };
 
@@ -658,7 +658,7 @@ export async function runCopilotzStream(
     hadNonReasoningContent = false;
   };
 
-  const processEvent = (eventChunk: string) => {
+  const processEvent = async (eventChunk: string) => {
     if (!eventChunk.trim()) return;
     const lines = eventChunk.split("\n");
     let eventType = "message";
@@ -721,13 +721,13 @@ export async function runCopilotzStream(
         hadNonReasoningContent = true;
         lastTokenWasReasoning = false;
         collectedMessages.push(payload);
-        onMessageEvent?.(payload);
+        await onMessageEvent?.(payload);
         break;
       }
       case "TOOL_CALL": {
         hadNonReasoningContent = true;
         lastTokenWasReasoning = false;
-        onMessageEvent?.(payload);
+        await onMessageEvent?.(payload);
         break;
       }
       case "TOOL_RESULT":
@@ -742,7 +742,7 @@ export async function runCopilotzStream(
           lastCompletedText = resultAnswer;
         }
         resetTokenAggregation();
-        onMessageEvent?.(payload);
+        await onMessageEvent?.(payload);
         break;
       }
       case "ASSET_CREATED": {
@@ -757,7 +757,7 @@ export async function runCopilotzStream(
           };
         }
         // Call the asset event handler
-        onAssetEvent?.(assetPayload);
+        await onAssetEvent?.(assetPayload);
         break;
       }
       case "ERROR":
@@ -768,9 +768,9 @@ export async function runCopilotzStream(
         const hasEnvelope =
           payload && typeof payload === "object" && "type" in payload;
         if (hasEnvelope) {
-          onMessageEvent?.(payload);
+          await onMessageEvent?.(payload);
         } else {
-          onMessageEvent?.({ type: eventType, payload });
+          await onMessageEvent?.({ type: eventType, payload });
         }
         break;
       }
@@ -789,13 +789,13 @@ export async function runCopilotzStream(
     while (eventBoundary >= 0) {
       const chunk = buffer.slice(0, eventBoundary);
       buffer = buffer.slice(eventBoundary + SSE_LINE_BREAK.length);
-      processEvent(chunk);
+      await processEvent(chunk);
       eventBoundary = buffer.indexOf(SSE_LINE_BREAK);
     }
   }
 
   if (buffer.length > 0) {
-    processEvent(buffer);
+    await processEvent(buffer);
   }
 
   return {

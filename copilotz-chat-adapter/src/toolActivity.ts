@@ -18,6 +18,7 @@ export type ParsedToolCall = {
   arguments: Record<string, unknown>;
   status: ToolCallStatus;
   result?: unknown;
+  error?: string;
 };
 
 export type ToolResultUpdate = {
@@ -26,6 +27,7 @@ export type ToolResultUpdate = {
   name?: string;
   status: ToolCallStatus;
   result?: unknown;
+  error?: string;
   endTime: number;
 };
 
@@ -37,8 +39,19 @@ export const expectToolStatus = (status: unknown, path: string): ToolCallStatus 
   if (status === 'pending') return 'pending';
   if (status === 'running' || status === 'processing') return 'running';
   if (status === 'failed') return 'failed';
+  if (status === 'cancelled') return 'failed';
   if (status === 'completed') return 'completed';
-  return fail(`${path} must be pending, running, processing, completed, or failed`);
+  return fail(`${path} must be pending, running, processing, completed, failed, or cancelled`);
+};
+
+const formatToolError = (error: unknown): string | undefined => {
+  if (error === undefined) return undefined;
+  if (typeof error === 'string') return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
 };
 
 const expectToolArguments = (
@@ -83,7 +96,7 @@ const findMatchingToolItem = (
     { id: item.id, name: item.toolName },
     update,
   ) &&
-  (item.status === 'active' || item.details?.result === undefined)
+  (item.status === 'active' || (item.details?.result === undefined && item.details?.error === undefined))
 ));
 
 export const applyToolResultUpdateToMessages = (
@@ -110,6 +123,7 @@ export const applyToolResultUpdateToMessages = (
         name: update.name ?? toolItem.toolName ?? toolItem.id,
         status: update.status,
         ...(update.result !== undefined ? { result: update.result } : {}),
+        ...(update.error !== undefined ? { error: update.error } : {}),
         endTime: update.endTime,
       }),
       ...(assistantPatch ?? {}),
@@ -147,13 +161,14 @@ export const extractLiveToolResultUpdate = (
   const result = payloadRecord.projectedOutput !== undefined
     ? payloadRecord.projectedOutput
     : payloadRecord.output;
-  if (result === undefined) fail('TOOL_RESULT payload requires output or projectedOutput');
+  const error = formatToolError(payloadRecord.error);
 
   return {
     id: expectString(payloadRecord.toolCallId, 'TOOL_RESULT payload.toolCallId'),
     name: expectToolName(tool, 'TOOL_RESULT payload.tool.id'),
     status: expectToolStatus(payloadRecord.status, 'TOOL_RESULT payload.status'),
-    result,
+    ...(result !== undefined ? { result } : {}),
+    ...(error !== undefined ? { error } : {}),
     endTime: now(),
   };
 };
@@ -191,6 +206,7 @@ export const extractToolCallsFromServerMessage = (msg: RestMessage): ParsedToolC
         : primary.projectedOutput !== undefined
           ? primary.projectedOutput
           : secondary?.projectedOutput;
+    const error = formatToolError(primary.error !== undefined ? primary.error : secondary?.error);
     const rawStatus = primary.status ?? secondary?.status;
 
     return {
@@ -205,6 +221,7 @@ export const extractToolCallsFromServerMessage = (msg: RestMessage): ParsedToolC
       name,
       arguments: expectToolArguments(argsRaw, 'toolCall.args'),
       ...(result !== undefined ? { result } : {}),
+      ...(error !== undefined ? { error } : {}),
       status: rawStatus === undefined ? 'running' : expectToolStatus(rawStatus, 'toolCall.status'),
     };
   };
@@ -243,14 +260,14 @@ export const extractToolResultUpdateFromMessage = (
   if (toolCalls.length === 0) fail('tool message requires metadata.toolCalls');
 
   const firstToolCall = toolCalls[0];
-  if (firstToolCall.result === undefined) fail('tool result message requires tool call output');
   expectStringValue(msg.createdAt, 'tool result message.createdAt');
 
   return {
     id: firstToolCall.id,
     ...(firstToolCall.toolExecutionId ? { toolExecutionId: firstToolCall.toolExecutionId } : {}),
     name: firstToolCall.name,
-    result: firstToolCall.result,
+    ...(firstToolCall.result !== undefined ? { result: firstToolCall.result } : {}),
+    ...(firstToolCall.error !== undefined ? { error: firstToolCall.error } : {}),
     status: firstToolCall.status,
     endTime: new Date(msg.createdAt).getTime(),
   };

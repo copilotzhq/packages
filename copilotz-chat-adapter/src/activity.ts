@@ -132,7 +132,7 @@ export const appendAssistantToolCall = (
 
 export const applyAssistantToolResult = (
   message: InternalChatMessage,
-  update: Partial<ToolCall> & Pick<ToolCall, 'name' | 'status'> & { id?: string },
+  update: Partial<ToolCall> & Pick<ToolCall, 'name' | 'status'> & { id?: string; error?: string },
 ): InternalChatMessage => {
   if (message.role !== 'assistant') return message;
   const items = getItems(message);
@@ -143,27 +143,33 @@ export const applyAssistantToolResult = (
   if (index === -1) return message;
 
   const item = items[index];
+  const { error, ...toolCallUpdate } = update;
   const toolCall = item.details?.toolCall;
-  const nextToolCall = toolCall ? { ...toolCall, ...update } : {
-    id: update.id ?? item.id,
-    name: update.name,
+  const nextToolCall = toolCall ? { ...toolCall, ...toolCallUpdate } : {
+    id: toolCallUpdate.id ?? item.id,
+    name: toolCallUpdate.name,
     arguments: {},
-    status: update.status,
-    ...(update.result !== undefined ? { result: update.result } : {}),
-    ...(update.endTime !== undefined ? { endTime: update.endTime } : {}),
+    status: toolCallUpdate.status,
+    ...(toolCallUpdate.result !== undefined ? { result: toolCallUpdate.result } : {}),
+    ...(toolCallUpdate.endTime !== undefined ? { endTime: toolCallUpdate.endTime } : {}),
   };
   const status = toolStatusToActivityStatus(update.status);
+  const details: NonNullable<AssistantActivityItem['details']> = {
+    ...(item.details ?? {}),
+    toolCall: nextToolCall,
+    ...(update.result !== undefined ? { result: update.result } : {}),
+    ...(error !== undefined ? { error } : {}),
+  };
+  if (error === undefined && update.status !== 'failed') {
+    delete details.error;
+  }
   const next = [...items];
   next[index] = {
     ...item,
     status,
     toolName: update.name,
     ...(status !== 'active' ? { completedAt: update.endTime ?? Date.now() } : {}),
-    details: {
-      ...(item.details ?? {}),
-      toolCall: nextToolCall,
-      ...(update.result !== undefined ? { result: update.result } : {}),
-    },
+    details,
   };
   return setItems(message, next);
 };

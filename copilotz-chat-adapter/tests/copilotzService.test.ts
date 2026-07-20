@@ -90,3 +90,42 @@ test('runCopilotzStream resets token aggregation between completed LLM token seq
     globalThis.fetch = originalFetch;
   }
 });
+
+test('runCopilotzStream awaits and surfaces asynchronous event callback failures', async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+
+  globalThis.fetch = async () => new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sse('TOOL_RESULT', {
+          type: 'TOOL_RESULT',
+          payload: {
+            toolCallId: 'tool-1',
+            tool: { id: 'browser' },
+            status: 'failed',
+            error: 'page crashed',
+          },
+        })));
+        controller.close();
+      },
+    }),
+    {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    },
+  );
+
+  try {
+    await assert.rejects(runCopilotzStream({
+      content: 'Hello',
+      user: { externalId: 'user-123', name: 'User' },
+      onMessageEvent: async () => {
+        await Promise.resolve();
+        throw new Error('event callback failed');
+      },
+    }), /event callback failed/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

@@ -247,6 +247,36 @@ test('live tool events parse to the same tool identity as persisted history', ()
   });
 });
 
+test('live failed tool result accepts error without output', () => {
+  assert.deepEqual(extractLiveToolResultUpdate({
+    toolCallId: 'tool-1',
+    tool: { id: 'browser', name: 'browser' },
+    status: 'failed',
+    error: 'page crashed',
+  }, () => 123), {
+    id: 'tool-1',
+    name: 'browser',
+    status: 'failed',
+    error: 'page crashed',
+    endTime: 123,
+  });
+});
+
+test('live cancelled tool result normalizes to failed activity', () => {
+  assert.deepEqual(extractLiveToolResultUpdate({
+    toolCallId: 'tool-1',
+    tool: { id: 'browser', name: 'browser' },
+    status: 'cancelled',
+    error: { message: 'cancelled by user' },
+  }, () => 123), {
+    id: 'tool-1',
+    name: 'browser',
+    status: 'failed',
+    error: '{"message":"cancelled by user"}',
+    endTime: 123,
+  });
+});
+
 test('tool contract throws instead of defaulting malformed statuses', () => {
   assert.throws(() => extractLiveToolResultUpdate({
     toolCallId: 'tool-1',
