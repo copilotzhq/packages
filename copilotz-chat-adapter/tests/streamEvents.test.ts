@@ -17,7 +17,15 @@ test('terminal empty LLM result is detected when it has no tools or routing', ()
 test('empty LLM result is not terminal when it still has routing work', () => {
   assert.equal(isTerminalEmptyLlmResultEvent({
     type: 'LLM_RESULT',
-    metadata: { routing: { routeTo: ['east'] }, targetQueue: [] },
+    metadata: {
+      routing: {
+        action: 'handoff',
+        targetId: 'east',
+        source: 'model_control',
+        message: 'Continue the implementation.',
+      },
+      targetQueue: [],
+    },
     payload: {
       answer: '',
       finishReason: 'stop',

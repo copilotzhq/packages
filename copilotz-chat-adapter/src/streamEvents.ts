@@ -20,7 +20,11 @@ export const isTerminalEmptyLlmResultEvent = (event: unknown): boolean => {
 
   const metadata = isRecord(event.metadata) ? event.metadata : {};
   const routing = isRecord(metadata.routing) ? metadata.routing : {};
-  if (hasValues(routing.routeTo) || hasValues(routing.askTo)) return false;
+  if (
+    (routing.action === 'ask' || routing.action === 'handoff') &&
+    typeof routing.targetId === 'string' &&
+    routing.targetId.trim().length > 0
+  ) return false;
   if (hasValues(metadata.targetQueue)) return false;
 
   return true;
