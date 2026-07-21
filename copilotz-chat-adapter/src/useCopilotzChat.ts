@@ -6,19 +6,26 @@ import type { AgentOption, AssistantActivityBlock, ChatMessage as ChatViewMessag
 import { useUrlState } from './useUrlState';
 import type { EventInterceptor, RunErrorInterceptor, SpecialChatState } from './specialState';
 import type { RequestHeadersProvider, RestMessage, RestMessagePageInfo, ThreadActivityStatus } from './copilotzService';
-import { appendAssistantToolCall, closeAssistantMessage, finalizeAssistantMessage, hasVisibleAssistantOutput, type InternalChatMessage, updateAssistantMessageToken, toPublicChatMessage } from './activity';
+import { closeAssistantMessage, hasVisibleAssistantOutput, type InternalChatMessage, toPublicChatMessage } from './activity';
 import { resolveAgentSender, resolveAssistantFallbackSender, resolveLiveEventSender, resolveUserSender, type SenderResolutionOptions } from './senders';
-import { convertServerMessage, isInternalMessageMetadata, prepareHydratedMessages } from './messageContract';
+import { isInternalMessageMetadata, prepareHydratedMessages } from './messageContract';
 import { getLlmAttemptId, getStreamEventPayload, isTerminalEmptyLlmResultEvent } from './streamEvents';
-import { applyToolResultUpdateToMessages, canAttachToCurrentStreamingAssistant, canAttachToStreamingAssistant, extractLiveToolCall, extractLiveToolResultUpdate, mergePersistedToolResults, messageAgentKey, matchesToolResultUpdate, prependUniqueMessages, type ToolResultUpdate } from './toolActivity';
+import { canAttachToStreamingAssistant, extractLiveToolCall, extractLiveToolResultUpdate, mergePersistedToolResults, matchesToolResultUpdate, prependUniqueMessages, type ToolResultUpdate } from './toolActivity';
 import { isSameThreadIdentity } from './threadIdentity';
-import { CLIENT_MESSAGE_ID_METADATA_KEY, LLM_ATTEMPT_ID_METADATA_KEY, reconcileThreadMessages } from './messageReconciliation';
+import { CLIENT_MESSAGE_ID_METADATA_KEY, reconcileThreadMessages } from './messageReconciliation';
+import { applyLiveRunOperations, createLiveRunState, getLatestLiveRunMessageId, transitionLiveRun, type LiveRunAction } from './liveRun';
 
 const nowTs = () => Date.now();
 const generateId = () => (globalThis.crypto?.randomUUID?.() ?? `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`) as string;
 const isAbortError = (error: unknown) => (error instanceof DOMException && error.name === 'AbortError') || (typeof error === 'object' && error !== null && 'name' in error && (error as { name?: string }).name === 'AbortError');
 const getEventPayload = (event: any): any => getStreamEventPayload(event) as any;
 const getEventSenderType = (payload: any): string | undefined => payload?.senderType || payload?.sender?.type;
+const getEventTimestamp = (event: any): number => {
+  const timestamp = typeof event?.createdAt === 'string'
+    ? new Date(event.createdAt).getTime()
+    : NaN;
+  return Number.isFinite(timestamp) ? timestamp : nowTs();
+};
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -57,11 +64,11 @@ const createEmptyMessagePageInfo = (): RestMessagePageInfo => ({
   newestMessageId: null,
 });
 
-const createPendingAssistantActivity = (): AssistantActivityBlock => ({
+const createPendingAssistantActivity = (messageId: string): AssistantActivityBlock => ({
   items: [
     {
-      id: 'thinking',
-      kind: 'thinking',
+      id: `${messageId}:pending`,
+      kind: 'answering',
       status: 'active',
       startedAt: nowTs(),
     },
@@ -137,9 +144,6 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     assistantName,
   });
   const persistedToolUpdatesRef = useRef<ToolResultUpdate[]>([]);
-  // Buffer live TOOL_RESULT updates that arrive before their matching TOOL_CALL
-  // has been rendered. We reconcile them as soon as the TOOL_CALL lands.
-  const liveToolUpdatesRef = useRef<ToolResultUpdate[]>([]);
   const stopRequestedRef = useRef(false);
   const recoveryPollGenerationRef = useRef(0);
 
@@ -371,7 +375,6 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       setIsLoadingOlderMessages(false);
       setMessagePageInfo(createEmptyMessagePageInfo());
       persistedToolUpdatesRef.current = [];
-      liveToolUpdatesRef.current = [];
       try {
         const page = await fetchThreadMessagesPage(threadId, { limit: THREAD_MESSAGES_PAGE_SIZE }, getRequestHeaders);
         const { viewMessages, toolResultUpdates } = await prepareThreadMessages(page.data);
@@ -801,202 +804,27 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
 
   const sendCopilotzMessage = useCallback(
     async (params: { threadId?: string | null; threadExternalId?: string | null; content: string; attachments?: MediaAttachment[]; metadata?: Record<string, unknown>; threadMetadata?: Record<string, unknown>; toolCalls?: Array<{ name: string; args: Record<string, unknown> }>; userId: string; userName?: string; userMetadata?: Record<string, unknown>; agentName?: string | null; assistantMessageId?: string; assistantSender?: ChatSender; onBeforeStart?: (assistantMessageId: string) => void; preserveActiveRun?: boolean }) => {
-      // Track the current live assistant message so one sender streak stays in one bubble.
-      let currentAssistantId = params.assistantMessageId ?? generateId();
-      let currentAssistantSender: ChatSender | undefined = params.assistantSender;
+      const initialAssistantMessageId = params.assistantMessageId ?? generateId();
+      let liveRunState = createLiveRunState(initialAssistantMessageId);
       const streamOwnerThreadId = currentThreadIdRef.current;
       const streamOwnerThreadExternalId = params.threadExternalId ?? currentThreadExternalIdRef.current;
       const streamStillOwnsVisibleThread = () => isSameThreadIdentity(
         { id: streamOwnerThreadId, externalId: streamOwnerThreadExternalId },
         { id: currentThreadIdRef.current, externalId: currentThreadExternalIdRef.current },
       );
-      params.onBeforeStart?.(currentAssistantId);
+      params.onBeforeStart?.(initialAssistantMessageId);
 
       let hasStreamProgress = false;
 
-      // Combined function to ensure bubble exists AND update content in a single setMessages call
-      const updateStreamingMessage = (
-        partial: string,
-        opts?: {
-          isReasoning?: boolean;
-          agent?: { id?: string | null; name?: string | null } | null;
-        }
-      ) => {
+      const dispatchLiveRunAction = (action: LiveRunAction) => {
         if (!streamStillOwnsVisibleThread()) return;
-        if (partial && partial.length > 0) {
-          hasStreamProgress = true;
-          setIsRecoveringStream(false);
-        }
-
-        const isReasoning = opts?.isReasoning ?? false;
-        const nextSender = opts?.agent ? resolveAgentSender(opts.agent, senderOptionsRef.current) : currentAssistantSender;
-        if (nextSender) {
-          currentAssistantSender = nextSender;
-        }
-        const nextAgentKey = currentAssistantSender?.agentId ?? currentAssistantSender?.id ?? null;
-
-        const applyUpdate = (msg: InternalChatMessage): InternalChatMessage => {
-          return {
-            ...updateAssistantMessageToken(msg, {
-              partial,
-              isReasoning,
-            }),
-            ...(currentAssistantSender ? { sender: currentAssistantSender } : {}),
-          };
-        };
-
-        setMessages((prev) => {
-          const idx = prev.findIndex((m) => m.id === currentAssistantId);
-          if (idx >= 0 && canAttachToCurrentStreamingAssistant(prev[idx])) {
-            const msg = prev[idx];
-            const next = applyUpdate(msg);
-            if (msg.content === next.content && msg.activity === next.activity && msg.isStreaming === next.isStreaming && msg.isComplete === next.isComplete) {
-              return prev;
-            }
-            const updated = [...prev];
-            updated[idx] = next;
-            return updated;
-          }
-
-          const last = prev[prev.length - 1];
-          if (canAttachToStreamingAssistant(last, nextAgentKey)) {
-            currentAssistantId = last.id;
-            const next = applyUpdate(last);
-            if (last.content === next.content && last.activity === next.activity && last.isStreaming === next.isStreaming && last.isComplete === next.isComplete) {
-              return prev;
-            }
-            const updated = [...prev];
-            updated[prev.length - 1] = next;
-            return updated;
-          }
-
-          const lastStreamingBelongsToDifferentAgent = Boolean(nextAgentKey) && last?.role === 'assistant' && last.isStreaming && Boolean(messageAgentKey(last)) && messageAgentKey(last) !== nextAgentKey;
-
-          if (!prev.length || prev[prev.length - 1].role !== 'assistant' || !prev[prev.length - 1].isStreaming || lastStreamingBelongsToDifferentAgent) {
-            const newId = generateId();
-            currentAssistantId = newId;
-            const base: InternalChatMessage = {
-              id: newId,
-              role: 'assistant' as const,
-              content: '',
-              timestamp: nowTs(),
-              isStreaming: true,
-              isComplete: false,
-              ...(currentAssistantSender ? { sender: currentAssistantSender } : {}),
-            };
-            return [...prev, applyUpdate(base)];
-          }
-
-          return prev;
+        const transition = transitionLiveRun(liveRunState, action, {
+          createId: generateId,
         });
-      };
-
-      const finalizeCurrentAssistantBubble = () => {
-        if (!streamStillOwnsVisibleThread()) return;
-        setMessages((prev) => {
-          const idx = prev.findIndex((m) => m.id === currentAssistantId);
-          if (idx < 0) return prev;
-          const msg = prev[idx];
-          // Skip update if already finalized
-          if (!msg.isStreaming && msg.isComplete) return prev;
-          const updated = [...prev];
-          updated[idx] = closeAssistantMessage(msg);
-          return updated;
-        });
-      };
-
-      // Using Refs for accessing current state inside callback
-      const curThreadId = currentThreadIdRef.current;
-
-      const applyLiveToolResultUpdate = (update: ToolResultUpdate) => {
-        if (!streamStillOwnsVisibleThread()) return;
-        let matched = false;
-        setMessages((prev) => {
-          const next = applyToolResultUpdateToMessages(prev, update, {
-            isStreaming: true,
-            isComplete: false,
-          });
-          matched = next.matched;
-          return next.matched ? next.messages : prev;
-        });
-
-        if (!matched) {
-          liveToolUpdatesRef.current.push(update);
+        liveRunState = transition.state;
+        if (transition.operations.length > 0) {
+          setMessages((prev) => applyLiveRunOperations(prev, transition.operations));
         }
-      };
-
-      const finalizeActiveAssistantTurn = (
-        finalAnswer?: string,
-        llmAttemptId?: string | null,
-      ) => {
-        if (!streamStillOwnsVisibleThread()) return;
-        setMessages((prev) => {
-          const currentIdx = prev.findIndex((message) => message.id === currentAssistantId && message.role === 'assistant');
-          const fallbackIdx =
-            currentIdx >= 0
-              ? currentIdx
-              : (() => {
-                  for (let i = prev.length - 1; i >= 0; i--) {
-                    if (prev[i].role === 'assistant' && prev[i].isStreaming) {
-                      return i;
-                    }
-                  }
-                  return -1;
-                })();
-
-          if (fallbackIdx < 0) return prev;
-
-          const message = prev[fallbackIdx];
-          const correlatedMessage = llmAttemptId
-            ? {
-              ...message,
-              metadata: {
-                ...(message.metadata ?? {}),
-                [LLM_ATTEMPT_ID_METADATA_KEY]: llmAttemptId,
-              },
-            }
-            : message;
-          const nextMessage = finalizeAssistantMessage(correlatedMessage, finalAnswer);
-
-          if (message.content === nextMessage.content && message.isStreaming === nextMessage.isStreaming && message.isComplete === nextMessage.isComplete && message.activity === nextMessage.activity && message.metadata === nextMessage.metadata) {
-            return prev;
-          }
-
-          const updated = [...prev];
-          updated[fallbackIdx] = nextMessage;
-          currentAssistantId = nextMessage.id;
-          return updated;
-        });
-      };
-
-      // Build a ServerMessage-like object from selected streaming artifact events.
-      const toServerMessageFromEvent = async (event: any): Promise<ServerMessage | null> => {
-        if (!event) return null;
-        const type = (event?.type as string) || '';
-        const payload = event?.payload ?? event;
-
-        // TOOL_CALL bubble
-        if (type === 'TOOL_CALL') {
-          const parsedToolCall = extractLiveToolCall(payload);
-
-          return {
-            id: generateId(),
-            threadId: curThreadId ?? '',
-            senderType: 'tool',
-            content: '',
-            toolCalls: [
-              {
-                id: parsedToolCall.id ?? generateId(),
-                name: parsedToolCall.name,
-                args: parsedToolCall.arguments,
-                ...(parsedToolCall.result !== undefined ? { output: parsedToolCall.result } : {}),
-                status: parsedToolCall.status,
-              },
-            ] as Array<Record<string, unknown>>,
-          } as unknown as ServerMessage;
-        }
-
-        return null;
       };
 
       const abortController = new AbortController();
@@ -1009,9 +837,6 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       stopRequestedRef.current = false;
       setThreadActivityStatus('running');
       setIsStreaming(true);
-      // Reset the live tool-result buffer at the start of every stream so
-      // stale updates from a previous run can't leak into this one.
-      liveToolUpdatesRef.current = [];
 
       let streamError: unknown = null;
       const resolveActivityThreadId = async () => {
@@ -1069,11 +894,32 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
           participants: participantsRef.current,
           targetAgent: targetAgentNameRef.current,
           getRequestHeaders,
-          onToken: (token, _isComplete, raw, opts) =>
-            updateStreamingMessage(token, {
-              ...opts,
-              agent: raw?.payload?.agent ?? raw?.agent ?? null,
-            }),
+          onToken: (token, _isComplete, raw, opts) => {
+            const rawAgent = raw?.payload?.agent ?? raw?.agent ?? null;
+            const sender = rawAgent
+              ? resolveAgentSender(rawAgent, senderOptionsRef.current)
+              : params.assistantSender;
+            const attemptId = opts?.llmAttemptId ??
+              liveRunState.activeAttemptId ??
+              liveRunState.lastAttemptId ??
+              `stream-attempt:${initialAssistantMessageId}`;
+            const isReasoning = opts?.isReasoning ?? false;
+            const phaseId = opts?.phaseId ??
+              `${attemptId}:${isReasoning ? 'reasoning' : 'answer'}:0`;
+            if (token.length > 0) {
+              hasStreamProgress = true;
+              setIsRecoveringStream(false);
+            }
+            dispatchLiveRunAction({
+              type: 'token',
+              attemptId,
+              phaseId,
+              partial: token,
+              isReasoning,
+              sender,
+              at: getEventTimestamp(raw),
+            });
+          },
           onMessageEvent: async (event: any) => {
             if (!streamStillOwnsVisibleThread()) return;
             const intercepted = applyEventInterceptor(event);
@@ -1084,15 +930,41 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
             const type = (event?.type as string) || '';
             const payload = getEventPayload(event);
 
+            if (type === 'LLM_CALL') {
+              const attemptId = getLlmAttemptId(event);
+              if (attemptId) {
+                dispatchLiveRunAction({
+                  type: 'attempt-start',
+                  attemptId,
+                  sender: resolveLiveEventSender(event, senderOptionsRef.current),
+                  at: getEventTimestamp(event),
+                });
+              }
+              return;
+            }
+
             if (type === 'TOOL_RESULT') {
               processToolOutput((payload ?? {}) as Record<string, unknown>);
-              applyLiveToolResultUpdate(extractLiveToolResultUpdate((payload ?? {}) as Record<string, unknown>));
+              dispatchLiveRunAction({
+                type: 'tool-result',
+                update: extractLiveToolResultUpdate((payload ?? {}) as Record<string, unknown>),
+              });
               return;
             }
 
             if (type === 'LLM_RESULT') {
               const finalAnswer = typeof payload?.answer === 'string' ? payload.answer : undefined;
-              finalizeActiveAssistantTurn(finalAnswer, getLlmAttemptId(event));
+              const attemptId = getLlmAttemptId(event) ??
+                liveRunState.activeAttemptId ??
+                liveRunState.lastAttemptId;
+              if (attemptId) {
+                dispatchLiveRunAction({
+                  type: 'attempt-result',
+                  attemptId,
+                  answer: finalAnswer,
+                  at: getEventTimestamp(event),
+                });
+              }
               if (isTerminalEmptyLlmResultEvent(event)) {
                 finalizeStreamingPlaceholders();
               }
@@ -1103,103 +975,31 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
               return;
             }
 
-            // TOOL_CALL events: render inside current assistant bubble.
-            // NOTE: This branch stays synchronous so any immediately following
-            // TOOL_RESULT can reconcile against the rendered tool call.
             if (type === 'TOOL_CALL') {
               const parsedToolCall = extractLiveToolCall((payload ?? {}) as Record<string, unknown>);
               const eventSender = resolveLiveEventSender(event, senderOptionsRef.current);
-              currentAssistantSender = eventSender;
-              const eventAgentKey = currentAssistantSender.agentId ?? currentAssistantSender.id;
               const callId = parsedToolCall.id ?? generateId();
-              const toolName = parsedToolCall.name;
-
-              // Drain any tool-result updates that arrived before this TOOL_CALL.
-              const bufferedUpdates = liveToolUpdatesRef.current;
-              const matchingUpdateIndex = bufferedUpdates.findIndex((upd) => matchesToolResultUpdate({ id: callId, name: toolName }, upd));
-              const bufferedUpdate = matchingUpdateIndex >= 0 ? bufferedUpdates[matchingUpdateIndex] : undefined;
-              if (matchingUpdateIndex >= 0) {
-                bufferedUpdates.splice(matchingUpdateIndex, 1);
-              }
-
-              const initialStatus: 'pending' | 'running' | 'completed' | 'failed' = bufferedUpdate ? bufferedUpdate.status : parsedToolCall.status;
-              const initialResult = bufferedUpdate && bufferedUpdate.result !== undefined ? bufferedUpdate.result : parsedToolCall.result;
-              const endTime = bufferedUpdate?.endTime;
-
-              setMessages((prev) =>
-                (() => {
-                  const canHostActivity = (message: ChatViewMessage | undefined) => {
-                    if (!message) return false;
-                    return message.role === 'assistant' && message.isStreaming && message.content.trim().length === 0 && !message.attachments?.length;
-                  };
-                  const appendToolCall = (msg: ChatViewMessage) => ({
-                    ...appendAssistantToolCall(msg, {
-                      id: callId,
-                      name: toolName,
-                      arguments: parsedToolCall.arguments,
-                      ...(initialResult !== undefined ? { result: initialResult } : {}),
-                      status: initialStatus,
-                      startTime: Date.now(),
-                      ...(endTime !== undefined ? { endTime } : {}),
-                    }),
-                  });
-
-                  const currentIdx = prev.findIndex((message) => message.id === currentAssistantId && message.role === 'assistant' && message.isStreaming && canHostActivity(message));
-                  if (currentIdx >= 0) {
-                    const next = [...prev];
-                    next[currentIdx] = appendToolCall({
-                      ...next[currentIdx],
-                      isStreaming: true,
-                      isComplete: false,
-                      ...(currentAssistantSender ? { sender: currentAssistantSender } : {}),
-                    });
-                    return next;
-                  }
-
-                  const last = prev[prev.length - 1];
-                  if (canHostActivity(last) && canAttachToStreamingAssistant(last, eventAgentKey)) {
-                    currentAssistantId = last.id;
-                    const next = [...prev];
-                    next[prev.length - 1] = appendToolCall({
-                      ...last,
-                      isStreaming: true,
-                      isComplete: false,
-                      ...(currentAssistantSender ? { sender: currentAssistantSender } : {}),
-                    });
-                    return next;
-                  }
-
-                  // No assistant message yet – create one to host the tool call
-                  const newId = generateId();
-                  currentAssistantId = newId;
-                  return [
-                    ...prev,
-                    appendToolCall({
-                      id: newId,
-                      role: 'assistant',
-                      content: '',
-                      timestamp: nowTs(),
-                      isStreaming: true,
-                      isComplete: false,
-                      ...(currentAssistantSender ? { sender: currentAssistantSender } : {}),
-                    }),
-                  ];
-                })()
-              );
-              hasStreamProgress = true;
-              return;
-            }
-
-            // Other event types (ASSET_CREATED, etc.) should render as their own bubbles
-            const sm = await toServerMessageFromEvent(event);
-            if (sm) {
-              const viewMsg = convertServerMessage(sm, {
-                senderOptions: senderOptionsRef.current,
-                createId: generateId,
-                now: nowTs,
+              dispatchLiveRunAction({
+                type: 'tool-call',
+                attemptId: getLlmAttemptId(event) ??
+                  liveRunState.activeAttemptId ??
+                  liveRunState.lastAttemptId,
+                sender: eventSender,
+                at: getEventTimestamp(event),
+                toolCall: {
+                  id: callId,
+                  name: parsedToolCall.name,
+                  arguments: parsedToolCall.arguments,
+                  status: parsedToolCall.status,
+                  ...(parsedToolCall.toolExecutionId
+                    ? { toolExecutionId: parsedToolCall.toolExecutionId }
+                    : {}),
+                  ...(parsedToolCall.result !== undefined
+                    ? { result: parsedToolCall.result }
+                    : {}),
+                },
               });
-              finalizeCurrentAssistantBubble();
-              setMessages((prev) => [...prev, viewMsg]);
+              hasStreamProgress = true;
               return;
             }
 
@@ -1216,11 +1016,8 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
               return;
             }
 
-            // Treat as ASSET_CREATED event in unified handler
-            await (async () => {
-              if (!hasStreamProgress) return;
-              handleStreamAssetEvent(payload, currentAssistantId);
-            })();
+            if (!hasStreamProgress) return;
+            handleStreamAssetEvent(payload, getLatestLiveRunMessageId(liveRunState));
           },
           signal: abortController.signal,
         });
@@ -1257,11 +1054,11 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       }
 
       if (!streamStillOwnsVisibleThread()) {
-        return currentAssistantId;
+        return getLatestLiveRunMessageId(liveRunState);
       }
 
       if (recoveryStarted) {
-        return currentAssistantId;
+        return getLatestLiveRunMessageId(liveRunState);
       }
 
       finalizeStreamingPlaceholders();
@@ -1270,7 +1067,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
         throw streamError;
       }
 
-      return currentAssistantId;
+      return getLatestLiveRunMessageId(liveRunState);
     },
     [applyEventInterceptor, handleStreamMessageEvent, handleStreamAssetEvent, fetchAndSetThreadsState, finalizeStreamingPlaceholders, getRequestHeaders, refreshThreadMessages, startThreadActivityRecovery]
   );
@@ -1347,15 +1144,16 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
         : resolveAssistantFallbackSender(senderOptionsRef.current);
 
       // Create an assistant message placeholder with streaming state for typewriter effect
+      const assistantMessageId = generateId();
       const assistantPlaceholder: ChatViewMessage = {
-        id: generateId(),
+        id: assistantMessageId,
         role: 'assistant',
         content: '',
         timestamp: timestamp + 1,
         isStreaming: true,
         isComplete: false,
         sender: assistantSender,
-        activity: createPendingAssistantActivity(),
+        activity: createPendingAssistantActivity(assistantMessageId),
       };
 
       // Add user message and assistant placeholder for typewriter loading effect
@@ -1478,7 +1276,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
           isStreaming: true,
           isComplete: false,
           sender: assistantSender,
-          activity: createPendingAssistantActivity(),
+          activity: createPendingAssistantActivity(assistantMessageId),
         } as InternalChatMessage,
       ]);
       setMessagePageInfo(createEmptyMessagePageInfo());

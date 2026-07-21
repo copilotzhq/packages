@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/chat-ui",
-  "version": "0.9.44",
+  "version": "0.9.45",
   "description": "Copilotz chat UI components",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -26,7 +26,7 @@
     "build:watch": "tsup --watch",
     "build:css:watch": "tailwindcss -c tailwind.config.ts -i ./src/styles.css -o ./dist/styles.css --watch",
     "dev": "npm run build:watch & npm run build:css:watch",
-    "test": "npm run build >/dev/null && node --test tests/**/*.test.js",
+    "test": "npm run build >/dev/null && node --test tests/**/*.test.js && node --test --experimental-strip-types tests/**/*.test.ts",
     "prepack": "npm run build && npm run build:css"
   },
   "peerDependencies": {

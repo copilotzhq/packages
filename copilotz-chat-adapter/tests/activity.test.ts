@@ -7,7 +7,6 @@ import {
   updateAssistantMessageToken,
 } from '../src/activity.ts';
 import {
-  canAttachToCurrentStreamingAssistant,
   canAttachToStreamingAssistant,
 } from '../src/toolActivity.ts';
 
@@ -44,6 +43,46 @@ test('answer tokens complete thinking and create an active answering item', () =
   assert.equal(answering.activity?.items[0].status, 'complete');
   assert.equal(answering.activity?.items[1].kind, 'answering');
   assert.equal(answering.activity?.items[1].status, 'active');
+});
+
+test('multiple reasoning phases remain distinct and ordered around tools', () => {
+  let message = updateAssistantMessageToken({
+    id: 'm1',
+    role: 'assistant',
+    content: '',
+    timestamp: Date.now(),
+  }, {
+    partial: 'First line of reasoning',
+    isReasoning: true,
+    activityId: 'attempt-1:reasoning:0',
+  });
+
+  message = appendAssistantToolCall(message, {
+    id: 'tool-1',
+    name: 'search',
+    arguments: { query: 'evidence' },
+    status: 'running',
+  });
+  message = applyAssistantToolResult(message, {
+    id: 'tool-1',
+    name: 'search',
+    status: 'completed',
+    result: { found: true },
+  });
+  message = updateAssistantMessageToken(message, {
+    partial: 'Second line of reasoning',
+    isReasoning: true,
+    activityId: 'attempt-2:reasoning:0',
+  });
+
+  assert.deepEqual(
+    message.activity?.items.map((item) => item.id),
+    ['attempt-1:reasoning:0', 'tool-1', 'attempt-2:reasoning:0'],
+  );
+  assert.equal(message.activity?.items[0].details?.reasoning, 'First line of reasoning');
+  assert.equal(message.activity?.items[0].status, 'complete');
+  assert.equal(message.activity?.items[2].details?.reasoning, 'Second line of reasoning');
+  assert.equal(message.activity?.items[2].status, 'active');
 });
 
 test('tool call then tool result updates one timeline item', () => {
@@ -125,7 +164,7 @@ test('finalizeAssistantMessage removes transient answering activity', () => {
   assert.equal(finalized.activity, undefined);
 });
 
-test('current streaming placeholder can adopt the real token sender', () => {
+test('streaming placeholder only accepts events from its agent', () => {
   const northPlaceholder = {
     id: 'assistant-placeholder',
     role: 'assistant',
@@ -142,5 +181,5 @@ test('current streaming placeholder can adopt the real token sender', () => {
   };
 
   assert.equal(canAttachToStreamingAssistant(northPlaceholder, 'west'), false);
-  assert.equal(canAttachToCurrentStreamingAssistant(northPlaceholder), true);
+  assert.equal(canAttachToStreamingAssistant(northPlaceholder, 'north'), true);
 });

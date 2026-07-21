@@ -36,6 +36,7 @@ import {
 
 interface MessageProps {
   message: ChatMessage;
+  fragments?: ChatMessage[];
   isUser?: boolean;
   userAvatar?: string;
   userName?: string;
@@ -69,6 +70,16 @@ const hasRenderableAssistantBody = (message: ChatMessage): boolean => {
   if (typeof message.content === 'string' && message.content.trim().length > 0) return true;
   if (Array.isArray(message.attachments) && message.attachments.length > 0) return true;
   return Boolean(message.activity?.items.length);
+};
+
+const filterActivity = (
+  message: ChatMessage,
+  placement: 'before-content' | 'after-content',
+): ChatMessage['activity'] => {
+  const items = message.activity?.items.filter((item) => (
+    placement === 'after-content' ? item.kind === 'tool' : item.kind !== 'tool'
+  )) ?? [];
+  return items.length > 0 ? { items } : undefined;
 };
 
 // Memoized markdown components configuration to prevent recreation on every render
@@ -482,6 +493,7 @@ const MediaRenderer: React.FC<{ attachment: MediaAttachment }> = memo(function M
 // chat state, so reference equality is enough to detect actual message changes.
 const arePropsEqual = (prevProps: MessageProps, nextProps: MessageProps): boolean => {
   if (prevProps.message !== nextProps.message) return false;
+  if (prevProps.fragments !== nextProps.fragments) return false;
   
   // Compare other props
   if (prevProps.isUser !== nextProps.isUser) return false;
@@ -515,6 +527,7 @@ const arePropsEqual = (prevProps: MessageProps, nextProps: MessageProps): boolea
 
 export const Message: React.FC<MessageProps> = memo(({
   message,
+  fragments,
   isUser,
   userAvatar,
   userName = 'Você',
@@ -548,13 +561,19 @@ export const Message: React.FC<MessageProps> = memo(({
   const [actionsFocused, setActionsFocused] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  const sourceMessages = fragments?.length ? fragments : [message];
+  const headerMessage = sourceMessages[0];
+  const groupContent = sourceMessages
+    .map((sourceMessage) => sourceMessage.content.trim())
+    .filter(Boolean)
+    .join('\n\n');
   const messageIsUser = isUser ?? message.role === 'user';
-  if (!hasRenderableAssistantBody(message)) {
+  if (!sourceMessages.some(hasRenderableAssistantBody)) {
     return null;
   }
 
   const senderDisplay = resolveMessageSenderDisplay({
-    sender: message.sender,
+    sender: headerMessage.sender,
     fallbackName: messageIsUser ? userName : assistantName,
     fallbackAvatar: messageIsUser ? undefined : assistantAvatar,
     fallbackAvatarUrl: messageIsUser ? userAvatar : undefined,
@@ -567,13 +586,14 @@ export const Message: React.FC<MessageProps> = memo(({
     ? message.metadata.previewContent
     : undefined;
   const canCollapseMessage = collapseLongMessages
-    && !message.isStreaming
-    && message.content.length > normalizedPreviewChars
+    && sourceMessages.length === 1
+    && !sourceMessages.some((sourceMessage) => sourceMessage.isStreaming)
+    && groupContent.length > normalizedPreviewChars
     && (!collapseLongMessagesForUserOnly || messageIsUser);
   const isCollapsed = canCollapseMessage && !isExpanded;
   const contentToRender = isCollapsed
-    ? getCollapsedPreview(message.content, normalizedPreviewChars, previewOverride)
-    : message.content;
+    ? getCollapsedPreview(groupContent, normalizedPreviewChars, previewOverride)
+    : groupContent;
   const shouldRenderMarkdown = !isCollapsed && (!messageIsUser || renderUserMarkdown);
 
   const horizontalOffsetClass = showAvatar
@@ -584,10 +604,10 @@ export const Message: React.FC<MessageProps> = memo(({
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(message.content);
+      await navigator.clipboard.writeText(groupContent);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-      onAction?.({ action: 'copy', messageId: message.id, content: message.content });
+      onAction?.({ action: 'copy', messageId: message.id, content: groupContent });
     } catch (error) {
       console.error('Failed to copy message:', error);
     }
@@ -638,7 +658,7 @@ export const Message: React.FC<MessageProps> = memo(({
           {showAvatar && (
             <div className={`flex-shrink-0 ${compactMode ? 'mt-1' : 'mt-0'}`}>
               <MessageSenderAvatar
-                sender={message.sender}
+                sender={headerMessage.sender}
                 fallbackName={messageIsUser ? userName : assistantName}
                 fallbackAvatar={messageIsUser ? undefined : assistantAvatar}
                 fallbackAvatarUrl={messageIsUser ? userAvatar : undefined}
@@ -656,10 +676,10 @@ export const Message: React.FC<MessageProps> = memo(({
             </span>
             {showTimestamp && (
               <span className="text-xs text-muted-foreground">
-                {formatTime(message.timestamp)}
+                {formatTime(headerMessage.timestamp)}
               </span>
             )}
-            {message.isEdited && (
+            {sourceMessages.some((sourceMessage) => sourceMessage.isEdited) && (
               <Badge variant="outline" className="text-xs">
                 editado
               </Badge>
@@ -710,22 +730,53 @@ export const Message: React.FC<MessageProps> = memo(({
               </div>
             ) : (
               <>
-                {!messageIsUser && (
-                  <AssistantActivity
-                    activity={message.activity}
-                    showActivity={showActivity}
-                    showActivityDetails={showActivityDetails}
-                    labels={labels}
-                  />
-                )}
+                {sourceMessages.map((sourceMessage) => {
+                  const beforeContentActivity = filterActivity(sourceMessage, 'before-content');
+                  const afterContentActivity = filterActivity(sourceMessage, 'after-content');
+                  const fragmentContent = sourceMessages.length === 1
+                    ? contentToRender
+                    : sourceMessage.content;
 
-                <StreamingText
-                  content={contentToRender}
-                  isStreaming={message.isStreaming}
-                  renderMarkdown={shouldRenderMarkdown}
-                  markdown={markdown}
-                  plainTextChunkChars={normalizedChunkChars}
-                />
+                  return (
+                    <React.Fragment key={sourceMessage.id}>
+                      {!messageIsUser && (
+                        <AssistantActivity
+                          activity={beforeContentActivity}
+                          showActivity={showActivity}
+                          showActivityDetails={showActivityDetails}
+                          labels={labels}
+                        />
+                      )}
+
+                      {fragmentContent.length > 0 && (
+                        <StreamingText
+                          content={fragmentContent}
+                          isStreaming={sourceMessage.isStreaming}
+                          renderMarkdown={shouldRenderMarkdown}
+                          markdown={markdown}
+                          plainTextChunkChars={normalizedChunkChars}
+                        />
+                      )}
+
+                      {!messageIsUser && (
+                        <AssistantActivity
+                          activity={afterContentActivity}
+                          showActivity={showActivity}
+                          showActivityDetails={showActivityDetails}
+                          labels={labels}
+                        />
+                      )}
+
+                      {sourceMessage.attachments && sourceMessage.attachments.length > 0 && (
+                        <div className="mt-3 space-y-2">
+                          {sourceMessage.attachments.map((attachment, index) => (
+                            <MediaRenderer key={`${sourceMessage.id}:${index}`} attachment={attachment} />
+                          ))}
+                        </div>
+                      )}
+                    </React.Fragment>
+                  );
+                })}
 
                 {canCollapseMessage && (
                   <div className="mt-3">
@@ -742,14 +793,6 @@ export const Message: React.FC<MessageProps> = memo(({
                   </div>
                 )}
 
-                {/* Attachments */}
-                {message.attachments && message.attachments.length > 0 && (
-                  <div className="mt-3 space-y-2">
-                    {message.attachments.map((attachment, index) => (
-                      <MediaRenderer key={index} attachment={attachment} />
-                    ))}
-                  </div>
-                )}
               </>
             )}
 

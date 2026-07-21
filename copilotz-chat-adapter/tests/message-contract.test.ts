@@ -26,6 +26,7 @@ test('hydrated message contract resolves sender, activity, and content from Copi
     content: 'Ready.',
     reasoning: 'Checking direction.',
     metadata: {
+      llmAttemptId: 'attempt-1',
       senderExternalId: 'north',
       senderDisplayName: 'North',
       senderParticipantId: '01KQV7M84RVH3FZ82MT665XPBB',
@@ -44,7 +45,7 @@ test('hydrated message contract resolves sender, activity, and content from Copi
     participantId: '01KQV7M84RVH3FZ82MT665XPBB',
   });
   assert.deepEqual(message.activity?.items[0], {
-    id: 'msg-agent:thinking',
+    id: 'attempt-1:reasoning:0',
     kind: 'thinking',
     status: 'complete',
     completedAt: new Date('2026-05-05T14:36:48.959Z').getTime(),

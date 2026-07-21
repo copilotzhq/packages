@@ -1,4 +1,6 @@
 import type { AgentOption, MediaAttachment } from "@copilotz/chat-ui";
+// @ts-expect-error Direct Node TypeScript tests require the source extension.
+import { getLlmAttemptId } from "./streamEvents.ts";
 
 const rawBaseValue = import.meta.env?.VITE_API_URL;
 const rawBase = typeof rawBaseValue === "string" && rawBaseValue.length > 0
@@ -194,12 +196,19 @@ type MessagePayload = {
   metadata?: Record<string, unknown> | null;
 };
 
+export type StreamTokenContext = {
+  isReasoning: boolean;
+  llmAttemptId: string;
+  phaseId: string;
+  phaseOrdinal: number;
+};
+
 type StreamCallbacks = {
   onToken?: (
     token: string,
     isComplete: boolean,
     raw?: any,
-    options?: { isReasoning?: boolean },
+    options?: StreamTokenContext,
   ) => void;
   onMessageEvent?: (payload: any) => void | Promise<void>;
   onAssetEvent?: (payload: any) => void | Promise<void>;
@@ -648,6 +657,11 @@ export async function runCopilotzStream(
   let lastCompletedText = "";
   let lastTokenWasReasoning = false;
   let hadNonReasoningContent = false;
+  let activeLlmAttemptId: string | null = null;
+  let activePhaseKind: "reasoning" | "answer" | null = null;
+  let activePhaseId: string | null = null;
+  let phaseOrdinal = -1;
+  let fallbackAttemptOrdinal = 0;
   const collectedMessages: any[] = [];
   let collectedMedia: Record<string, string> | null = null;
 
@@ -656,6 +670,33 @@ export async function runCopilotzStream(
     aggregatedReasoning = "";
     lastTokenWasReasoning = false;
     hadNonReasoningContent = false;
+  };
+
+  const startAttempt = (event: unknown) => {
+    activeLlmAttemptId = getLlmAttemptId(event) ??
+      `stream-attempt:${fallbackAttemptOrdinal++}`;
+    activePhaseKind = null;
+    activePhaseId = null;
+    phaseOrdinal = -1;
+    resetTokenAggregation();
+  };
+
+  const getTokenContext = (isReasoning: boolean): StreamTokenContext => {
+    if (!activeLlmAttemptId) {
+      startAttempt(null);
+    }
+    const kind = isReasoning ? "reasoning" : "answer";
+    if (activePhaseKind !== kind || !activePhaseId) {
+      phaseOrdinal += 1;
+      activePhaseKind = kind;
+      activePhaseId = `${activeLlmAttemptId}:${kind}:${phaseOrdinal}`;
+    }
+    return {
+      isReasoning,
+      llmAttemptId: activeLlmAttemptId!,
+      phaseId: activePhaseId,
+      phaseOrdinal,
+    };
   };
 
   const processEvent = async (eventChunk: string) => {
@@ -686,10 +727,23 @@ export async function runCopilotzStream(
     }
 
     switch (eventType) {
+      case "LLM_CALL": {
+        startAttempt(payload);
+        await onMessageEvent?.(payload);
+        break;
+      }
       case "TOKEN": {
         const inner = payload?.payload ?? payload;
         const chunk = typeof inner?.token === "string" ? inner.token : "";
-        const isReasoning = Boolean(inner?.isReasoning);
+        // Older stream producers omit `isReasoning` on the empty completion
+        // event. Keep that event attached to the phase it is completing rather
+        // than creating a second, empty answer phase.
+        const isReasoning = typeof inner?.isReasoning === "boolean"
+          ? inner.isReasoning
+          : activePhaseKind === "reasoning" || lastTokenWasReasoning;
+        // Establish a fallback attempt before appending the first token;
+        // startAttempt() resets the per-attempt aggregation buffers.
+        const tokenContext = getTokenContext(isReasoning);
         if (isReasoning && !lastTokenWasReasoning && hadNonReasoningContent) {
           aggregatedReasoning = "";
           aggregatedText = "";
@@ -707,12 +761,14 @@ export async function runCopilotzStream(
         const isComplete = Boolean(inner?.isComplete);
         if (chunk || isComplete) {
           const tokenText = isReasoning ? aggregatedReasoning : aggregatedText;
-          onToken?.(tokenText, isComplete, payload, { isReasoning });
+          onToken?.(tokenText, isComplete, payload, tokenContext);
           if (isComplete) {
             if (!isReasoning && tokenText) {
               lastCompletedText = tokenText;
             }
             resetTokenAggregation();
+            activePhaseKind = null;
+            activePhaseId = null;
           }
         }
         break;

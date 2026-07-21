@@ -9,6 +9,8 @@ import {
   expectStringValue,
 } from './contract.ts';
 import type { RequestHeadersProvider, RestMessage } from './copilotzService.ts';
+// @ts-expect-error Direct Node TypeScript tests require the source extension.
+import { LLM_ATTEMPT_ID_METADATA_KEY } from './messageReconciliation.ts';
 import { resolveHydratedMessageSender, type SenderResolutionOptions } from './senders.ts';
 import {
   extractToolCallsFromServerMessage,
@@ -163,9 +165,12 @@ export const convertServerMessage = (
   const reasoning = typeof msg.reasoning === 'string' && msg.reasoning.length > 0
     ? msg.reasoning
     : undefined;
+  const llmAttemptId = typeof metadata?.[LLM_ATTEMPT_ID_METADATA_KEY] === 'string'
+    ? metadata[LLM_ATTEMPT_ID_METADATA_KEY].trim()
+    : '';
   const activityItems: AssistantActivityItem[] = [
     ...(reasoning ? [{
-      id: `${msg.id}:thinking`,
+      id: `${llmAttemptId || msg.id}:reasoning:0`,
       kind: 'thinking' as const,
       status: 'complete' as const,
       completedAt: timestamp,

@@ -91,6 +91,81 @@ test('runCopilotzStream resets token aggregation between completed LLM token seq
   }
 });
 
+test('runCopilotzStream associates token phases with their LLM attempt', async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  const tokenUpdates: Array<{
+    text: string;
+    llmAttemptId?: string;
+    phaseId?: string;
+    phaseOrdinal?: number;
+    isReasoning?: boolean;
+  }> = [];
+
+  globalThis.fetch = async () => {
+    const body = [
+      sse('LLM_CALL', {
+        type: 'LLM_CALL',
+        subjectType: 'llm_attempt',
+        subjectId: 'attempt-1',
+        payload: { agent: { id: 'north', name: 'North' } },
+      }),
+      sse('TOKEN', { type: 'TOKEN', payload: { token: 'Think', isReasoning: true } }),
+      sse('TOKEN', { type: 'TOKEN', payload: { token: '', isReasoning: true, isComplete: true } }),
+      sse('TOKEN', { type: 'TOKEN', payload: { token: 'Answer', isReasoning: false } }),
+    ].join('');
+
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(body));
+          controller.close();
+        },
+      }),
+      {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      },
+    );
+  };
+
+  try {
+    await runCopilotzStream({
+      content: 'Hello',
+      user: { externalId: 'user-123', name: 'User' },
+      onToken: (text, _complete, _raw, context) => {
+        tokenUpdates.push({ text, ...context });
+      },
+    });
+
+    assert.deepEqual(tokenUpdates, [
+      {
+        text: 'Think',
+        llmAttemptId: 'attempt-1',
+        phaseId: 'attempt-1:reasoning:0',
+        phaseOrdinal: 0,
+        isReasoning: true,
+      },
+      {
+        text: 'Think',
+        llmAttemptId: 'attempt-1',
+        phaseId: 'attempt-1:reasoning:0',
+        phaseOrdinal: 0,
+        isReasoning: true,
+      },
+      {
+        text: 'Answer',
+        llmAttemptId: 'attempt-1',
+        phaseId: 'attempt-1:answer:1',
+        phaseOrdinal: 1,
+        isReasoning: false,
+      },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('runCopilotzStream awaits and surfaces asynchronous event callback failures', async () => {
   const originalFetch = globalThis.fetch;
   const encoder = new TextEncoder();

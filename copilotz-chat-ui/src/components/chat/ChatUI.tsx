@@ -854,7 +854,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                         >
                           {virtualizer.getVirtualItems().map((virtualRow) => {
                             const group = groupedMessages[virtualRow.index];
-                            const message = group.message;
+                            const message = group.primaryMessage;
 
                             return (
                               <div
@@ -876,6 +876,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                                 >
                                   <Message
                                     message={message}
+                                    fragments={group.messages}
                                     {...messageProps}
                                     isExpanded={Boolean(
                                       expandedMessageIds[message.id]

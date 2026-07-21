@@ -7,9 +7,6 @@ import type {
 
 export interface InternalChatMessage extends ChatMessage {}
 
-const thinkingId = 'thinking';
-const answeringId = 'answering';
-
 const getItems = (message: InternalChatMessage): AssistantActivityItem[] =>
   Array.isArray(message.activity?.items) ? message.activity.items : [];
 
@@ -50,11 +47,17 @@ const upsertItem = <T extends InternalChatMessage>(
 const completeItems = <T extends InternalChatMessage>(
   message: T,
   shouldComplete: (item: AssistantActivityItem) => boolean,
+  completedAt = Date.now(),
 ): T => setItems(message, getItems(message).map((item) => (
   item.status === 'active' && shouldComplete(item)
-    ? { ...item, status: 'complete', completedAt: Date.now() }
+    ? { ...item, status: 'complete', completedAt }
     : item
 )));
+
+const removeItems = <T extends InternalChatMessage>(
+  message: T,
+  shouldRemove: (item: AssistantActivityItem) => boolean,
+): T => setItems(message, getItems(message).filter((item) => !shouldRemove(item)));
 
 export const hasVisibleAssistantOutput = (message: InternalChatMessage): boolean => {
   if (message.role !== 'assistant') return false;
@@ -74,34 +77,43 @@ export const updateAssistantMessageToken = (
   params: {
     partial: string;
     isReasoning?: boolean;
+    activityId?: string;
+    at?: number;
   },
 ): InternalChatMessage => {
   if (message.role !== 'assistant') return message;
 
   if (params.isReasoning) {
-    return upsertItem({
+    const activityId = params.activityId ?? `${message.id}:thinking`;
+    return upsertItem(completeItems(removeItems({
       ...message,
       isStreaming: true,
       isComplete: false,
-    }, {
-      id: thinkingId,
+    }, (item) => item.kind === 'answering'), (item) => (
+      item.id !== activityId &&
+      (item.kind === 'thinking' || item.kind === 'answering')
+    ), params.at), {
+      id: activityId,
       kind: 'thinking',
       status: 'active',
-      startedAt: getItems(message).find((item) => item.id === thinkingId)?.startedAt ?? Date.now(),
+      startedAt: getItems(message).find((item) => item.id === activityId)?.startedAt ?? params.at ?? Date.now(),
       details: { reasoning: params.partial },
     });
   }
 
-  return upsertItem(completeItems({
+  const activityId = params.activityId ?? `${message.id}:answering`;
+  return upsertItem(completeItems(removeItems({
     ...message,
     content: params.partial,
     isStreaming: true,
     isComplete: false,
-  }, (item) => item.kind === 'thinking' || item.kind === 'tool'), {
-    id: answeringId,
+  }, (item) => item.kind === 'answering' && item.id !== activityId), (item) => (
+    item.kind === 'thinking' || item.kind === 'answering'
+  ), params.at), {
+    id: activityId,
     kind: 'answering',
     status: 'active',
-    startedAt: getItems(message).find((item) => item.id === answeringId)?.startedAt ?? Date.now(),
+    startedAt: getItems(message).find((item) => item.id === activityId)?.startedAt ?? params.at ?? Date.now(),
   });
 };
 
@@ -112,11 +124,13 @@ export const appendAssistantToolCall = (
   if (message.role !== 'assistant') return message;
   const status = toolStatusToActivityStatus(toolCall.status);
 
-  return upsertItem({
+  return upsertItem(completeItems(removeItems({
     ...message,
     isStreaming: true,
     isComplete: false,
-  }, {
+  }, (item) => item.kind === 'answering'), (item) => (
+    item.kind === 'thinking' || item.kind === 'answering'
+  )), {
     id: toolCall.id,
     kind: 'tool',
     status,
@@ -177,6 +191,7 @@ export const applyAssistantToolResult = (
 export const finalizeAssistantMessage = (
   message: InternalChatMessage,
   finalAnswer?: string,
+  completedAt = Date.now(),
 ): InternalChatMessage => {
   if (message.role !== 'assistant') return message;
   const completed = completeItems({
@@ -184,17 +199,18 @@ export const finalizeAssistantMessage = (
     ...(typeof finalAnswer === 'string' && finalAnswer.length > 0 ? { content: finalAnswer } : {}),
     isStreaming: false,
     isComplete: true,
-  }, (item) => item.kind === 'thinking' || item.kind === 'answering');
+  }, (item) => item.kind === 'thinking' || item.kind === 'answering', completedAt);
   return setItems(completed, getItems(completed).filter((item) => item.kind !== 'answering'));
 };
 
 export const closeAssistantMessage = (
   message: InternalChatMessage,
+  completedAt = Date.now(),
 ): InternalChatMessage => {
   if (message.role !== 'assistant') return message;
   return completeItems({
     ...message,
     isStreaming: false,
     isComplete: true,
-  }, () => true);
+  }, () => true, completedAt);
 };
