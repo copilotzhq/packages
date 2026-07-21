@@ -9,9 +9,10 @@ import type { RequestHeadersProvider, RestMessage, RestMessagePageInfo, ThreadAc
 import { appendAssistantToolCall, closeAssistantMessage, finalizeAssistantMessage, hasVisibleAssistantOutput, type InternalChatMessage, updateAssistantMessageToken, toPublicChatMessage } from './activity';
 import { resolveAgentSender, resolveAssistantFallbackSender, resolveLiveEventSender, resolveUserSender, type SenderResolutionOptions } from './senders';
 import { convertServerMessage, isInternalMessageMetadata, prepareHydratedMessages } from './messageContract';
-import { getStreamEventPayload, isTerminalEmptyLlmResultEvent } from './streamEvents';
+import { getLlmAttemptId, getStreamEventPayload, isTerminalEmptyLlmResultEvent } from './streamEvents';
 import { applyToolResultUpdateToMessages, canAttachToCurrentStreamingAssistant, canAttachToStreamingAssistant, extractLiveToolCall, extractLiveToolResultUpdate, mergePersistedToolResults, messageAgentKey, matchesToolResultUpdate, prependUniqueMessages, type ToolResultUpdate } from './toolActivity';
 import { isSameThreadIdentity } from './threadIdentity';
+import { CLIENT_MESSAGE_ID_METADATA_KEY, LLM_ATTEMPT_ID_METADATA_KEY, reconcileThreadMessages } from './messageReconciliation';
 
 const nowTs = () => Date.now();
 const generateId = () => (globalThis.crypto?.randomUUID?.() ?? `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`) as string;
@@ -55,75 +56,6 @@ const createEmptyMessagePageInfo = (): RestMessagePageInfo => ({
   oldestMessageId: null,
   newestMessageId: null,
 });
-
-const stringifyForCompare = (value: unknown): string => {
-  if (value === undefined) return '';
-  try {
-    return JSON.stringify(value) ?? '';
-  } catch {
-    return String(value);
-  }
-};
-
-const getMessageSignature = (message: InternalChatMessage): string => JSON.stringify({
-  id: message.id,
-  role: message.role,
-  content: message.content ?? '',
-  isStreaming: message.isStreaming === true,
-  isComplete: message.isComplete === true,
-  attachments: stringifyForCompare(message.attachments),
-  activity: stringifyForCompare(message.activity),
-  metadata: stringifyForCompare(message.metadata),
-  sender: message.sender
-    ? {
-      id: message.sender.id,
-      type: message.sender.type,
-      name: message.sender.name,
-      agentId: message.sender.agentId,
-    }
-    : null,
-});
-
-const reconcileThreadMessages = (
-  currentMessages: InternalChatMessage[],
-  freshMessages: InternalChatMessage[],
-): { messages: InternalChatMessage[]; changed: boolean } => {
-  if (freshMessages.length === 0) {
-    return { messages: currentMessages, changed: false };
-  }
-  if (currentMessages.length === 0) {
-    return { messages: freshMessages, changed: true };
-  }
-
-  const freshById = new Map(freshMessages.map((message) => [message.id, message]));
-  const seen = new Set<string>();
-  let changed = false;
-
-  const nextMessages = currentMessages.map((message) => {
-    const fresh = freshById.get(message.id);
-    if (!fresh) return message;
-
-    seen.add(message.id);
-    if (getMessageSignature(message) === getMessageSignature(fresh)) {
-      return message;
-    }
-
-    changed = true;
-    return fresh;
-  });
-
-  const appended = freshMessages.filter((message) => !seen.has(message.id));
-  if (appended.length > 0) {
-    changed = true;
-    nextMessages.push(...appended);
-    nextMessages.sort((a, b) => {
-      const timestampDelta = (a.timestamp ?? 0) - (b.timestamp ?? 0);
-      return timestampDelta !== 0 ? timestampDelta : a.id.localeCompare(b.id);
-    });
-  }
-
-  return changed ? { messages: nextMessages, changed } : { messages: currentMessages, changed: false };
-};
 
 const createPendingAssistantActivity = (): AssistantActivityBlock => ({
   items: [
@@ -993,7 +925,10 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
         }
       };
 
-      const finalizeActiveAssistantTurn = (finalAnswer?: string) => {
+      const finalizeActiveAssistantTurn = (
+        finalAnswer?: string,
+        llmAttemptId?: string | null,
+      ) => {
         if (!streamStillOwnsVisibleThread()) return;
         setMessages((prev) => {
           const currentIdx = prev.findIndex((message) => message.id === currentAssistantId && message.role === 'assistant');
@@ -1012,9 +947,18 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
           if (fallbackIdx < 0) return prev;
 
           const message = prev[fallbackIdx];
-          const nextMessage = finalizeAssistantMessage(message, finalAnswer);
+          const correlatedMessage = llmAttemptId
+            ? {
+              ...message,
+              metadata: {
+                ...(message.metadata ?? {}),
+                [LLM_ATTEMPT_ID_METADATA_KEY]: llmAttemptId,
+              },
+            }
+            : message;
+          const nextMessage = finalizeAssistantMessage(correlatedMessage, finalAnswer);
 
-          if (message.content === nextMessage.content && message.isStreaming === nextMessage.isStreaming && message.isComplete === nextMessage.isComplete && message.activity === nextMessage.activity) {
+          if (message.content === nextMessage.content && message.isStreaming === nextMessage.isStreaming && message.isComplete === nextMessage.isComplete && message.activity === nextMessage.activity && message.metadata === nextMessage.metadata) {
             return prev;
           }
 
@@ -1148,7 +1092,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
 
             if (type === 'LLM_RESULT') {
               const finalAnswer = typeof payload?.answer === 'string' ? payload.answer : undefined;
-              finalizeActiveAssistantTurn(finalAnswer);
+              finalizeActiveAssistantTurn(finalAnswer, getLlmAttemptId(event));
               if (isTerminalEmptyLlmResultEvent(event)) {
                 finalizeStreamingPlaceholders();
               }
@@ -1374,19 +1318,22 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       const currentMetadata = threadMetadataMapRef.current[conversationKey];
       const pendingTitle = currentMetadata?.pendingTitle as string | undefined;
 
+      const userMessageId = generateId();
       const userMessage: ChatViewMessage = {
-        id: generateId(),
+        id: userMessageId,
         role: 'user',
         content,
         timestamp,
         attachments: attachments.length > 0 ? attachments : undefined,
         isComplete: true,
+        metadata: {
+          [CLIENT_MESSAGE_ID_METADATA_KEY]: userMessageId,
+        },
         sender: resolveUserSender({
           id: userId,
           name: getCurrentUserDisplayName(userName, userId),
         }),
       };
-
       const assistantSender = targetAgentNameRef.current
         ? resolveAgentSender(
             {
@@ -1441,6 +1388,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
           userId,
           userName: getCurrentUserDisplayName(userName, userId),
           agentName: preferredAgentRef.current,
+          metadata: userMessage.metadata,
           assistantMessageId: assistantPlaceholder.id,
           assistantSender,
           preserveActiveRun,

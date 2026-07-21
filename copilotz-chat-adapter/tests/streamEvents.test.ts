@@ -1,6 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isTerminalEmptyLlmResultEvent } from '../src/streamEvents.ts';
+import { getLlmAttemptId, isTerminalEmptyLlmResultEvent } from '../src/streamEvents.ts';
+
+test('LLM attempt identity is read from event metadata with subject fallback', () => {
+  assert.equal(getLlmAttemptId({
+    metadata: { llmAttemptId: 'attempt-from-metadata' },
+    subjectType: 'llm_attempt',
+    subjectId: 'attempt-from-subject',
+  }), 'attempt-from-metadata');
+
+  assert.equal(getLlmAttemptId({
+    subjectType: 'llm_attempt',
+    subjectId: 'attempt-from-subject',
+  }), 'attempt-from-subject');
+
+  assert.equal(getLlmAttemptId({ subjectType: 'thread', subjectId: 'thread-1' }), null);
+});
 
 test('terminal empty LLM result is detected when it has no tools or routing', () => {
   assert.equal(isTerminalEmptyLlmResultEvent({

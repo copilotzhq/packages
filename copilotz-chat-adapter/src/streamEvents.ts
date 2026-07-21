@@ -9,6 +9,28 @@ export const getStreamEventPayload = (event: unknown): unknown => {
   return 'payload' in event ? event.payload : event;
 };
 
+export const getLlmAttemptId = (event: unknown): string | null => {
+  if (!isRecord(event)) return null;
+
+  const metadata = isRecord(event.metadata) ? event.metadata : {};
+  if (
+    typeof metadata.llmAttemptId === 'string' &&
+    metadata.llmAttemptId.trim().length > 0
+  ) {
+    return metadata.llmAttemptId.trim();
+  }
+
+  if (
+    event.subjectType === 'llm_attempt' &&
+    typeof event.subjectId === 'string' &&
+    event.subjectId.trim().length > 0
+  ) {
+    return event.subjectId.trim();
+  }
+
+  return null;
+};
+
 export const isTerminalEmptyLlmResultEvent = (event: unknown): boolean => {
   if (!isRecord(event) || event.type !== 'LLM_RESULT') return false;
 
