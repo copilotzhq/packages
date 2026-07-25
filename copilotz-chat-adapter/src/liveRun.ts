@@ -200,13 +200,18 @@ export const transitionLiveRun = (
   }
 
   if (action.type === 'attempt-result') {
-    const cursor = state.attemptsById.get(action.attemptId);
+    const resolvedAttemptId = state.attemptsById.has(action.attemptId)
+      ? action.attemptId
+      : state.activeAttemptId ?? state.lastAttemptId;
+    const cursor = resolvedAttemptId
+      ? state.attemptsById.get(resolvedAttemptId)
+      : undefined;
     if (!cursor) return { state, operations: [] };
     const next = copyState(state);
-    if (next.activeAttemptId === action.attemptId) {
+    if (next.activeAttemptId === resolvedAttemptId) {
       next.activeAttemptId = null;
     }
-    next.lastAttemptId = action.attemptId;
+    next.lastAttemptId = resolvedAttemptId;
     return {
       state: next,
       operations: [{

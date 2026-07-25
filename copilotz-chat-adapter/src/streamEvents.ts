@@ -14,6 +14,12 @@ export const getLlmAttemptId = (event: unknown): string | null => {
 
   const metadata = isRecord(event.metadata) ? event.metadata : {};
   if (
+    typeof metadata.streamLlmAttemptId === 'string' &&
+    metadata.streamLlmAttemptId.trim().length > 0
+  ) {
+    return metadata.streamLlmAttemptId.trim();
+  }
+  if (
     typeof metadata.llmAttemptId === 'string' &&
     metadata.llmAttemptId.trim().length > 0
   ) {

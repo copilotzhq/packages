@@ -4,6 +4,15 @@ import { getLlmAttemptId, isTerminalEmptyLlmResultEvent } from '../src/streamEve
 
 test('LLM attempt identity is read from event metadata with subject fallback', () => {
   assert.equal(getLlmAttemptId({
+    metadata: {
+      streamLlmAttemptId: 'attempt-from-stream',
+      llmAttemptId: 'attempt-from-metadata',
+    },
+    subjectType: 'llm_attempt',
+    subjectId: 'attempt-from-subject',
+  }), 'attempt-from-stream');
+
+  assert.equal(getLlmAttemptId({
     metadata: { llmAttemptId: 'attempt-from-metadata' },
     subjectType: 'llm_attempt',
     subjectId: 'attempt-from-subject',

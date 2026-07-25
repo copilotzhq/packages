@@ -151,6 +151,49 @@ test('tool result received before its call is applied when the call arrives', ()
   assert.equal(messages[0].activity?.items[0].details?.error, 'page crashed');
 });
 
+test('fallback result finalizes the active streamed attempt', () => {
+  let run = createLiveRunState('placeholder');
+  let messages = [{
+    id: 'placeholder',
+    role: 'assistant' as const,
+    content: '',
+    timestamp: 0,
+    isStreaming: true,
+    isComplete: false,
+    sender,
+  }];
+  const createId = () => 'unused';
+  const dispatch = (action: Parameters<typeof transitionLiveRun>[1]) => {
+    const transition = transitionLiveRun(run, action, { createId });
+    run = transition.state;
+    messages = applyLiveRunOperations(messages, transition.operations);
+  };
+
+  dispatch({ type: 'attempt-start', attemptId: 'primary-attempt', sender, at: 1 });
+  dispatch({
+    type: 'token',
+    attemptId: 'primary-attempt',
+    phaseId: 'primary-attempt:reasoning:0',
+    partial: 'Recovered reasoning',
+    isReasoning: true,
+    sender,
+    at: 2,
+  });
+  dispatch({
+    type: 'attempt-result',
+    attemptId: 'fallback-attempt',
+    answer: 'Recovered answer',
+    at: 3,
+  });
+
+  assert.equal(messages[0].content, 'Recovered answer');
+  assert.equal(messages[0].isStreaming, false);
+  assert.equal(messages[0].isComplete, true);
+  assert.equal(messages[0].activity?.items[0].details?.reasoning, 'Recovered reasoning');
+  assert.equal(run.activeAttemptId, null);
+  assert.equal(run.lastAttemptId, 'primary-attempt');
+});
+
 test('replayed token and tool-call events do not duplicate or reopen timeline items', () => {
   let run = createLiveRunState('placeholder');
   let messages = [{
