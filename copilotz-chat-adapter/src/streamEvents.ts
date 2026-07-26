@@ -37,6 +37,42 @@ export const getLlmAttemptId = (event: unknown): string | null => {
   return null;
 };
 
+export const getRoutingMessageFromMetadata = (
+  metadata: unknown,
+): string | null => {
+  if (!isRecord(metadata)) return null;
+  const routing = isRecord(metadata.routing) ? metadata.routing : null;
+  if (!routing) return null;
+  if (
+    routing.source !== 'model_control' ||
+    !['consult', 'ask', 'handoff'].includes(String(routing.action)) ||
+    typeof routing.targetId !== 'string' ||
+    routing.targetId.trim().length === 0 ||
+    typeof routing.message !== 'string' ||
+    routing.message.trim().length === 0
+  ) {
+    return null;
+  }
+  return routing.message.trim();
+};
+
+export const getRoutingMessage = (event: unknown): string | null => {
+  if (!isRecord(event)) return null;
+  return getRoutingMessageFromMetadata(event.metadata);
+};
+
+export const getVisibleLlmResultAnswer = (
+  event: unknown,
+): string | undefined => {
+  const payload = getStreamEventPayload(event);
+  const answer = isRecord(payload) && typeof payload.answer === 'string'
+    ? payload.answer
+    : '';
+  return answer.trim().length > 0
+    ? answer
+    : getRoutingMessage(event) ?? undefined;
+};
+
 export const isTerminalEmptyLlmResultEvent = (event: unknown): boolean => {
   if (!isRecord(event) || event.type !== 'LLM_RESULT') return false;
 
@@ -47,12 +83,7 @@ export const isTerminalEmptyLlmResultEvent = (event: unknown): boolean => {
   if (hasValues(payload.toolCalls)) return false;
 
   const metadata = isRecord(event.metadata) ? event.metadata : {};
-  const routing = isRecord(metadata.routing) ? metadata.routing : {};
-  if (
-    (routing.action === 'ask' || routing.action === 'handoff') &&
-    typeof routing.targetId === 'string' &&
-    routing.targetId.trim().length > 0
-  ) return false;
+  if (getRoutingMessageFromMetadata(metadata)) return false;
   if (hasValues(metadata.targetQueue)) return false;
 
   return true;

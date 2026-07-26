@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getLlmAttemptId, isTerminalEmptyLlmResultEvent } from '../src/streamEvents.ts';
+import {
+  getLlmAttemptId,
+  getRoutingMessage,
+  getVisibleLlmResultAnswer,
+  isTerminalEmptyLlmResultEvent,
+} from '../src/streamEvents.ts';
 
 test('LLM attempt identity is read from event metadata with subject fallback', () => {
   assert.equal(getLlmAttemptId({
@@ -66,6 +71,49 @@ test('empty LLM result is not terminal when it still has routing work', () => {
       toolCalls: null,
     },
   }), false);
+});
+
+test('consultation message is projected from current and legacy routing metadata', () => {
+  for (const action of ['consult', 'ask', 'handoff']) {
+    assert.equal(getRoutingMessage({
+      metadata: {
+        routing: {
+          action,
+          targetId: 'east',
+          source: 'model_control',
+          message: 'Please inspect this.',
+        },
+      },
+    }), 'Please inspect this.');
+  }
+});
+
+test('empty live LLM results use their consultation question as the visible answer', () => {
+  assert.equal(getVisibleLlmResultAnswer({
+    type: 'LLM_RESULT',
+    payload: { answer: '' },
+    metadata: {
+      routing: {
+        action: 'consult',
+        targetId: 'east',
+        source: 'model_control',
+        message: 'Please inspect this.',
+      },
+    },
+  }), 'Please inspect this.');
+
+  assert.equal(getVisibleLlmResultAnswer({
+    type: 'LLM_RESULT',
+    payload: { answer: 'Visible provider answer.' },
+    metadata: {
+      routing: {
+        action: 'consult',
+        targetId: 'east',
+        source: 'model_control',
+        message: 'Please inspect this.',
+      },
+    },
+  }), 'Visible provider answer.');
 });
 
 test('empty LLM result is not terminal when it has tool calls', () => {

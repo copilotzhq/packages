@@ -9,7 +9,12 @@ import type { RequestHeadersProvider, RestMessage, RestMessagePageInfo, ThreadAc
 import { closeAssistantMessage, hasVisibleAssistantOutput, type InternalChatMessage, toPublicChatMessage } from './activity';
 import { resolveAgentSender, resolveAssistantFallbackSender, resolveLiveEventSender, resolveUserSender, type SenderResolutionOptions } from './senders';
 import { isInternalMessageMetadata, prepareHydratedMessages } from './messageContract';
-import { getLlmAttemptId, getStreamEventPayload, isTerminalEmptyLlmResultEvent } from './streamEvents';
+import {
+  getLlmAttemptId,
+  getStreamEventPayload,
+  getVisibleLlmResultAnswer,
+  isTerminalEmptyLlmResultEvent,
+} from './streamEvents';
 import { canAttachToStreamingAssistant, extractLiveToolCall, extractLiveToolResultUpdate, mergePersistedToolResults, matchesToolResultUpdate, prependUniqueMessages, type ToolResultUpdate } from './toolActivity';
 import { isSameThreadIdentity } from './threadIdentity';
 import { CLIENT_MESSAGE_ID_METADATA_KEY, reconcileThreadMessages } from './messageReconciliation';
@@ -953,7 +958,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
             }
 
             if (type === 'LLM_RESULT') {
-              const finalAnswer = typeof payload?.answer === 'string' ? payload.answer : undefined;
+              const finalAnswer = getVisibleLlmResultAnswer(event);
               const attemptId = getLlmAttemptId(event) ??
                 liveRunState.activeAttemptId ??
                 liveRunState.lastAttemptId;

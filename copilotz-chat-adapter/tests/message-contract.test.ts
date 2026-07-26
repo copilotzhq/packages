@@ -63,6 +63,34 @@ test('internal hydrated messages are filtered out by contract', () => {
   }), false);
 });
 
+test('legacy empty routing messages hydrate as visible consultation text', () => {
+  const routedMessage: RestMessage = {
+    id: 'routed-message',
+    threadId: 'thread-1',
+    senderType: 'agent',
+    senderId: '01KQV7M84RVH3FZ82MT665XPBB',
+    senderUserId: '01KQV7M84RVH3FZ82MT665XPBB',
+    content: '',
+    metadata: {
+      senderExternalId: 'north',
+      senderDisplayName: 'North',
+      senderParticipantId: '01KQV7M84RVH3FZ82MT665XPBB',
+      routing: {
+        action: 'ask',
+        targetId: 'east',
+        source: 'model_control',
+        message: 'Please inspect this implementation.',
+      },
+    },
+  };
+
+  assert.equal(shouldRenderHydratedMessage(routedMessage), true);
+  assert.equal(
+    convertServerMessage(routedMessage, { senderOptions: { agents } }).content,
+    'Please inspect this implementation.',
+  );
+});
+
 test('hydrated message contract throws instead of normalizing malformed sender metadata', () => {
   assert.throws(() => convertServerMessage({
     id: 'msg-agent',

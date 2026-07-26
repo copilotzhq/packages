@@ -9,6 +9,7 @@ import {
   expectStringValue,
 } from './contract.ts';
 import type { RequestHeadersProvider, RestMessage } from './copilotzService.ts';
+import { getRoutingMessageFromMetadata } from './streamEvents.ts';
 // @ts-expect-error Direct Node TypeScript tests require the source extension.
 import { LLM_ATTEMPT_ID_METADATA_KEY } from './messageReconciliation.ts';
 import { resolveHydratedMessageSender, type SenderResolutionOptions } from './senders.ts';
@@ -124,7 +125,8 @@ export const shouldRenderHydratedMessage = (msg: RestMessage): boolean => {
     return false;
   }
   const text = expectStringValue(msg.content, 'message.content').trim();
-  const hasText = text.length > 0;
+  const hasText = text.length > 0 ||
+    getRoutingMessageFromMetadata(meta) !== null;
   const hasToolCalls = extractToolCallsFromServerMessage(msg).length > 0;
   const hasAttachments = extractAttachments(meta).length > 0;
   if (msg.senderType === 'tool') {
@@ -142,6 +144,7 @@ export const convertServerMessage = (
   const metadata = msg.metadata ?? undefined;
   const attachments = extractAttachments(metadata);
   const messageContent = expectStringValue(msg.content, 'message.content');
+  const routingMessage = getRoutingMessageFromMetadata(metadata);
   const role = roleBySender[msg.senderType as keyof typeof roleBySender];
 
   const parsedToolCalls = extractToolCallsFromServerMessage(msg);
@@ -160,7 +163,9 @@ export const convertServerMessage = (
   const content =
     isToolSender
       ? ''
-      : messageContent;
+      : messageContent.trim().length > 0
+        ? messageContent
+        : routingMessage ?? '';
 
   const reasoning = typeof msg.reasoning === 'string' && msg.reasoning.length > 0
     ? msg.reasoning
