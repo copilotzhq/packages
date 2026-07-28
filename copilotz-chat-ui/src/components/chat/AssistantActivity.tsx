@@ -1,8 +1,10 @@
-import React, { memo, useState } from 'react';
+import React, { memo, useCallback, useState, useSyncExternalStore } from 'react';
 import type {
   AssistantActivityBlock,
   AssistantActivityItem,
   ChatConfig,
+  ToolCallDraftSource,
+  ToolRendererMap,
 } from '../../types/chatTypes';
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
@@ -10,11 +12,27 @@ import { CheckCircle2, ChevronDown, ChevronRight, CircleAlert, LoaderCircle, Wre
 
 type ActivityLabels = ChatConfig['labels'];
 
+export const resolveToolRenderer = (
+  toolName: string | undefined,
+  toolRenderers: ToolRendererMap | undefined,
+) => toolName ? toolRenderers?.[toolName] : undefined;
+
+export const formatToolDetailValue = (value: unknown): string =>
+  JSON.stringify(value, null, 2) ?? String(value);
+
+export const resolveActivityStableId = (
+  item: AssistantActivityItem,
+): string => item.details?.toolCallDraftId
+  ? `tool-draft:${item.details.toolCallDraftId}`
+  : item.id;
+
 interface AssistantActivityProps {
   activity?: AssistantActivityBlock;
   showActivity?: boolean;
   showActivityDetails?: boolean;
   labels?: ActivityLabels;
+  toolRenderers?: ToolRendererMap;
+  toolCallDraftSource?: ToolCallDraftSource;
 }
 
 const ROOT_CLASS = 'mb-4 w-full max-w-full min-w-0';
@@ -31,7 +49,7 @@ const hasActiveItem = (activity: AssistantActivityBlock): boolean =>
   activity.items.some((item) => item.status === 'active');
 
 const hasDetails = (item: AssistantActivityItem): boolean =>
-  Boolean(item.details?.reasoning || item.details?.toolCall || item.details?.result !== undefined || item.details?.error);
+  Boolean(item.details?.reasoning || item.details?.toolCall || item.details?.toolCallDraftId || item.details?.result !== undefined || item.details?.error);
 
 const resolveActivityLabel = (
   item: AssistantActivityItem,
@@ -72,10 +90,54 @@ const ActivityIcon = ({ item }: { item: AssistantActivityItem }) => {
 
 const ActivityDetails = memo(function ActivityDetails({
   item,
+  toolRenderers,
+  toolCallDraftSource,
 }: {
   item: AssistantActivityItem;
+  toolRenderers?: ToolRendererMap;
+  toolCallDraftSource?: ToolCallDraftSource;
 }) {
   const toolCall = item.details?.toolCall;
+  const draftId = item.details?.toolCallDraftId;
+  const subscribe = useCallback(
+    (listener: () => void) => (
+      draftId && toolCallDraftSource
+        ? toolCallDraftSource.subscribe(draftId, listener)
+        : () => {}
+    ),
+    [draftId, toolCallDraftSource],
+  );
+  const getSnapshot = useCallback(
+    () => (
+      draftId && toolCallDraftSource
+        ? toolCallDraftSource.getSnapshot(draftId)
+        : undefined
+    ),
+    [draftId, toolCallDraftSource],
+  );
+  const draft = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const toolName = item.toolName || toolCall?.name;
+  const ToolRenderer = resolveToolRenderer(toolName, toolRenderers);
+  const status = toolCall?.status ?? (item.status === 'failed'
+    ? 'failed'
+    : item.status === 'complete'
+      ? 'completed'
+      : 'streaming');
+
+  if (ToolRenderer && toolName) {
+    return (
+      <div className="pb-1 pl-7 pt-2">
+        <ToolRenderer
+          toolName={toolName}
+          toolCall={toolCall}
+          draft={draft}
+          status={status}
+          result={item.details?.result ?? toolCall?.result}
+          error={item.details?.error}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3 pb-1 pl-7 pt-2 text-sm text-muted-foreground">
@@ -89,12 +151,17 @@ const ActivityDetails = memo(function ActivityDetails({
       )}
       {toolCall && (
         <pre className="overflow-x-auto rounded-md bg-muted/60 p-2 text-xs">
-          {JSON.stringify(toolCall.arguments, null, 2)}
+          {formatToolDetailValue(toolCall.arguments)}
+        </pre>
+      )}
+      {!toolCall && draft?.rawInput && (
+        <pre className="overflow-x-auto rounded-md bg-muted/60 p-2 text-xs">
+          {draft.rawInput}
         </pre>
       )}
       {item.details?.result !== undefined && (
         <pre className="overflow-x-auto rounded-md bg-muted/60 p-2 text-xs">
-          {JSON.stringify(item.details.result, null, 2)}
+          {formatToolDetailValue(item.details.result)}
         </pre>
       )}
     </div>
@@ -120,10 +187,14 @@ const ActivityTimeline = memo(function ActivityTimeline({
   activity,
   showActivityDetails,
   labels,
+  toolRenderers,
+  toolCallDraftSource,
 }: {
   activity: AssistantActivityBlock;
   showActivityDetails: boolean;
   labels?: ActivityLabels;
+  toolRenderers?: ToolRendererMap;
+  toolCallDraftSource?: ToolCallDraftSource;
 }) {
   const [openById, setOpenById] = useState<Record<string, boolean>>({});
 
@@ -131,12 +202,13 @@ const ActivityTimeline = memo(function ActivityTimeline({
     <div className={ROOT_CLASS}>
       <div className="space-y-1">
         {activity.items.map((item, index) => {
+          const stableId = resolveActivityStableId(item);
           const detailsAvailable = showActivityDetails && hasDetails(item);
-          const open = Boolean(openById[item.id]);
+          const open = Boolean(openById[stableId]);
           const isLast = index === activity.items.length - 1;
 
           return (
-            <div key={item.id} className="relative grid grid-cols-[1rem_minmax(0,1fr)] gap-3">
+            <div key={stableId} className="relative grid grid-cols-[1rem_minmax(0,1fr)] gap-3">
               {!isLast && <div className="absolute left-2 top-5 h-[calc(100%-0.25rem)] w-px bg-border" />}
               <div className="relative z-10 mt-1 flex h-4 w-4 items-center justify-center bg-background">
                 <ActivityIcon item={item} />
@@ -146,7 +218,7 @@ const ActivityTimeline = memo(function ActivityTimeline({
                   type="button"
                   variant="ghost"
                   disabled={!detailsAvailable}
-                  onClick={() => setOpenById((prev) => ({ ...prev, [item.id]: !prev[item.id] }))}
+                  onClick={() => setOpenById((prev) => ({ ...prev, [stableId]: !prev[stableId] }))}
                   className={cn(
                     'h-auto min-h-6 w-full justify-start gap-1 px-0 py-0 text-left text-sm font-normal text-muted-foreground hover:bg-transparent',
                     item.status === 'active' && 'text-foreground',
@@ -160,7 +232,13 @@ const ActivityTimeline = memo(function ActivityTimeline({
                       : <ChevronRight className="h-3.5 w-3.5 shrink-0" />
                   )}
                 </Button>
-                {detailsAvailable && open && <ActivityDetails item={item} />}
+                {detailsAvailable && open && (
+                  <ActivityDetails
+                    item={item}
+                    toolRenderers={toolRenderers}
+                    toolCallDraftSource={toolCallDraftSource}
+                  />
+                )}
               </div>
             </div>
           );
@@ -175,6 +253,8 @@ export const AssistantActivity = memo(function AssistantActivity({
   showActivity = true,
   showActivityDetails = true,
   labels,
+  toolRenderers,
+  toolCallDraftSource,
 }: AssistantActivityProps) {
   if (!activity || activity.items.length === 0) return null;
   if (!showActivity) return hasActiveItem(activity) ? <ActivitySkeleton /> : null;
@@ -183,6 +263,8 @@ export const AssistantActivity = memo(function AssistantActivity({
       activity={activity}
       showActivityDetails={showActivityDetails}
       labels={labels}
+      toolRenderers={toolRenderers}
+      toolCallDraftSource={toolCallDraftSource}
     />
   );
 });

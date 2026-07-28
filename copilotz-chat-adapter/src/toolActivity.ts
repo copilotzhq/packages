@@ -1,4 +1,5 @@
 import type { AssistantActivityItem, ChatMessage as ChatViewMessage } from '@copilotz/chat-ui';
+// @ts-expect-error Direct Node TypeScript tests require the source extension.
 import { applyAssistantToolResult, type InternalChatMessage } from './activity.ts';
 import {
   ContractViolation,
@@ -6,6 +7,7 @@ import {
   expectString,
   expectStringValue,
   isRecord,
+  // @ts-expect-error Direct Node TypeScript tests require the source extension.
 } from './contract.ts';
 import type { RestMessage } from './copilotzService.ts';
 
@@ -21,6 +23,17 @@ export type ParsedToolCall = {
   error?: string;
 };
 
+export type ParsedToolCallDelta = {
+  llmAttemptId: string;
+  draftId: string;
+  callIndex: number;
+  sequence: number;
+  toolName: string;
+  phase: 'start' | 'delta' | 'complete' | 'discarded';
+  delta: string;
+  toolCallId?: string;
+};
+
 export type ToolResultUpdate = {
   id?: string;
   toolExecutionId?: string;
@@ -33,6 +46,23 @@ export type ToolResultUpdate = {
 
 const fail = (message: string): never => {
   throw new ContractViolation(message);
+};
+
+const expectNonNegativeInteger = (value: unknown, path: string): number => {
+  if (!Number.isInteger(value) || (value as number) < 0) {
+    return fail(`${path} must be a non-negative integer`);
+  }
+  return value as number;
+};
+
+const expectToolCallDeltaPhase = (
+  value: unknown,
+  path: string,
+): ParsedToolCallDelta['phase'] => {
+  if (value === 'start' || value === 'delta' || value === 'complete' || value === 'discarded') {
+    return value;
+  }
+  return fail(`${path} must be start, delta, complete, or discarded`);
 };
 
 export const expectToolStatus = (status: unknown, path: string): ToolCallStatus => {
@@ -152,6 +182,30 @@ export const extractLiveToolCall = (
   };
 };
 
+export const extractLiveToolCallDelta = (
+  payload: Record<string, unknown> | undefined,
+): ParsedToolCallDelta => {
+  const value = expectRecord(payload, 'TOOL_CALL_DELTA payload');
+  const phase = expectToolCallDeltaPhase(value.phase, 'TOOL_CALL_DELTA payload.phase');
+  const toolCallId = value.toolCallId === undefined
+    ? undefined
+    : expectString(value.toolCallId, 'TOOL_CALL_DELTA payload.toolCallId');
+  if (phase === 'complete' && !toolCallId) {
+    return fail('TOOL_CALL_DELTA payload.toolCallId is required on complete');
+  }
+
+  return {
+    llmAttemptId: expectString(value.llmAttemptId, 'TOOL_CALL_DELTA payload.llmAttemptId'),
+    draftId: expectString(value.draftId, 'TOOL_CALL_DELTA payload.draftId'),
+    callIndex: expectNonNegativeInteger(value.callIndex, 'TOOL_CALL_DELTA payload.callIndex'),
+    sequence: expectNonNegativeInteger(value.sequence, 'TOOL_CALL_DELTA payload.sequence'),
+    toolName: expectString(value.toolName, 'TOOL_CALL_DELTA payload.toolName'),
+    phase,
+    delta: expectStringValue(value.delta, 'TOOL_CALL_DELTA payload.delta'),
+    ...(toolCallId ? { toolCallId } : {}),
+  };
+};
+
 export const extractLiveToolResultUpdate = (
   payload: Record<string, unknown> | undefined,
   now: () => number = () => Date.now(),
@@ -246,7 +300,7 @@ const readToolCallArray = (
   path: string,
 ): Record<string, unknown>[] => {
   if (value === null || value === undefined) return [];
-  if (!Array.isArray(value)) fail(`${path} must be an array`);
+  if (!Array.isArray(value)) return fail(`${path} must be an array`);
   return value.map((toolCall, index) => expectRecord(toolCall, `${path}[${index}]`));
 };
 
@@ -260,7 +314,7 @@ export const extractToolResultUpdateFromMessage = (
   if (toolCalls.length === 0) fail('tool message requires metadata.toolCalls');
 
   const firstToolCall = toolCalls[0];
-  expectStringValue(msg.createdAt, 'tool result message.createdAt');
+  const createdAt = expectStringValue(msg.createdAt, 'tool result message.createdAt');
 
   return {
     id: firstToolCall.id,
@@ -269,7 +323,7 @@ export const extractToolResultUpdateFromMessage = (
     ...(firstToolCall.result !== undefined ? { result: firstToolCall.result } : {}),
     ...(firstToolCall.error !== undefined ? { error: firstToolCall.error } : {}),
     status: firstToolCall.status,
-    endTime: new Date(msg.createdAt).getTime(),
+    endTime: new Date(createdAt).getTime(),
   };
 };
 

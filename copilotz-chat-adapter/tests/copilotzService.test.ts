@@ -166,6 +166,109 @@ test('runCopilotzStream associates token phases with their LLM attempt', async (
   }
 });
 
+test('runCopilotzStream treats an unflagged non-empty legacy token as answer text', async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  const tokenUpdates: Array<{
+    text: string;
+    complete: boolean;
+    isReasoning?: boolean;
+  }> = [];
+
+  globalThis.fetch = async () => {
+    const body = [
+      sse('LLM_CALL', {
+        type: 'LLM_CALL',
+        subjectType: 'llm_attempt',
+        subjectId: 'attempt-legacy',
+        payload: { agent: { id: 'north', name: 'North' } },
+      }),
+      sse('TOKEN', { type: 'TOKEN', payload: { token: 'Think', isReasoning: true } }),
+      sse('TOKEN', { type: 'TOKEN', payload: { token: 'Answer' } }),
+      sse('TOKEN', { type: 'TOKEN', payload: { token: '', isComplete: true } }),
+    ].join('');
+
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(body));
+          controller.close();
+        },
+      }),
+      {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      },
+    );
+  };
+
+  try {
+    await runCopilotzStream({
+      content: 'Hello',
+      user: { externalId: 'user-123', name: 'User' },
+      onToken: (text, complete, _raw, context) => {
+        tokenUpdates.push({
+          text,
+          complete,
+          isReasoning: context?.isReasoning,
+        });
+      },
+    });
+
+    assert.deepEqual(tokenUpdates, [
+      { text: 'Think', complete: false, isReasoning: true },
+      { text: 'Answer', complete: false, isReasoning: false },
+      { text: 'Answer', complete: true, isReasoning: false },
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('runCopilotzStream forwards TOOL_CALL_DELTA envelopes unchanged', async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  const events: unknown[] = [];
+  const deltaEvent = {
+    type: 'TOOL_CALL_DELTA',
+    payload: {
+      llmAttemptId: 'attempt-1',
+      draftId: 'draft-1',
+      callIndex: 0,
+      sequence: 0,
+      toolName: 'terminal',
+      phase: 'start',
+      delta: '{"name":"terminal"',
+    },
+  };
+
+  globalThis.fetch = async () => new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(sse('TOOL_CALL_DELTA', deltaEvent)));
+        controller.close();
+      },
+    }),
+    {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    },
+  );
+
+  try {
+    await runCopilotzStream({
+      content: 'Hello',
+      user: { externalId: 'user-123', name: 'User' },
+      onMessageEvent: (event) => {
+        events.push(event);
+      },
+    });
+    assert.deepEqual(events, [deltaEvent]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('runCopilotzStream awaits and surfaces asynchronous event callback failures', async () => {
   const originalFetch = globalThis.fetch;
   const encoder = new TextEncoder();

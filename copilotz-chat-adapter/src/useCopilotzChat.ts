@@ -15,10 +15,11 @@ import {
   getVisibleLlmResultAnswer,
   isTerminalEmptyLlmResultEvent,
 } from './streamEvents';
-import { canAttachToStreamingAssistant, extractLiveToolCall, extractLiveToolResultUpdate, mergePersistedToolResults, matchesToolResultUpdate, prependUniqueMessages, type ToolResultUpdate } from './toolActivity';
+import { canAttachToStreamingAssistant, extractLiveToolCall, extractLiveToolCallDelta, extractLiveToolResultUpdate, mergePersistedToolResults, matchesToolResultUpdate, prependUniqueMessages, type ToolResultUpdate } from './toolActivity';
 import { isSameThreadIdentity } from './threadIdentity';
 import { CLIENT_MESSAGE_ID_METADATA_KEY, reconcileThreadMessages } from './messageReconciliation';
 import { applyLiveRunOperations, createLiveRunState, getLatestLiveRunMessageId, transitionLiveRun, type LiveRunAction } from './liveRun';
+import { ToolCallDraftStore } from './toolCallDraftStore';
 
 const nowTs = () => Date.now();
 const generateId = () => (globalThis.crypto?.randomUUID?.() ?? `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`) as string;
@@ -151,6 +152,11 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   const persistedToolUpdatesRef = useRef<ToolResultUpdate[]>([]);
   const stopRequestedRef = useRef(false);
   const recoveryPollGenerationRef = useRef(0);
+  const toolCallDraftStoreRef = useRef<ToolCallDraftStore | null>(null);
+  if (!toolCallDraftStoreRef.current) {
+    toolCallDraftStoreRef.current = new ToolCallDraftStore();
+  }
+  const toolCallDraftStore = toolCallDraftStoreRef.current;
 
   // Sync refs on every render (more efficient than multiple useEffects)
   threadsRef.current = threads;
@@ -183,6 +189,8 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       setUserContextSeed((prev) => ({ ...prev, ...initialContext }));
     }
   }, [initialContext]);
+
+  useEffect(() => () => toolCallDraftStore.clear(), [toolCallDraftStore]);
 
   const processToolOutput = useCallback(
     (output: Record<string, unknown>) => {
@@ -811,6 +819,8 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     async (params: { threadId?: string | null; threadExternalId?: string | null; content: string; attachments?: MediaAttachment[]; metadata?: Record<string, unknown>; threadMetadata?: Record<string, unknown>; toolCalls?: Array<{ name: string; args: Record<string, unknown> }>; userId: string; userName?: string; userMetadata?: Record<string, unknown>; agentName?: string | null; assistantMessageId?: string; assistantSender?: ChatSender; onBeforeStart?: (assistantMessageId: string) => void; preserveActiveRun?: boolean }) => {
       const initialAssistantMessageId = params.assistantMessageId ?? generateId();
       let liveRunState = createLiveRunState(initialAssistantMessageId);
+      const liveDraftIds = new Set<string>();
+      const draftIdByToolCallId = new Map<string, string>();
       const streamOwnerThreadId = currentThreadIdRef.current;
       const streamOwnerThreadExternalId = params.threadExternalId ?? currentThreadExternalIdRef.current;
       const streamStillOwnsVisibleThread = () => isSameThreadIdentity(
@@ -957,6 +967,42 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
               return;
             }
 
+            if (type === 'TOOL_CALL_DELTA') {
+              const delta = extractLiveToolCallDelta((payload ?? {}) as Record<string, unknown>);
+              const applied = toolCallDraftStore.apply(delta);
+              if (applied === 'created') {
+                liveDraftIds.add(delta.draftId);
+                dispatchLiveRunAction({
+                  type: 'tool-draft-start',
+                  attemptId: delta.llmAttemptId,
+                  draftId: delta.draftId,
+                  toolName: delta.toolName,
+                  sender: resolveLiveEventSender(event, senderOptionsRef.current),
+                  at: getEventTimestamp(event),
+                });
+                hasStreamProgress = true;
+              } else if (applied === 'completed' && delta.toolCallId) {
+                draftIdByToolCallId.set(delta.toolCallId, delta.draftId);
+                dispatchLiveRunAction({
+                  type: 'tool-draft-complete',
+                  draftId: delta.draftId,
+                  toolCallId: delta.toolCallId,
+                });
+              } else if (applied === 'discarded') {
+                liveDraftIds.delete(delta.draftId);
+                for (const [toolCallId, draftId] of draftIdByToolCallId) {
+                  if (draftId === delta.draftId) {
+                    draftIdByToolCallId.delete(toolCallId);
+                  }
+                }
+                dispatchLiveRunAction({
+                  type: 'tool-draft-discard',
+                  draftId: delta.draftId,
+                });
+              }
+              return;
+            }
+
             if (type === 'LLM_RESULT') {
               const finalAnswer = getVisibleLlmResultAnswer(event);
               const attemptId = getLlmAttemptId(event) ??
@@ -1004,6 +1050,11 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
                     : {}),
                 },
               });
+              const reconciledDraftId = draftIdByToolCallId.get(callId);
+              if (reconciledDraftId) {
+                liveDraftIds.delete(reconciledDraftId);
+                draftIdByToolCallId.delete(callId);
+              }
               hasStreamProgress = true;
               return;
             }
@@ -1029,6 +1080,19 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       } catch (error) {
         streamError = error;
       }
+
+      for (const draftId of liveDraftIds) {
+        const snapshot = toolCallDraftStore.getSnapshot(draftId);
+        if (!snapshot) continue;
+        toolCallDraftStore.apply({
+          ...snapshot,
+          phase: 'discarded',
+          sequence: snapshot.sequence + 1,
+          delta: '',
+        });
+        dispatchLiveRunAction({ type: 'tool-draft-discard', draftId });
+      }
+      liveDraftIds.clear();
 
       const wasStopped = stopRequestedRef.current || abortController.signal.aborted || isAbortError(streamError);
       let recoveryStarted = false;
@@ -1074,7 +1138,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
 
       return getLatestLiveRunMessageId(liveRunState);
     },
-    [applyEventInterceptor, handleStreamMessageEvent, handleStreamAssetEvent, fetchAndSetThreadsState, finalizeStreamingPlaceholders, getRequestHeaders, refreshThreadMessages, startThreadActivityRecovery]
+    [applyEventInterceptor, handleStreamMessageEvent, handleStreamAssetEvent, fetchAndSetThreadsState, finalizeStreamingPlaceholders, getRequestHeaders, refreshThreadMessages, startThreadActivityRecovery, toolCallDraftStore]
   );
 
   const handleSendMessage = useCallback(
@@ -1433,6 +1497,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     threadActivityStatus,
     isRecoveringStream,
     activityNotice,
+    toolCallDraftSource: toolCallDraftStore,
     specialState,
     clearSpecialState,
     userContextSeed,

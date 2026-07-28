@@ -41,4 +41,10 @@ export type {
   VoiceTranscript,
   VoiceTranscriptMode,
   CreateVoiceProvider,
+  ToolCallDraftPhase,
+  ToolCallDraftSnapshot,
+  ToolCallDraftSource,
+  ToolRendererMap,
+  ToolRendererProps,
+  ToolRendererStatus,
 } from '@copilotz/chat-ui';

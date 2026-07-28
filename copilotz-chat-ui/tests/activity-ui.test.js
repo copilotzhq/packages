@@ -2,7 +2,15 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { AssistantActivity, defaultChatConfig, mergeConfig, resolveMessageSenderDisplay } from '../dist/index.js';
+import {
+  AssistantActivity,
+  defaultChatConfig,
+  formatToolDetailValue,
+  mergeConfig,
+  resolveActivityStableId,
+  resolveMessageSenderDisplay,
+  resolveToolRenderer,
+} from '../dist/index.js';
 
 test('mergeConfig enables activity timeline by default', () => {
   const config = mergeConfig(defaultChatConfig, undefined);
@@ -86,6 +94,42 @@ test('AssistantActivity interpolates customized tool labels', () => {
   );
 
   assert.match(html, /Usou kanban/);
+});
+
+test('tool renderer registry uses exact names and preserves JSON fallback formatting', () => {
+  const TerminalRenderer = () => null;
+  const renderers = { terminal: TerminalRenderer };
+
+  assert.equal(resolveToolRenderer('terminal', renderers), TerminalRenderer);
+  assert.equal(resolveToolRenderer('Terminal', renderers), undefined);
+  assert.equal(resolveToolRenderer('search', renderers), undefined);
+  assert.equal(
+    formatToolDetailValue({ query: 'evidence' }),
+    '{\n  "query": "evidence"\n}',
+  );
+});
+
+test('tool activity keeps one expansion identity across draft reconciliation', () => {
+  assert.equal(resolveActivityStableId({
+    id: 'tool-draft:draft-1',
+    kind: 'tool',
+    status: 'active',
+    details: { toolCallDraftId: 'draft-1' },
+  }), 'tool-draft:draft-1');
+  assert.equal(resolveActivityStableId({
+    id: 'call-1',
+    kind: 'tool',
+    status: 'active',
+    details: {
+      toolCallDraftId: 'draft-1',
+      toolCall: {
+        id: 'call-1',
+        name: 'terminal',
+        arguments: { stdin: 'pwd' },
+        status: 'running',
+      },
+    },
+  }), 'tool-draft:draft-1');
 });
 
 test('AssistantActivity renders skeleton when activity is disabled during active work', () => {

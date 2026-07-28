@@ -735,12 +735,14 @@ export async function runCopilotzStream(
       case "TOKEN": {
         const inner = payload?.payload ?? payload;
         const chunk = typeof inner?.token === "string" ? inner.token : "";
-        // Older stream producers omit `isReasoning` on the empty completion
-        // event. Keep that event attached to the phase it is completing rather
-        // than creating a second, empty answer phase.
+        const isComplete = Boolean(inner?.isComplete);
+        // Explicit flags always win. Legacy non-empty tokens without a flag
+        // are answer text; only an empty completion may inherit its phase.
         const isReasoning = typeof inner?.isReasoning === "boolean"
           ? inner.isReasoning
-          : activePhaseKind === "reasoning" || lastTokenWasReasoning;
+          : chunk.length === 0 && isComplete
+            ? activePhaseKind === "reasoning" || lastTokenWasReasoning
+            : false;
         // Establish a fallback attempt before appending the first token;
         // startAttempt() resets the per-attempt aggregation buffers.
         const tokenContext = getTokenContext(isReasoning);
@@ -758,7 +760,6 @@ export async function runCopilotzStream(
             aggregatedText = appendChunk(aggregatedText, chunk);
           }
         }
-        const isComplete = Boolean(inner?.isComplete);
         if (chunk || isComplete) {
           const tokenText = isReasoning ? aggregatedReasoning : aggregatedText;
           onToken?.(tokenText, isComplete, payload, tokenContext);
@@ -783,6 +784,10 @@ export async function runCopilotzStream(
       case "TOOL_CALL": {
         hadNonReasoningContent = true;
         lastTokenWasReasoning = false;
+        await onMessageEvent?.(payload);
+        break;
+      }
+      case "TOOL_CALL_DELTA": {
         await onMessageEvent?.(payload);
         break;
       }

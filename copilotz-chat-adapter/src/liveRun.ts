@@ -2,8 +2,11 @@ import type { ChatSender, ToolCall } from '@copilotz/chat-ui';
 // @ts-expect-error Direct Node TypeScript tests require the source extension.
 import {
   appendAssistantToolCall,
+  appendAssistantToolDraft,
   applyAssistantToolResult,
   finalizeAssistantMessage,
+  reconcileAssistantToolDraft,
+  removeAssistantToolDraft,
   type InternalChatMessage,
   updateAssistantMessageToken,
 } from './activity.ts';
@@ -24,6 +27,8 @@ export type LiveRunState = {
   attemptsById: Map<string, AttemptCursor>;
   toolMessageByCallId: Map<string, string>;
   pendingToolResultsByCallId: Map<string, ToolResultUpdate>;
+  draftMessageById: Map<string, string>;
+  draftIdByCallId: Map<string, string>;
 };
 
 export type LiveRunAction =
@@ -54,6 +59,23 @@ export type LiveRunAction =
     toolCall: ToolCall;
     sender?: ChatSender;
     at: number;
+  }
+  | {
+    type: 'tool-draft-start';
+    attemptId: string;
+    draftId: string;
+    toolName: string;
+    sender?: ChatSender;
+    at: number;
+  }
+  | {
+    type: 'tool-draft-complete';
+    draftId: string;
+    toolCallId: string;
+  }
+  | {
+    type: 'tool-draft-discard';
+    draftId: string;
   }
   | {
     type: 'tool-result';
@@ -91,6 +113,27 @@ export type LiveRunOperation =
     at: number;
   }
   | {
+    type: 'append-tool-draft';
+    messageId: string;
+    draftId: string;
+    toolName: string;
+    sender?: ChatSender;
+    at: number;
+  }
+  | {
+    type: 'reconcile-tool-draft';
+    messageId: string;
+    draftId: string;
+    toolCall: ToolCall;
+    sender?: ChatSender;
+    at: number;
+  }
+  | {
+    type: 'remove-tool-draft';
+    messageId: string;
+    draftId: string;
+  }
+  | {
     type: 'resolve-tool';
     messageId: string;
     update: ToolResultUpdate;
@@ -105,6 +148,8 @@ const copyState = (state: LiveRunState): LiveRunState => ({
   attemptsById: new Map(state.attemptsById),
   toolMessageByCallId: new Map(state.toolMessageByCallId),
   pendingToolResultsByCallId: new Map(state.pendingToolResultsByCallId),
+  draftMessageById: new Map(state.draftMessageById),
+  draftIdByCallId: new Map(state.draftIdByCallId),
 });
 
 export const createLiveRunState = (initialMessageId: string): LiveRunState => ({
@@ -115,6 +160,8 @@ export const createLiveRunState = (initialMessageId: string): LiveRunState => ({
   attemptsById: new Map(),
   toolMessageByCallId: new Map(),
   pendingToolResultsByCallId: new Map(),
+  draftMessageById: new Map(),
+  draftIdByCallId: new Map(),
 });
 
 const ensureAttempt = (
@@ -223,21 +270,94 @@ export const transitionLiveRun = (
     };
   }
 
-  if (action.type === 'tool-call') {
-    if (state.toolMessageByCallId.has(action.toolCall.id)) {
+  if (action.type === 'tool-draft-start') {
+    if (state.draftMessageById.has(action.draftId)) {
       return { state, operations: [] };
     }
-    const attemptId = action.attemptId ?? state.activeAttemptId ?? state.lastAttemptId ??
-      `tool-attempt:${action.toolCall.id}`;
     const ensured = ensureAttempt(
       state,
-      attemptId,
+      action.attemptId,
       action.sender,
       action.at,
       options,
     );
     const next = copyState(ensured.state);
+    next.draftMessageById.set(action.draftId, ensured.cursor.messageId);
+    return {
+      state: next,
+      operations: [
+        ...ensured.operations,
+        {
+          type: 'append-tool-draft',
+          messageId: ensured.cursor.messageId,
+          draftId: action.draftId,
+          toolName: action.toolName,
+          sender: action.sender ?? ensured.cursor.sender,
+          at: action.at,
+        },
+      ],
+    };
+  }
+
+  if (action.type === 'tool-draft-complete') {
+    if (!state.draftMessageById.has(action.draftId)) {
+      return { state, operations: [] };
+    }
+    const next = copyState(state);
+    next.draftIdByCallId.set(action.toolCallId, action.draftId);
+    return { state: next, operations: [] };
+  }
+
+  if (action.type === 'tool-draft-discard') {
+    const messageId = state.draftMessageById.get(action.draftId);
+    if (!messageId) return { state, operations: [] };
+    const next = copyState(state);
+    next.draftMessageById.delete(action.draftId);
+    for (const [toolCallId, draftId] of next.draftIdByCallId) {
+      if (draftId === action.draftId) next.draftIdByCallId.delete(toolCallId);
+    }
+    return {
+      state: next,
+      operations: [{
+        type: 'remove-tool-draft',
+        messageId,
+        draftId: action.draftId,
+      }],
+    };
+  }
+
+  if (action.type === 'tool-call') {
+    if (state.toolMessageByCallId.has(action.toolCall.id)) {
+      return { state, operations: [] };
+    }
+    const draftId = state.draftIdByCallId.get(action.toolCall.id);
+    const draftMessageId = draftId
+      ? state.draftMessageById.get(draftId)
+      : undefined;
+    const attemptId = action.attemptId ?? state.activeAttemptId ?? state.lastAttemptId ??
+      `tool-attempt:${action.toolCall.id}`;
+    const ensured = draftMessageId
+      ? {
+        state,
+        cursor: {
+          messageId: draftMessageId,
+          sender: action.sender,
+        },
+        operations: [] as LiveRunOperation[],
+      }
+      : ensureAttempt(
+        state,
+        attemptId,
+        action.sender,
+        action.at,
+        options,
+      );
+    const next = copyState(ensured.state);
     next.toolMessageByCallId.set(action.toolCall.id, ensured.cursor.messageId);
+    if (draftId) {
+      next.draftMessageById.delete(draftId);
+      next.draftIdByCallId.delete(action.toolCall.id);
+    }
     const pendingResult = next.pendingToolResultsByCallId.get(action.toolCall.id);
     if (pendingResult) {
       next.pendingToolResultsByCallId.delete(action.toolCall.id);
@@ -246,13 +366,22 @@ export const transitionLiveRun = (
       state: next,
       operations: [
         ...ensured.operations,
-        {
-          type: 'append-tool',
-          messageId: ensured.cursor.messageId,
-          toolCall: action.toolCall,
-          sender: action.sender ?? ensured.cursor.sender,
-          at: action.at,
-        },
+        draftId
+          ? {
+            type: 'reconcile-tool-draft' as const,
+            messageId: ensured.cursor.messageId,
+            draftId,
+            toolCall: action.toolCall,
+            sender: action.sender ?? ensured.cursor.sender,
+            at: action.at,
+          }
+          : {
+            type: 'append-tool' as const,
+            messageId: ensured.cursor.messageId,
+            toolCall: action.toolCall,
+            sender: action.sender ?? ensured.cursor.sender,
+            at: action.at,
+          },
         ...(pendingResult ? [{
           type: 'resolve-tool' as const,
           messageId: ensured.cursor.messageId,
@@ -349,6 +478,29 @@ const applyOperation = (
       }),
       ...(operation.sender ? { sender: operation.sender } : {}),
     };
+  } else if (operation.type === 'append-tool-draft') {
+    updated = {
+      ...appendAssistantToolDraft(current, {
+        draftId: operation.draftId,
+        toolName: operation.toolName,
+        startedAt: operation.at,
+      }),
+      ...(operation.sender ? { sender: operation.sender } : {}),
+    };
+  } else if (operation.type === 'reconcile-tool-draft') {
+    updated = {
+      ...reconcileAssistantToolDraft(
+        current,
+        operation.draftId,
+        {
+          ...operation.toolCall,
+          startTime: operation.toolCall.startTime ?? operation.at,
+        },
+      ),
+      ...(operation.sender ? { sender: operation.sender } : {}),
+    };
+  } else if (operation.type === 'remove-tool-draft') {
+    updated = removeAssistantToolDraft(current, operation.draftId);
   } else {
     const toolItem = current.activity?.items.find((item) => (
       item.kind === 'tool' && item.id === operation.update.id

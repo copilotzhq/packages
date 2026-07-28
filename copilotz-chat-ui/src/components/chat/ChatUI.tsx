@@ -46,6 +46,8 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   sidebar: _sidebar,
   userMenuSections,
   userMenuAdditionalItems,
+  toolRenderers,
+  toolCallDraftSource,
   isGenerating = false,
   isMessagesLoading = false,
   isLoadingOlderMessages = false,
@@ -727,6 +729,8 @@ export const ChatUI: React.FC<ChatV2Props> = ({
       renderUserMarkdown: config.ui.renderUserMarkdown,
       markdown: config.markdown,
       onToggleExpanded: handleToggleMessageExpansion,
+      toolRenderers,
+      toolCallDraftSource,
     }),
     [
       user?.avatar,
@@ -750,6 +754,8 @@ export const ChatUI: React.FC<ChatV2Props> = ({
       config.ui.longMessageChunkChars,
       config.ui.renderUserMarkdown,
       config.markdown,
+      toolRenderers,
+      toolCallDraftSource,
       handleMessageAction,
       handleToggleMessageExpansion,
     ]

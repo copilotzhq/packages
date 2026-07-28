@@ -1,4 +1,4 @@
-import { ReactNode } from "react";
+import type { ComponentType, ReactNode } from "react";
 import type {
   Components,
   Options as ReactMarkdownOptions,
@@ -104,6 +104,42 @@ export interface ToolCall {
   endTime?: number;
 }
 
+export type ToolCallDraftPhase = "streaming" | "complete";
+
+export interface ToolCallDraftSnapshot {
+  llmAttemptId: string;
+  draftId: string;
+  callIndex: number;
+  sequence: number;
+  toolName: string;
+  rawInput: string;
+  phase: ToolCallDraftPhase;
+  toolCallId?: string;
+}
+
+export interface ToolCallDraftSource {
+  getSnapshot: (draftId: string) => ToolCallDraftSnapshot | undefined;
+  subscribe: (draftId: string, listener: () => void) => () => void;
+}
+
+export type ToolRendererStatus =
+  | "streaming"
+  | ToolCall["status"];
+
+export interface ToolRendererProps {
+  toolName: string;
+  toolCall?: ToolCall;
+  draft?: ToolCallDraftSnapshot;
+  status: ToolRendererStatus;
+  result?: unknown;
+  error?: string;
+}
+
+export type ToolRendererMap = Record<
+  string,
+  ComponentType<ToolRendererProps>
+>;
+
 export type AssistantActivityKind = "thinking" | "tool" | "answering";
 export type AssistantActivityStatus = "active" | "complete" | "failed";
 
@@ -117,6 +153,7 @@ export interface AssistantActivityItem {
   details?: {
     reasoning?: string;
     toolCall?: ToolCall;
+    toolCallDraftId?: string;
     result?: any;
     error?: string;
   };
@@ -472,6 +509,10 @@ export interface ChatV2Props {
   userMenuSections?: ChatUserMenuSection[];
   /** @deprecated Prefer userMenuSections for native menu composition */
   userMenuAdditionalItems?: ReactNode;
+  /** Client-owned tool detail renderers keyed by exact tool name. */
+  toolRenderers?: ToolRendererMap;
+  /** External live-draft source supplied by a streaming adapter. */
+  toolCallDraftSource?: ToolCallDraftSource;
 
   // State Management
   isGenerating?: boolean;

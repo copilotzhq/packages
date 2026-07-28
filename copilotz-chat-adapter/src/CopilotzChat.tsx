@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChatUI, ChatUserContextProvider } from '@copilotz/chat-ui';
-import type { AgentOption, ChatCallbacks, ChatConfig, ChatUserContext, ChatUserMenuSection, MemoryItem } from '@copilotz/chat-ui';
+import type { AgentOption, ChatCallbacks, ChatConfig, ChatUserContext, ChatUserMenuSection, MemoryItem, ToolRendererMap } from '@copilotz/chat-ui';
 import { User } from 'lucide-react';
 import { useCopilotz } from './useCopilotzChat';
 import type { EventInterceptor, RenderSpecialState, RunErrorInterceptor } from './specialState';
@@ -65,9 +65,11 @@ export interface CopilotzChatProps {
   eventInterceptor?: EventInterceptor;
   runErrorInterceptor?: RunErrorInterceptor;
   renderSpecialState?: RenderSpecialState;
+  /** Client-owned tool detail renderers keyed by exact tool name. */
+  toolRenderers?: ToolRendererMap;
 }
 
-export const CopilotzChat: React.FC<CopilotzChatProps> = ({ userId, userName, userAvatar, userEmail, initialContext, bootstrap, config: userConfig, callbacks: userCallbacks, customComponent, onToolOutput, onCurrentThreadIdChange, onLogout, onViewProfile, onAddMemory, onUpdateMemory, onDeleteMemory, userMenuSections, userMenuAdditionalItems, suggestions, agentOptions = [], selectedAgentId = null, onSelectAgent, participantIds, onParticipantsChange, targetAgentId = null, onTargetAgentChange, getRequestHeaders, className, eventInterceptor, runErrorInterceptor, renderSpecialState }) => {
+export const CopilotzChat: React.FC<CopilotzChatProps> = ({ userId, userName, userAvatar, userEmail, initialContext, bootstrap, config: userConfig, callbacks: userCallbacks, customComponent, onToolOutput, onCurrentThreadIdChange, onLogout, onViewProfile, onAddMemory, onUpdateMemory, onDeleteMemory, userMenuSections, userMenuAdditionalItems, suggestions, agentOptions = [], selectedAgentId = null, onSelectAgent, participantIds, onParticipantsChange, targetAgentId = null, onTargetAgentChange, getRequestHeaders, className, eventInterceptor, runErrorInterceptor, renderSpecialState, toolRenderers }) => {
   const selectedAgent = agentOptions.find((agent) => agent.id === selectedAgentId) || null;
 
   // Keep backend routing identities stable. Display names are for UI only;
@@ -85,7 +87,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({ userId, userName, us
     return targetAgentId;
   }, [targetAgentId]);
 
-  const { messages, isMessagesLoading, isLoadingOlderMessages, messagePageInfo, threads, currentThreadId, isStreaming, isRecoveringStream, activityNotice, specialState, clearSpecialState, userContextSeed, sendMessage, createThread, selectThread, renameThread, archiveThread, updateThreadTags, editMessage, deleteThread, stopGeneration, loadOlderMessages } = useCopilotz({
+  const { messages, isMessagesLoading, isLoadingOlderMessages, messagePageInfo, threads, currentThreadId, isStreaming, isRecoveringStream, activityNotice, toolCallDraftSource, specialState, clearSpecialState, userContextSeed, sendMessage, createThread, selectThread, renameThread, archiveThread, updateThreadTags, editMessage, deleteThread, stopGeneration, loadOlderMessages } = useCopilotz({
     userId,
     userName,
     userAvatar,
@@ -195,5 +197,5 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({ userId, userName, us
 
   const specialStateContent = specialState ? renderSpecialState?.(specialState, { clear: clearSpecialState }) : null;
 
-  return <ChatUserContextProvider initial={userContextSeed}>{specialStateContent ?? <ChatUI messages={messages} isMessagesLoading={isMessagesLoading} isLoadingOlderMessages={isLoadingOlderMessages} hasMoreMessagesBefore={messagePageInfo.hasMoreBefore} activityNotice={activityNotice} isBackgroundRefreshingMessages={isRecoveringStream} onLoadOlderMessages={loadOlderMessages} threads={threads} currentThreadId={currentThreadId} config={mergedConfig} callbacks={chatCallbacks} isGenerating={isStreaming} suggestions={suggestions} agentOptions={agentOptions} selectedAgentId={selectedAgentId} onSelectAgent={onSelectAgent} participantIds={participantIds} onParticipantsChange={onParticipantsChange} targetAgentId={targetAgentId} onTargetAgentChange={onTargetAgentChange} user={userProp} assistant={assistantProp} onAddMemory={onAddMemory} onUpdateMemory={onUpdateMemory} onDeleteMemory={onDeleteMemory} userMenuSections={userMenuSections} userMenuAdditionalItems={userMenuAdditionalItems} className={className} />}</ChatUserContextProvider>;
+  return <ChatUserContextProvider initial={userContextSeed}>{specialStateContent ?? <ChatUI messages={messages} isMessagesLoading={isMessagesLoading} isLoadingOlderMessages={isLoadingOlderMessages} hasMoreMessagesBefore={messagePageInfo.hasMoreBefore} activityNotice={activityNotice} isBackgroundRefreshingMessages={isRecoveringStream} onLoadOlderMessages={loadOlderMessages} threads={threads} currentThreadId={currentThreadId} config={mergedConfig} callbacks={chatCallbacks} isGenerating={isStreaming} suggestions={suggestions} agentOptions={agentOptions} selectedAgentId={selectedAgentId} onSelectAgent={onSelectAgent} participantIds={participantIds} onParticipantsChange={onParticipantsChange} targetAgentId={targetAgentId} onTargetAgentChange={onTargetAgentChange} user={userProp} assistant={assistantProp} onAddMemory={onAddMemory} onUpdateMemory={onUpdateMemory} onDeleteMemory={onDeleteMemory} userMenuSections={userMenuSections} userMenuAdditionalItems={userMenuAdditionalItems} toolRenderers={toolRenderers} toolCallDraftSource={toolCallDraftSource} className={className} />}</ChatUserContextProvider>;
 };

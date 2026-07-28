@@ -144,6 +144,73 @@ export const appendAssistantToolCall = (
   });
 };
 
+export const appendAssistantToolDraft = (
+  message: InternalChatMessage,
+  draft: {
+    draftId: string;
+    toolName: string;
+    startedAt?: number;
+  },
+): InternalChatMessage => {
+  if (message.role !== 'assistant') return message;
+  const itemId = `tool-draft:${draft.draftId}`;
+
+  return upsertItem(completeItems(removeItems({
+    ...message,
+    isStreaming: true,
+    isComplete: false,
+  }, (item) => item.kind === 'answering'), (item) => (
+    item.kind === 'thinking' || item.kind === 'answering'
+  )), {
+    id: itemId,
+    kind: 'tool',
+    status: 'active',
+    toolName: draft.toolName,
+    startedAt: draft.startedAt ?? Date.now(),
+    details: { toolCallDraftId: draft.draftId },
+  });
+};
+
+export const reconcileAssistantToolDraft = (
+  message: InternalChatMessage,
+  draftId: string,
+  toolCall: ToolCall,
+): InternalChatMessage => {
+  if (message.role !== 'assistant') return message;
+  const items = getItems(message);
+  const index = items.findIndex((item) =>
+    item.kind === 'tool' && item.details?.toolCallDraftId === draftId
+  );
+  if (index === -1) return appendAssistantToolCall(message, toolCall);
+
+  const status = toolStatusToActivityStatus(toolCall.status);
+  const next = [...items];
+  next[index] = {
+    ...next[index],
+    id: toolCall.id,
+    status,
+    toolName: toolCall.name,
+    ...(status !== 'active' ? { completedAt: toolCall.endTime ?? Date.now() } : {}),
+    details: {
+      ...(next[index].details ?? {}),
+      toolCall,
+      ...(toolCall.result !== undefined ? { result: toolCall.result } : {}),
+    },
+  };
+  return setItems(message, next);
+};
+
+export const removeAssistantToolDraft = (
+  message: InternalChatMessage,
+  draftId: string,
+): InternalChatMessage => (
+  message.role === 'assistant'
+    ? removeItems(message, (item) =>
+      item.kind === 'tool' && item.details?.toolCallDraftId === draftId
+    )
+    : message
+);
+
 export const applyAssistantToolResult = (
   message: InternalChatMessage,
   update: Partial<ToolCall> & Pick<ToolCall, 'name' | 'status'> & { id?: string; error?: string },

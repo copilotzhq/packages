@@ -257,3 +257,111 @@ test('replayed token and tool-call events do not duplicate or reopen timeline it
   assert.equal(messages[0].activity?.items[1].status, 'complete');
   assert.deepEqual(messages[0].activity?.items[1].details?.result, { ok: true });
 });
+
+test('tool draft reconciles into one finalized tool activity', () => {
+  let run = createLiveRunState('placeholder');
+  let messages = [{
+    id: 'placeholder',
+    role: 'assistant' as const,
+    content: '',
+    timestamp: 0,
+    isStreaming: true,
+    isComplete: false,
+    sender,
+  }];
+  const dispatch = (action: Parameters<typeof transitionLiveRun>[1]) => {
+    const transition = transitionLiveRun(run, action, {
+      createId: () => 'unused',
+    });
+    run = transition.state;
+    messages = applyLiveRunOperations(messages, transition.operations);
+  };
+
+  dispatch({
+    type: 'tool-draft-start',
+    attemptId: 'attempt-1',
+    draftId: 'draft-1',
+    toolName: 'terminal',
+    sender,
+    at: 1,
+  });
+  assert.equal(messages[0].activity?.items.length, 1);
+  assert.equal(
+    messages[0].activity?.items[0].details?.toolCallDraftId,
+    'draft-1',
+  );
+
+  dispatch({
+    type: 'tool-draft-complete',
+    draftId: 'draft-1',
+    toolCallId: 'call-1',
+  });
+  dispatch({
+    type: 'tool-call',
+    attemptId: 'attempt-1',
+    sender,
+    at: 2,
+    toolCall: {
+      id: 'call-1',
+      name: 'terminal',
+      arguments: { stdin: 'pwd' },
+      status: 'running',
+    },
+  });
+  dispatch({
+    type: 'tool-call',
+    attemptId: 'attempt-1',
+    sender,
+    at: 2,
+    toolCall: {
+      id: 'call-1',
+      name: 'terminal',
+      arguments: { stdin: 'pwd' },
+      status: 'running',
+    },
+  });
+
+  assert.equal(messages[0].activity?.items.length, 1);
+  assert.equal(messages[0].activity?.items[0].id, 'call-1');
+  assert.deepEqual(
+    messages[0].activity?.items[0].details?.toolCall?.arguments,
+    { stdin: 'pwd' },
+  );
+  assert.equal(
+    messages[0].activity?.items[0].details?.toolCallDraftId,
+    'draft-1',
+  );
+});
+
+test('discarded tool draft removes its provisional activity', () => {
+  let run = createLiveRunState('placeholder');
+  let messages = [{
+    id: 'placeholder',
+    role: 'assistant' as const,
+    content: '',
+    timestamp: 0,
+    isStreaming: true,
+    isComplete: false,
+    sender,
+  }];
+  const dispatch = (action: Parameters<typeof transitionLiveRun>[1]) => {
+    const transition = transitionLiveRun(run, action, {
+      createId: () => 'unused',
+    });
+    run = transition.state;
+    messages = applyLiveRunOperations(messages, transition.operations);
+  };
+
+  dispatch({
+    type: 'tool-draft-start',
+    attemptId: 'attempt-1',
+    draftId: 'draft-1',
+    toolName: 'terminal',
+    sender,
+    at: 1,
+  });
+  dispatch({ type: 'tool-draft-discard', draftId: 'draft-1' });
+
+  assert.equal(messages[0].activity, undefined);
+  assert.equal(run.draftMessageById.has('draft-1'), false);
+});
