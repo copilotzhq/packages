@@ -7,6 +7,28 @@ export type MessageGroup = {
   suggestionMessageId: string;
 };
 
+type RecoveryMetadata = {
+  chainId: string;
+  joinSeparator?: string;
+};
+
+const getRecoveryMetadata = (
+  message: ChatMessage | null | undefined,
+): RecoveryMetadata | null => {
+  const recovery = message?.metadata?.recovery;
+  if (!recovery || typeof recovery !== 'object' || Array.isArray(recovery)) {
+    return null;
+  }
+  return typeof recovery.chainId === 'string'
+    ? {
+      chainId: recovery.chainId,
+      ...(typeof recovery.joinSeparator === 'string'
+        ? { joinSeparator: recovery.joinSeparator }
+        : {}),
+    }
+    : null;
+};
+
 const getMessageSpeakerKey = (
   message: ChatMessage | null | undefined,
 ): string | null => {
@@ -27,7 +49,38 @@ const canGroupMessages = (previous: ChatMessage, next: ChatMessage): boolean => 
   if (previous.role !== 'assistant') {
     return false;
   }
+  const previousRecovery = getRecoveryMetadata(previous);
+  const nextRecovery = getRecoveryMetadata(next);
+  if (
+    previousRecovery && nextRecovery &&
+    previousRecovery.chainId === nextRecovery.chainId
+  ) {
+    return true;
+  }
   return getMessageSpeakerKey(previous) === getMessageSpeakerKey(next);
+};
+
+export const joinMessageGroupContent = (messages: ChatMessage[]): string => {
+  let content = '';
+  let previous: ChatMessage | undefined;
+  for (const message of messages) {
+    const messageContent = message.content.trim();
+    if (!messageContent) continue;
+    if (!previous) {
+      content = messageContent;
+      previous = message;
+      continue;
+    }
+    const previousRecovery = getRecoveryMetadata(previous);
+    const nextRecovery = getRecoveryMetadata(message);
+    const separator = previousRecovery && nextRecovery &&
+        previousRecovery.chainId === nextRecovery.chainId
+      ? nextRecovery.joinSeparator ?? previousRecovery.joinSeparator ?? ''
+      : '\n\n';
+    content += `${separator}${messageContent}`;
+    previous = message;
+  }
+  return content;
 };
 
 export const groupMessagesForRender = (messages: ChatMessage[]): MessageGroup[] => {

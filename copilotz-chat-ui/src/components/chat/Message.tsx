@@ -17,6 +17,7 @@ import {
   DialogTrigger,
 } from '../ui/dialog';
 import { createObjectUrlFromDataUrl, formatFileSize } from '../../lib/utils';
+import { joinMessageGroupContent } from '../../lib/messageGrouping';
 import { AssistantActivity } from './AssistantActivity';
 import { MessageSenderAvatar, resolveMessageSenderDisplay } from './MessageSender';
 import {
@@ -569,10 +570,7 @@ export const Message: React.FC<MessageProps> = memo(({
 
   const sourceMessages = fragments?.length ? fragments : [message];
   const headerMessage = sourceMessages[0];
-  const groupContent = sourceMessages
-    .map((sourceMessage) => sourceMessage.content.trim())
-    .filter(Boolean)
-    .join('\n\n');
+  const groupContent = joinMessageGroupContent(sourceMessages);
   const messageIsUser = isUser ?? message.role === 'user';
   if (!sourceMessages.some(hasRenderableAssistantBody)) {
     return null;

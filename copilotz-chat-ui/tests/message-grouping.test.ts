@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { ChatMessage, ChatSender } from '../src/types/chatTypes.ts';
-import { groupMessagesForRender } from '../src/lib/messageGrouping.ts';
+import { groupMessagesForRender, joinMessageGroupContent } from '../src/lib/messageGrouping.ts';
 
 const sender: ChatSender = {
   type: 'agent',
@@ -58,4 +58,31 @@ test('same-agent grouping preserves ordered source messages without flattening a
     groups[0].messages.flatMap((item) => item.activity?.items.map((activity) => activity.id) ?? []),
     ['attempt-1:reasoning:0', 'tool-1', 'attempt-2:reasoning:0'],
   );
+});
+
+test('recovery-linked fragments hydrate as one exact streamed answer', () => {
+  const fragment: ChatMessage = {
+    id: 'fragment',
+    role: 'assistant',
+    content: 'partial',
+    timestamp: 1,
+    sender,
+    metadata: {
+      recovery: { chainId: 'chain-1', kind: 'fragment', joinSeparator: ' ' },
+    },
+  };
+  const continuation: ChatMessage = {
+    id: 'continuation',
+    role: 'assistant',
+    content: 'answer',
+    timestamp: 2,
+    sender,
+    metadata: {
+      recovery: { chainId: 'chain-1', kind: 'continuation', joinSeparator: ' ' },
+    },
+  };
+
+  const groups = groupMessagesForRender([fragment, continuation]);
+  assert.equal(groups.length, 1);
+  assert.equal(joinMessageGroupContent(groups[0].messages), 'partial answer');
 });

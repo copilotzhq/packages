@@ -63,6 +63,47 @@ test('internal hydrated messages are filtered out by contract', () => {
   }), false);
 });
 
+test('recovery hydration hides cues while retaining visible fragment correlation', async () => {
+  const recovery = { chainId: 'chain-1', joinSeparator: ' ' };
+  const { viewMessages } = await prepareHydratedMessages([
+    {
+      id: 'fragment',
+      threadId: 'thread-1',
+      senderType: 'agent',
+      senderId: 'north',
+      content: 'partial',
+      metadata: {
+        senderExternalId: 'north',
+        senderDisplayName: 'North',
+        recovery: { ...recovery, kind: 'fragment' },
+      },
+    },
+    {
+      id: 'cue',
+      threadId: 'thread-1',
+      senderType: 'job',
+      senderId: 'copilotz-recovery',
+      content: '<recovery_cue>Continue.</recovery_cue>',
+      metadata: { visibility: 'internal', recovery: { ...recovery, kind: 'cue' } },
+    },
+    {
+      id: 'continuation',
+      threadId: 'thread-1',
+      senderType: 'agent',
+      senderId: 'north',
+      content: 'answer',
+      metadata: {
+        senderExternalId: 'north',
+        senderDisplayName: 'North',
+        recovery: { ...recovery, kind: 'continuation' },
+      },
+    },
+  ], { senderOptions: { agents } });
+
+  assert.deepEqual(viewMessages.map((message) => message.id), ['fragment', 'continuation']);
+  assert.equal(viewMessages[0].metadata?.recovery.chainId, 'chain-1');
+});
+
 test('legacy empty routing messages hydrate as visible consultation text', () => {
   const routedMessage: RestMessage = {
     id: 'routed-message',
