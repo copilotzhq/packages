@@ -36,9 +36,124 @@ test('runCopilotzStream sends stable participant and target identifiers', async 
     'south',
     'user-123',
   ]);
-  assert.equal(capturedBody.target, 'west');
-  assert.equal(capturedBody.sender.externalId, 'user-123');
-  assert.equal(capturedBody.content, 'Hello team');
+  assert.deepEqual(capturedBody.recipients, ['west']);
+  assert.equal(capturedBody.participant.externalId, 'user-123');
+  assert.equal(capturedBody.participant.participantType, 'human');
+  assert.equal(capturedBody.input.content, 'Hello team');
+});
+
+test('runCopilotzStream never impersonates an agent for tool-bearing input', async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedBody: any = null;
+
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body ?? '{}'));
+    return new Response('', {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  };
+
+  try {
+    await runCopilotzStream({
+      content: 'Use the existing result',
+      user: { externalId: 'user-123', name: 'User' },
+      selectedAgent: 'west',
+      toolCalls: [{ id: 'call-1', name: 'lookup', args: { query: 'time' } }],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(capturedBody.participant.externalId, 'user-123');
+  assert.equal(capturedBody.participant.participantType, 'human');
+  assert.deepEqual(capturedBody.recipients, ['west']);
+  assert.deepEqual(capturedBody.input.metadata.toolCalls, [{
+    id: 'call-1',
+    name: 'lookup',
+    args: JSON.stringify({ query: 'time' }),
+  }]);
+});
+
+test('runCopilotzStream defers routing to channel defaults when no agent is selected', async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedBody: any = null;
+
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body ?? '{}'));
+    return new Response('', {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  };
+
+  try {
+    await runCopilotzStream({
+      content: 'Hello',
+      user: { externalId: 'user-123' },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(capturedBody.thread.participants, ['user-123']);
+  assert.equal('recipients' in capturedBody, false);
+  assert.deepEqual(capturedBody.participant, {
+    externalId: 'user-123',
+    participantType: 'human',
+  });
+});
+
+test('runCopilotzStream sends attachment bytes as canonical content only', async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedBody: any = null;
+
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body ?? '{}'));
+    return new Response('', {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  };
+
+  try {
+    await runCopilotzStream({
+      content: 'See this',
+      user: { externalId: 'user-123' },
+      selectedAgent: 'west',
+      attachments: [{
+        kind: 'image',
+        dataUrl: 'data:image/png;base64,AQID',
+        mimeType: 'image/png',
+        fileName: 'diagram.png',
+        size: 3,
+      }],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(capturedBody.input.content, [
+    { type: 'text', text: 'See this' },
+    {
+      type: 'image',
+      dataBase64: 'AQID',
+      mediaType: 'image/png',
+      name: 'diagram.png',
+      metadata: { attachmentIndex: 0, size: 3 },
+    },
+  ]);
+  assert.deepEqual(capturedBody.input.metadata.attachments, [{
+    kind: 'image',
+    mimeType: 'image/png',
+    fileName: 'diagram.png',
+    size: 3,
+    contentIndex: 1,
+  }]);
+  assert.equal(
+    JSON.stringify(capturedBody.input.metadata).includes('data:image/png'),
+    false,
+  );
 });
 
 test('runCopilotzStream resets token aggregation between completed LLM token sequences', async () => {

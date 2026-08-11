@@ -132,32 +132,39 @@ const buildFallbackPageInfo = (
   newestMessageId: data[data.length - 1]?.id ?? null,
 });
 
-type MessageSenderType = "agent" | "user" | "tool" | "system" | "job";
-
 type MessageContent =
   | string
   | Array<
     | { type: "text"; text: string }
     | {
       type: "image";
-      url?: string;
-      dataBase64?: string;
-      mimeType?: string;
+      dataBase64: string;
+      mediaType: string;
+      name?: string;
       alt?: string;
+      metadata?: Record<string, unknown>;
     }
     | {
       type: "audio";
-      url?: string;
-      dataBase64?: string;
-      mimeType?: string;
+      dataBase64: string;
+      mediaType: string;
+      name?: string;
       transcript?: string;
+      metadata?: Record<string, unknown>;
+    }
+    | {
+      type: "video";
+      dataBase64: string;
+      mediaType: string;
+      name?: string;
+      metadata?: Record<string, unknown>;
     }
     | {
       type: "file";
-      url?: string;
-      dataBase64?: string;
-      mimeType?: string;
+      dataBase64: string;
+      mediaType: string;
       name?: string;
+      metadata?: Record<string, unknown>;
     }
     | { type: "json"; value: unknown }
   >;
@@ -169,31 +176,30 @@ type MessageToolCall = {
 };
 
 type MessageThread = {
-  id?: string | null;
-  name?: string | null;
-  description?: string | null;
-  externalId?: string | null;
-  participants?: string[] | null;
-  metadata?: Record<string, unknown> | null;
+  id?: string;
+  name?: string;
+  description?: string;
+  externalId?: string;
+  participants?: string[];
+  metadata?: Record<string, unknown>;
 };
 
-type MessageSender = {
-  id?: string | null;
-  externalId?: string | null;
-  type: MessageSenderType;
-  name?: string | null;
-  identifierType?: "id" | "name" | "email" | null;
-  metadata?: Record<string, unknown> | null;
+type WebParticipant = {
+  externalId: string;
+  participantType: "human";
+  name?: string;
+  email?: string;
+  metadata?: Record<string, unknown>;
 };
 
-type MessagePayload = {
-  content: MessageContent;
-  sender: MessageSender;
-  thread?: MessageThread | null;
-  toolCalls?: MessageToolCall[] | null;
-  target?: string | null;
-  targetQueue?: string[] | null;
-  metadata?: Record<string, unknown> | null;
+type WebChannelPayload = {
+  thread: MessageThread;
+  participant: WebParticipant;
+  recipients?: string[];
+  input: {
+    content: MessageContent;
+    metadata?: Record<string, unknown>;
+  };
 };
 
 export type StreamTokenContext = {
@@ -234,7 +240,7 @@ type RunOptions = {
   selectedAgent?: string | null;
   /** Agent participants in the thread (multi-agent). Overrides selectedAgent for thread.participants when provided. */
   participants?: string[] | null;
-  /** Explicit target agent for this message (who should respond). Maps to MessagePayload.target. */
+  /** Explicit target agent for this message (who should respond). */
   targetAgent?: string | null;
   getRequestHeaders?: RequestHeadersProvider;
 } & StreamCallbacks;
@@ -289,21 +295,18 @@ const parseErrorText = (rawText: string): unknown => {
 
 const toAttachmentPayload = (attachments?: MediaAttachment[]) => {
   if (!attachments || attachments.length === 0) return undefined;
-  return attachments.map((att) => {
+  return attachments.map((att, index) => {
     const base = {
       kind: att.kind,
-      dataUrl: att.dataUrl,
       mimeType: att.mimeType,
       fileName: att.fileName,
       size: att.size,
+      contentIndex: index + 1,
     };
     if (att.kind === "audio" || att.kind === "video") {
       return {
         ...base,
         durationMs: att.durationMs,
-        ...(att.kind === "video" && "poster" in att
-          ? { poster: att.poster }
-          : {}),
       };
     }
     return base;
@@ -457,10 +460,8 @@ export async function runCopilotzStream(
     });
   }
 
-  // Audio attachments are sent as content parts and also mirrored in metadata
-  // so the persisted message can render the same media after reload.
-  const audioAttachments = attachments?.filter((att) => att.kind === "audio") ??
-    [];
+  // Attachment bytes are canonical content. Metadata contains only body-free
+  // display hints so base64 is never duplicated into graph metadata.
   const attachmentPayload = toAttachmentPayload(attachments);
 
   const normalizedToolCalls = toolCalls?.map<MessageToolCall>((call) => ({
@@ -511,108 +512,108 @@ export async function runCopilotzStream(
   const baseParticipants: string[] =
     Array.isArray(participants) && participants.length > 0
       ? participants
-      : [selectedAgent || "assistant"];
+      : selectedAgent
+      ? [selectedAgent]
+      : [];
   const resolvedParticipants: string[] = user.externalId &&
       !baseParticipants.includes(user.externalId)
     ? [...baseParticipants, user.externalId]
     : baseParticipants;
 
   const resolvedTarget = targetAgent?.trim() || null;
-  const toolCallSenderId = selectedAgent ||
-    resolvedParticipants[0] || "assistant";
-
+  const resolvedRecipients = resolvedTarget
+    ? [resolvedTarget]
+    : baseParticipants.filter((participant) => participant !== user.externalId);
   const threadPayload: MessageThread | undefined =
     (threadId || threadExternalId || threadName ||
         Object.keys(restThreadMetadata).length > 0)
       ? {
-        id: threadId ?? null,
-        externalId: threadExternalId ?? null,
-        name: threadName,
+        ...(threadId ? { id: threadId } : {}),
+        ...(threadExternalId ? { externalId: threadExternalId } : {}),
+        ...(threadName ? { name: threadName } : {}),
         participants: resolvedParticipants,
-        metadata: Object.keys(restThreadMetadata).length > 0
-          ? restThreadMetadata
-          : null,
+        ...(Object.keys(restThreadMetadata).length > 0
+          ? { metadata: restThreadMetadata }
+          : {}),
       }
       : undefined;
 
-  // Prepare audio parts (convert to WAV when needed)
-  const preparedAudioParts: Array<
-    {
-      type: "audio";
-      dataBase64?: string;
-      url?: string;
-      mimeType?: string;
-      transcript?: string;
+  const preparedAttachmentParts: Exclude<MessageContent, string> = [];
+  for (const [index, attachment] of (attachments ?? []).entries()) {
+    const parsed = parseDataUrl(attachment.dataUrl);
+    if (!parsed) {
+      throw new TypeError(
+        `Attachment ${index + 1} must contain a base64 data URL.`,
+      );
     }
-  > = [];
-  for (const audioAtt of audioAttachments) {
-    if (!audioAtt.dataUrl) continue;
-    const parsed = parseDataUrl(audioAtt.dataUrl);
+    let dataBase64 = parsed.base64;
+    let mediaType = attachment.mimeType || parsed.mime;
     if (
-      parsed &&
-      (parsed.mime.includes("wav") || parsed.mime.includes("mp3") ||
-        parsed.mime.includes("mpeg"))
+      attachment.kind === "audio" &&
+      !mediaType.includes("wav") &&
+      !mediaType.includes("mp3") &&
+      !mediaType.includes("mpeg")
     ) {
-      preparedAudioParts.push({
-        type: "audio",
-        dataBase64: parsed.base64,
-        mimeType: parsed.mime.includes("wav") ? "audio/wav" : "audio/mp3",
-      });
-      continue;
+      const wavBase64 = await convertAudioDataUrlToWavBase64(
+        attachment.dataUrl,
+      );
+      if (wavBase64) {
+        dataBase64 = wavBase64;
+        mediaType = "audio/wav";
+      }
     }
-    // Convert other formats (e.g., audio/webm) to WAV
-    const wavBase64 = await convertAudioDataUrlToWavBase64(audioAtt.dataUrl);
-    if (wavBase64) {
-      preparedAudioParts.push({
-        type: "audio",
-        dataBase64: wavBase64,
-        mimeType: "audio/wav",
-      });
-    } else {
-      // Fallback: send as URL (may fail at provider side, but do not block)
-      preparedAudioParts.push({
-        type: "audio",
-        url: audioAtt.dataUrl,
-        mimeType: audioAtt.mimeType || "audio/webm",
-      });
-    }
+    preparedAttachmentParts.push({
+      type: attachment.kind,
+      dataBase64,
+      mediaType,
+      ...(attachment.fileName ? { name: attachment.fileName } : {}),
+      metadata: {
+        attachmentIndex: index,
+        ...(attachment.size !== undefined ? { size: attachment.size } : {}),
+        ...((attachment.kind === "audio" || attachment.kind === "video") &&
+            attachment.durationMs !== undefined
+          ? { durationMs: attachment.durationMs }
+          : {}),
+      },
+    });
   }
 
-  // Build content array: include text and prepared audio parts
+  // Build one ordered content sequence for text and all future media kinds.
   const contentParts: MessageContent = (() => {
-    const parts: Array<
-      | { type: "text"; text: string }
-      | {
-        type: "audio";
-        url?: string;
-        dataBase64?: string;
-        mimeType?: string;
-        transcript?: string;
-      }
-    > = [];
+    const parts: Exclude<MessageContent, string> = [];
     const text = (typeof content === "string" && content.trim().length > 0)
       ? content
       : "";
     parts.push({ type: "text", text });
-    for (const p of preparedAudioParts) parts.push(p);
+    for (const part of preparedAttachmentParts) parts.push(part);
     if (parts.length === 1 && parts[0].type === "text") return parts[0].text;
     return parts;
   })();
 
-  const payload: MessagePayload = {
-    content: contentParts,
-    sender: {
-      type: normalizedToolCalls.length > 0 ? "agent" : "user",
-      externalId: normalizedToolCalls.length > 0 ? toolCallSenderId : user.externalId,
-      id: normalizedToolCalls.length > 0 ? toolCallSenderId : undefined,
-      name: normalizedToolCalls.length > 0 ? toolCallSenderId : (user.name ?? null),
-      metadata: Object.keys(senderMetadata).length > 0 ? senderMetadata : null,
+  const payload: WebChannelPayload = {
+    thread: threadPayload ?? {
+      externalId: crypto.randomUUID(),
+      participants: resolvedParticipants,
+      ...(Object.keys(restThreadMetadata).length > 0
+        ? { metadata: restThreadMetadata }
+        : {}),
     },
-    metadata: messageMetadata ?? null,
-    thread: threadPayload ?? null,
-    toolCalls: normalizedToolCalls.length > 0 ? normalizedToolCalls : null,
-    target: resolvedTarget,
-    targetQueue: null,
+    participant: {
+      participantType: "human",
+      externalId: user.externalId,
+      ...(user.name ? { name: user.name } : {}),
+      ...(user.email ? { email: user.email } : {}),
+      ...(Object.keys(senderMetadata).length > 0
+        ? { metadata: senderMetadata }
+        : {}),
+    },
+    ...(resolvedRecipients.length > 0
+      ? { recipients: resolvedRecipients }
+      : {}),
+    input: {
+      content: contentParts,
+      ...(messageMetadata ? { metadata: messageMetadata } : {}),
+    },
   };
 
   const response = await fetch(apiUrl("/v1/providers/web"), {

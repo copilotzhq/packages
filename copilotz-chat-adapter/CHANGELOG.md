@@ -1,5 +1,15 @@
 # @copilotz/chat-adapter
 
+## 0.9.50
+
+### Patch Changes
+
+- Send chat input through Copilotz's event-native Web channel envelope.
+- Keep the authenticated human as the ingress participant when tool metadata is
+  present instead of impersonating the selected agent.
+- Send attachment bytes as canonical content using `mediaType`, without copying
+  base64 payloads into message metadata.
+
 ## 0.9.0
 
 ### Minor Changes
