@@ -5,10 +5,11 @@ import { getAttachmentKindFromMimeType, getMimeTypeFromDataUrl } from '@copilotz
 import type { AgentOption, AssistantActivityBlock, ChatMessage as ChatViewMessage, ChatSender, ChatThread, ChatThreadTag, MediaAttachment, ChatUserContext } from '@copilotz/chat-ui';
 import { useUrlState } from './useUrlState';
 import type { EventInterceptor, RunErrorInterceptor, SpecialChatState } from './specialState';
-import type { RequestHeadersProvider, RestMessage, RestMessagePageInfo, ThreadActivityStatus } from './copilotzService';
+import type { RequestHeadersProvider, ThreadActivityStatus } from './copilotzService';
+import type { CanonicalMessagePage, CanonicalMessagePageInfo } from './canonicalHistory';
 import { closeAssistantMessage, hasVisibleAssistantOutput, type InternalChatMessage, toPublicChatMessage } from './activity';
 import { resolveAgentSender, resolveAssistantFallbackSender, resolveLiveEventSender, resolveUserSender, type SenderResolutionOptions } from './senders';
-import { isInternalMessageMetadata, prepareHydratedMessages } from './messageContract';
+import { isInternalMessageMetadata, projectCanonicalMessageHistory } from './messageContract';
 import {
   getLlmAttemptId,
   getStreamEventPayload,
@@ -62,14 +63,10 @@ const patchMetadataPublicTags = (metadata: Record<string, unknown> | undefined, 
 });
 
 type ServerThread = Awaited<ReturnType<typeof fetchThreads>>[number];
-type ServerMessage = RestMessage;
-
 const THREAD_MESSAGES_PAGE_SIZE = 50;
 
-const createEmptyMessagePageInfo = (): RestMessagePageInfo => ({
-  hasMoreBefore: false,
-  oldestMessageId: null,
-  newestMessageId: null,
+const createEmptyMessagePageInfo = (): CanonicalMessagePageInfo => ({
+  hasMore: false,
 });
 
 const createPendingAssistantActivity = (messageId: string): AssistantActivityBlock => ({
@@ -122,7 +119,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   const [messages, setMessages] = useState<InternalChatMessage[]>([]);
   const [isMessagesLoading, setIsMessagesLoading] = useState(false);
   const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
-  const [messagePageInfo, setMessagePageInfo] = useState<RestMessagePageInfo>(createEmptyMessagePageInfo);
+  const [messagePageInfo, setMessagePageInfo] = useState<CanonicalMessagePageInfo>(createEmptyMessagePageInfo);
   const [isStreaming, setIsStreaming] = useState(false);
   const [threadActivityStatus, setThreadActivityStatus] = useState<ThreadActivityStatus>('idle');
   const [isRecoveringStream, setIsRecoveringStream] = useState(false);
@@ -370,16 +367,14 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   );
 
   const prepareThreadMessages = useCallback(
-    async (rawMessages: ServerMessage[]) => {
-      return prepareHydratedMessages(rawMessages, {
+    (page: CanonicalMessagePage) => {
+      return projectCanonicalMessageHistory(page, {
         senderOptions: senderOptionsRef.current,
-        createId: generateId,
         now: nowTs,
         onToolOutput: processToolOutput,
-        getRequestHeaders,
       });
     },
-    [getRequestHeaders, processToolOutput]
+    [processToolOutput]
   );
 
   const loadThreadMessages = useCallback(
@@ -392,7 +387,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       persistedToolUpdatesRef.current = [];
       try {
         const page = await fetchThreadMessagesPage(threadId, { limit: THREAD_MESSAGES_PAGE_SIZE }, getRequestHeaders);
-        const { viewMessages, toolResultUpdates } = await prepareThreadMessages(page.data);
+        const { viewMessages, toolResultUpdates } = prepareThreadMessages(page);
         if (messagesRequestRef.current !== requestId) return;
 
         persistedToolUpdatesRef.current = toolResultUpdates;
@@ -419,7 +414,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
 
       try {
         const page = await fetchThreadMessagesPage(threadId, { limit: THREAD_MESSAGES_PAGE_SIZE }, getRequestHeaders);
-        const { viewMessages, toolResultUpdates } = await prepareThreadMessages(page.data);
+        const { viewMessages, toolResultUpdates } = prepareThreadMessages(page);
         if (messagesRequestRef.current !== requestId) return;
 
         persistedToolUpdatesRef.current = [
@@ -435,9 +430,8 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
           return reconciled.changed ? reconciled.messages : prev;
         });
         setMessagePageInfo((prev) => ({
-          hasMoreBefore: prev.hasMoreBefore || page.pageInfo.hasMoreBefore,
-          oldestMessageId: prev.oldestMessageId ?? page.pageInfo.oldestMessageId,
-          newestMessageId: page.pageInfo.newestMessageId ?? prev.newestMessageId,
+          hasMore: prev.hasMore || page.pageInfo.hasMore,
+          ...(prev.next ? { next: prev.next } : page.pageInfo.next ? { next: page.pageInfo.next } : {}),
         }));
       } catch (error) {
         if (isAbortError(error)) return;
@@ -450,9 +444,9 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   const loadOlderMessages = useCallback(async () => {
     const threadId = currentThreadIdRef.current;
     const pageInfo = messagePageInfoRef.current;
-    const before = pageInfo.oldestMessageId;
+    const before = pageInfo.next;
 
-    if (!threadId || !before || !pageInfo.hasMoreBefore || isLoadingOlderMessagesRef.current) {
+    if (!threadId || !before || !pageInfo.hasMore || isLoadingOlderMessagesRef.current) {
       return;
     }
 
@@ -461,7 +455,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
 
     try {
       const page = await fetchThreadMessagesPage(threadId, { limit: THREAD_MESSAGES_PAGE_SIZE, before }, getRequestHeaders);
-      const { viewMessages, toolResultUpdates } = await prepareThreadMessages(page.data);
+      const { viewMessages, toolResultUpdates } = prepareThreadMessages(page);
       if (messagesRequestRef.current !== requestId) return;
 
       persistedToolUpdatesRef.current = [...toolResultUpdates, ...persistedToolUpdatesRef.current];

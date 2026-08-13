@@ -13,7 +13,6 @@ import {
   isRecord,
   // @ts-expect-error Direct Node TypeScript tests require the source extension.
 } from './contract.ts';
-import type { RestMessage } from './copilotzService.ts';
 
 export type ToolCallStatus = 'pending' | 'running' | 'completed' | 'failed';
 
@@ -41,6 +40,7 @@ export type ParsedToolCallDelta = {
 export type ToolResultUpdate = {
   id?: string;
   toolExecutionId?: string;
+  sourceMessageId?: string;
   name?: string;
   status: ToolCallStatus;
   result?: unknown;
@@ -163,6 +163,9 @@ export const applyToolResultUpdateToMessages = (
 
   for (let i = nextMessages.length - 1; i >= 0; i--) {
     const message = nextMessages[i];
+    if (update.sourceMessageId && message.id !== update.sourceMessageId) {
+      continue;
+    }
     const toolItems = message.activity?.items.filter((item) => item.kind === 'tool') ?? [];
     if (message.role !== 'assistant' || toolItems.length === 0) {
       continue;
@@ -342,106 +345,6 @@ export const extractLiveToolResultUpdate = (
     ...(result !== undefined ? { result } : {}),
     ...(error !== undefined ? { error } : {}),
     endTime: now(),
-  };
-};
-
-export const extractToolCallsFromServerMessage = (msg: RestMessage): ParsedToolCall[] => {
-  const metadata = msg.metadata === null || msg.metadata === undefined
-    ? undefined
-    : expectRecord(msg.metadata, 'message.metadata');
-  const topLevelToolCalls = readToolCallArray(msg.toolCalls, 'message.toolCalls');
-  const metadataToolCalls = readToolCallArray(metadata?.toolCalls, 'message.metadata.toolCalls');
-  const messageToolExecutionId = typeof metadata?.toolExecutionId === 'string' ? metadata.toolExecutionId : undefined;
-
-  const usedMetadataIndexes = new Set<number>();
-  const parsed: ParsedToolCall[] = [];
-
-  const findMatchingMetadataIndex = (toolCall: Record<string, unknown>): number => {
-    const id = expectString(toolCall.id, 'message.toolCalls[].id');
-    return metadataToolCalls.findIndex((candidate, idx) =>
-      !usedMetadataIndexes.has(idx) && candidate.id === id
-    );
-  };
-
-  const parseToolCall = (
-    primary: Record<string, unknown>,
-    secondary?: Record<string, unknown>,
-  ): ParsedToolCall => {
-    const id = expectString(primary.id ?? secondary?.id, 'toolCall.id');
-    const tool = expectRecord(primary.tool ?? secondary?.tool, 'toolCall.tool');
-    const name = expectToolName(tool, 'toolCall.tool.id');
-    const argsRaw = primary.args ?? secondary?.args;
-    const result = primary.output !== undefined
-      ? primary.output
-      : secondary?.output !== undefined
-        ? secondary.output
-        : primary.projectedOutput !== undefined
-          ? primary.projectedOutput
-          : secondary?.projectedOutput;
-    const error = formatToolError(primary.error !== undefined ? primary.error : secondary?.error);
-    const rawStatus = primary.status ?? secondary?.status;
-
-    return {
-      id,
-      ...(typeof primary.toolExecutionId === 'string'
-        ? { toolExecutionId: primary.toolExecutionId }
-        : typeof secondary?.toolExecutionId === 'string'
-          ? { toolExecutionId: secondary.toolExecutionId }
-          : messageToolExecutionId
-            ? { toolExecutionId: messageToolExecutionId }
-            : {}),
-      name,
-      arguments: expectToolArguments(argsRaw, 'toolCall.args'),
-      ...(result !== undefined ? { result } : {}),
-      ...(error !== undefined ? { error } : {}),
-      status: rawStatus === undefined ? 'running' : expectToolStatus(rawStatus, 'toolCall.status'),
-    };
-  };
-
-  topLevelToolCalls.forEach((toolCall) => {
-    const metadataIndex = findMatchingMetadataIndex(toolCall);
-    const metadataCall = metadataIndex >= 0 ? metadataToolCalls[metadataIndex] : undefined;
-    if (metadataIndex >= 0) usedMetadataIndexes.add(metadataIndex);
-    parsed.push(parseToolCall(toolCall, metadataCall));
-  });
-
-  metadataToolCalls.forEach((toolCall, index) => {
-    if (usedMetadataIndexes.has(index)) return;
-    parsed.push(parseToolCall(toolCall));
-  });
-
-  return parsed;
-};
-
-const readToolCallArray = (
-  value: unknown,
-  path: string,
-): Record<string, unknown>[] => {
-  if (value === null || value === undefined) return [];
-  if (!Array.isArray(value)) return fail(`${path} must be an array`);
-  return value.map((toolCall, index) => expectRecord(toolCall, `${path}[${index}]`));
-};
-
-export const extractToolResultUpdateFromMessage = (
-  msg: RestMessage,
-  now: () => number = () => Date.now(),
-): ToolResultUpdate | null => {
-  if (msg.senderType !== 'tool') return null;
-
-  const toolCalls = extractToolCallsFromServerMessage(msg);
-  if (toolCalls.length === 0) fail('tool message requires metadata.toolCalls');
-
-  const firstToolCall = toolCalls[0];
-  const createdAt = expectStringValue(msg.createdAt, 'tool result message.createdAt');
-
-  return {
-    id: firstToolCall.id,
-    ...(firstToolCall.toolExecutionId ? { toolExecutionId: firstToolCall.toolExecutionId } : {}),
-    name: firstToolCall.name,
-    ...(firstToolCall.result !== undefined ? { result: firstToolCall.result } : {}),
-    ...(firstToolCall.error !== undefined ? { error: firstToolCall.error } : {}),
-    status: firstToolCall.status,
-    endTime: new Date(createdAt).getTime(),
   };
 };
 

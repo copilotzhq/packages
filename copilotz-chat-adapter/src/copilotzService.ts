@@ -1,4 +1,9 @@
 import type { AgentOption, MediaAttachment } from "@copilotz/chat-ui";
+import {
+  parseCanonicalMessagePage,
+  type CanonicalMessagePage,
+  // @ts-expect-error Direct Node TypeScript tests require the source extension.
+} from "./canonicalHistory.ts";
 // @ts-expect-error Direct Node TypeScript tests require the source extension.
 import { getLlmAttemptId } from "./streamEvents.ts";
 
@@ -98,39 +103,6 @@ export type ThreadActivity = {
   } | null;
   updatedAt?: string;
 };
-
-export type RestMessage = {
-  id: string;
-  threadId: string;
-  senderId?: string | null;
-  senderType: string;
-  senderUserId?: string | null;
-  content?: string | null;
-  reasoning?: string | null;
-  metadata?: Record<string, unknown> | null;
-  toolCalls?: Array<Record<string, unknown>> | null;
-  createdAt?: string;
-  updatedAt?: string;
-};
-
-export type RestMessagePageInfo = {
-  hasMoreBefore: boolean;
-  oldestMessageId: string | null;
-  newestMessageId: string | null;
-};
-
-export type RestMessagePage = {
-  data: RestMessage[];
-  pageInfo: RestMessagePageInfo;
-};
-
-const buildFallbackPageInfo = (
-  data: RestMessage[],
-): RestMessagePageInfo => ({
-  hasMoreBefore: false,
-  oldestMessageId: data[0]?.id ?? null,
-  newestMessageId: data[data.length - 1]?.id ?? null,
-});
 
 type MessageContent =
   | string
@@ -925,9 +897,11 @@ export async function fetchThreadMessagesPage(
     after?: string | null;
   },
   getRequestHeaders?: RequestHeadersProvider,
-): Promise<RestMessagePage> {
+): Promise<CanonicalMessagePage> {
   const params = new URLSearchParams();
   params.set("limit", String(options?.limit ?? 50));
+  params.set("order", "desc");
+  params.set("include", "content,workflow");
   if (options?.before) {
     params.set("before", options.before);
   }
@@ -952,37 +926,7 @@ export async function fetchThreadMessagesPage(
     );
   }
 
-  const payload = await res.json();
-  if (Array.isArray(payload)) {
-    return {
-      data: payload as RestMessage[],
-      pageInfo: buildFallbackPageInfo(payload as RestMessage[]),
-    };
-  }
-  if (Array.isArray(payload?.data)) {
-    const data = payload.data as RestMessage[];
-    const rawPageInfo = payload?.pageInfo;
-    return {
-      data,
-      pageInfo: {
-        hasMoreBefore: rawPageInfo?.hasMoreBefore === true,
-        oldestMessageId: typeof rawPageInfo?.oldestMessageId === "string"
-          ? rawPageInfo.oldestMessageId
-          : data[0]?.id ?? null,
-        newestMessageId: typeof rawPageInfo?.newestMessageId === "string"
-          ? rawPageInfo.newestMessageId
-          : data[data.length - 1]?.id ?? null,
-      },
-    };
-  }
-  return {
-    data: [],
-    pageInfo: {
-      hasMoreBefore: false,
-      oldestMessageId: null,
-      newestMessageId: null,
-    },
-  };
+  return parseCanonicalMessagePage(await res.json());
 }
 
 export async function updateThread(

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  resolveHydratedMessageSender,
+  resolveCanonicalParticipantSender,
   resolveLiveEventSender,
 } from '../src/senders.ts';
 
@@ -10,39 +10,37 @@ const agents = [
   { id: 'north', name: 'North', color: '#3b82f6' },
 ];
 
-test('hydrated agent message prefers Copilotz conversational sender metadata over storage id', () => {
-  const sender = resolveHydratedMessageSender({
-    senderType: 'agent',
-    senderId: '01KQVCMZZE8W5Z99E94VP3EYWN',
-    senderUserId: '01KQVCMZZE8W5Z99E94VP3EYWN',
-    metadata: {
-      senderExternalId: 'east',
-      senderDisplayName: 'East',
-      senderParticipantId: '01KQVCMZZE8W5Z99E94VP3EYWN',
-    },
-  }, { agents });
+const participant = (
+  overrides: Partial<Parameters<typeof resolveCanonicalParticipantSender>[0]> = {},
+): Parameters<typeof resolveCanonicalParticipantSender>[0] => ({
+  id: 'participant-east',
+  namespace: 'tenant-a',
+  externalId: 'east',
+  participantType: 'agent',
+  name: 'East',
+  agentId: 'east',
+  metadata: {},
+  createdAt: '2026-08-13T10:00:00.000Z',
+  updatedAt: '2026-08-13T10:00:00.000Z',
+  ...overrides,
+});
 
-  assert.deepEqual(sender, {
+test('canonical participant identity resolves the hydrated agent sender', () => {
+  assert.deepEqual(resolveCanonicalParticipantSender(participant(), { agents }), {
     type: 'agent',
     id: 'east',
     name: 'East',
     agentId: 'east',
     color: '#84cc16',
-    participantId: '01KQVCMZZE8W5Z99E94VP3EYWN',
+    participantId: 'participant-east',
   });
 });
 
-test('live stream event resolves to the same agent sender as hydrated history', () => {
-  const sender = resolveLiveEventSender({
-    type: 'TOKEN',
-    payload: {
-      agent: { id: 'east', name: 'East' },
-      token: 'Hello',
-      isComplete: false,
-    },
-  }, { agents });
-
-  assert.deepEqual(sender, {
+test('live stream event resolves to the same agent sender as canonical history', () => {
+  assert.deepEqual(resolveLiveEventSender({
+    type: 'text.delta',
+    payload: { agent: { id: 'east', name: 'East' }, text: 'Hello' },
+  }, { agents }), {
     type: 'agent',
     id: 'east',
     name: 'East',
@@ -51,28 +49,18 @@ test('live stream event resolves to the same agent sender as hydrated history', 
   });
 });
 
-test('hydrated current-user message prefers current user display name over storage id', () => {
-  const sender = resolveHydratedMessageSender({
-    senderType: 'user',
-    senderId: 'node-1',
-    senderUserId: '01KREXBE25ZSKRHP9RDJC72YD0:ig:patiputz',
-    metadata: {
-      senderExternalId: '01KREXBE25ZSKRHP9RDJC72YD0:ig:patiputz',
-      senderDisplayName: '01KREXBE25ZSKRHP9RDJC72YD0:ig:patiputz',
-      senderParticipantId: '01KREXBE25ZSKRHP9RDJC72YD0:ig:patiputz',
-    },
-  }, {
-    user: {
-      id: '01KREXBE25ZSKRHP9RDJC72YD0:ig:patiputz',
-      name: '@patiputz',
-    },
-  });
-
-  assert.deepEqual(sender, {
+test('canonical human participant prefers current user display name', () => {
+  assert.deepEqual(resolveCanonicalParticipantSender(participant({
+    id: 'participant-user',
+    externalId: 'usr-alice',
+    participantType: 'human',
+    name: 'Stored name',
+    agentId: undefined,
+  }), { user: { id: 'usr-alice', name: 'Alice' } }), {
     type: 'user',
-    id: '01KREXBE25ZSKRHP9RDJC72YD0:ig:patiputz',
-    externalId: '01KREXBE25ZSKRHP9RDJC72YD0:ig:patiputz',
-    name: '@patiputz',
-    participantId: '01KREXBE25ZSKRHP9RDJC72YD0:ig:patiputz',
+    id: 'usr-alice',
+    externalId: 'usr-alice',
+    name: 'Alice',
+    participantId: 'participant-user',
   });
 });

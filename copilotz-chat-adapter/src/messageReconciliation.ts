@@ -41,12 +41,21 @@ const getMetadataString = (
     : null;
 };
 
+const getCanonicalLlmAttemptId = (
+  message: InternalChatMessage,
+): string | null => {
+  const workflow = message.metadata?.copilotzWorkflow;
+  if (!workflow || typeof workflow !== 'object' || Array.isArray(workflow)) return null;
+  const value = (workflow as Record<string, unknown>).llmAttemptId;
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+};
+
 const getCorrelationKeys = (message: InternalChatMessage): string[] => {
   const clientMessageId = getMetadataString(
     message,
     CLIENT_MESSAGE_ID_METADATA_KEY,
   );
-  const llmAttemptId = getMetadataString(
+  const llmAttemptId = getCanonicalLlmAttemptId(message) ?? getMetadataString(
     message,
     LLM_ATTEMPT_ID_METADATA_KEY,
   );

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchThreads, runCopilotzStream } from '../src/copilotzService.ts';
+import { fetchThreadMessagesPage, fetchThreads, runCopilotzStream } from '../src/copilotzService.ts';
 
 const sse = (event: string, data: unknown) =>
   `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -24,6 +24,29 @@ test('fetchThreads omits the legacy all-status wildcard', async () => {
   assert.equal(capturedUrl?.searchParams.get('participantId'), 'user-123');
   assert.equal(capturedUrl?.searchParams.get('order'), 'desc');
   assert.equal(capturedUrl?.searchParams.has('status'), false);
+});
+
+test('fetchThreadMessagesPage requests canonical compound history newest-first', async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedUrl: URL | undefined;
+  globalThis.fetch = async (input: RequestInfo | URL) => {
+    capturedUrl = new URL(String(input), 'https://example.test');
+    return Response.json({
+      data: [],
+      included: { llmAttempts: [], toolExecutions: [], content: [] },
+      pageInfo: { next: 'message-older', hasMore: true },
+    });
+  };
+  try {
+    const page = await fetchThreadMessagesPage('thread-1', { limit: 50, before: 'message-newer' });
+    assert.deepEqual(page.pageInfo, { next: 'message-older', hasMore: true });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(capturedUrl?.pathname, '/api/v1/threads/thread-1/messages');
+  assert.equal(capturedUrl?.searchParams.get('order'), 'desc');
+  assert.equal(capturedUrl?.searchParams.get('include'), 'content,workflow');
+  assert.equal(capturedUrl?.searchParams.get('before'), 'message-newer');
 });
 
 test('runCopilotzStream sends stable participant and target identifiers', async () => {

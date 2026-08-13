@@ -1,357 +1,200 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  convertServerMessage,
-  prepareHydratedMessages,
-  shouldRenderHydratedMessage,
-} from '../src/messageContract.ts';
+import { projectCanonicalMessageHistory } from '../src/messageContract.ts';
+import { parseCanonicalMessagePage } from '../src/canonicalHistory.ts';
 import {
   extractLiveToolCall,
   extractLiveToolResultUpdate,
   mergePersistedToolResults,
 } from '../src/toolActivity.ts';
-import type { RestMessage } from '../src/copilotzService.ts';
 
-const agents = [
-  { id: 'north', name: 'North', color: '#3b82f6' },
-];
-
-test('hydrated message contract resolves sender, activity, and content from Copilotz metadata', () => {
-  const message = convertServerMessage({
-    id: 'msg-agent',
-    threadId: 'thread-1',
-    senderType: 'agent',
-    senderId: '01KQV7M84RVH3FZ82MT665XPBB',
-    senderUserId: '01KQV7M84RVH3FZ82MT665XPBB',
-    content: 'Ready.',
-    reasoning: 'Checking direction.',
-    metadata: {
-      llmAttemptId: 'attempt-1',
-      senderExternalId: 'north',
-      senderDisplayName: 'North',
-      senderParticipantId: '01KQV7M84RVH3FZ82MT665XPBB',
-    },
-    createdAt: '2026-05-05T14:36:48.959Z',
-  }, { senderOptions: { agents } });
-
-  assert.equal(message.role, 'assistant');
-  assert.equal(message.content, 'Ready.');
-  assert.deepEqual(message.sender, {
-    type: 'agent',
-    id: 'north',
-    name: 'North',
-    agentId: 'north',
-    color: '#3b82f6',
-    participantId: '01KQV7M84RVH3FZ82MT665XPBB',
-  });
-  assert.deepEqual(message.activity?.items[0], {
-    id: 'attempt-1:reasoning:0',
-    kind: 'thinking',
-    status: 'complete',
-    completedAt: new Date('2026-05-05T14:36:48.959Z').getTime(),
-    details: { reasoning: 'Checking direction.' },
-  });
+const namespace = 'tenant-a';
+const threadId = 'thread-1';
+const time = '2026-08-13T10:00:00.000Z';
+const participant = (type: 'human' | 'agent' | 'tool', externalId: string, name: string) => ({
+  id: `participant:${externalId}`,
+  namespace,
+  externalId,
+  participantType: type,
+  name,
+  ...(type === 'agent' ? { agentId: externalId } : {}),
+  metadata: {},
+  createdAt: time,
+  updatedAt: time,
+});
+const ref = (assetId: string, kind: 'text' | 'json', role: string, mediaType = kind === 'json' ? 'application/json' : 'text/plain; charset=utf-8') => ({
+  assetId,
+  kind,
+  role,
+  mediaType,
+});
+const encoded = (value: unknown) => Buffer.from(
+  typeof value === 'string' ? value : JSON.stringify(value),
+).toString('base64');
+const content = (assetId: string, kind: 'text' | 'json', role: string, value: unknown) => ({
+  ref: ref(assetId, kind, role),
+  asset: {
+    id: assetId,
+    namespace,
+    mediaType: kind === 'json' ? 'application/json' : 'text/plain; charset=utf-8',
+    byteLength: Buffer.byteLength(typeof value === 'string' ? value : JSON.stringify(value)),
+    digest: `sha256:${'0'.repeat(64)}`,
+    state: 'ready',
+    location: { kind: 'database', encoding: kind === 'json' ? 'json' : 'utf8' },
+    createdAt: time,
+    readyAt: time,
+  },
+  base64: encoded(value),
 });
 
-test('internal hydrated messages are filtered out by contract', () => {
-  assert.equal(shouldRenderHydratedMessage({
-    id: 'internal',
-    threadId: 'thread-1',
-    senderType: 'agent',
-    content: 'hidden',
-    metadata: { visibility: 'internal' },
-  }), false);
-});
-
-test('recovery hydration hides cues while retaining visible fragment correlation', async () => {
-  const recovery = { chainId: 'chain-1', joinSeparator: ' ' };
-  const { viewMessages } = await prepareHydratedMessages([
+const canonicalHistory = () => ({
+  data: [
     {
-      id: 'fragment',
-      threadId: 'thread-1',
-      senderType: 'agent',
-      senderId: 'north',
-      content: 'partial',
+      id: 'message-user', namespace, threadId,
+      sender: participant('human', 'usr-alice', 'Alice'),
+      recipientIds: ['participant:north'],
+      content: [ref('asset-user', 'text', 'body')],
+      metadata: { clientMessageId: 'client-1' },
+      createdAt: time, updatedAt: time,
+    },
+    {
+      id: 'message-agent', namespace, threadId,
+      sender: participant('agent', 'north', 'North'),
+      recipientIds: [],
+      content: [],
+      metadata: { copilotzWorkflow: { kind: 'agent_output', llmAttemptId: 'attempt-1', agentParticipantId: 'participant:north' } },
+      createdAt: '2026-08-13T10:00:01.000Z', updatedAt: '2026-08-13T10:00:01.000Z',
+    },
+    {
+      id: 'message-tool', namespace, threadId,
+      sender: participant('tool', 'tool:terminal', 'Terminal'),
+      recipientIds: ['participant:north'],
+      content: [ref('asset-result', 'json', 'tool.projected_output')],
       metadata: {
-        senderExternalId: 'north',
-        senderDisplayName: 'North',
-        recovery: { ...recovery, kind: 'fragment' },
+        toolId: 'terminal', toolStatus: 'failed',
+        copilotzWorkflow: {
+          kind: 'tool_result', llmAttemptId: 'attempt-1',
+          toolCallId: 'call-1', toolExecutionId: 'execution-1',
+          sourceMessageId: 'message-agent', agentParticipantId: 'participant:north',
+        },
       },
+      createdAt: '2026-08-13T10:00:02.000Z', updatedAt: '2026-08-13T10:00:02.000Z',
     },
-    {
-      id: 'cue',
-      threadId: 'thread-1',
-      senderType: 'job',
-      senderId: 'copilotz-recovery',
-      content: '<recovery_cue>Continue.</recovery_cue>',
-      metadata: { visibility: 'internal', recovery: { ...recovery, kind: 'cue' } },
-    },
-    {
-      id: 'continuation',
-      threadId: 'thread-1',
-      senderType: 'agent',
-      senderId: 'north',
-      content: 'answer',
-      metadata: {
-        senderExternalId: 'north',
-        senderDisplayName: 'North',
-        recovery: { ...recovery, kind: 'continuation' },
-      },
-    },
-  ], { senderOptions: { agents } });
-
-  assert.deepEqual(viewMessages.map((message) => message.id), ['fragment', 'continuation']);
-  assert.equal(viewMessages[0].metadata?.recovery.chainId, 'chain-1');
-});
-
-test('legacy empty routing messages hydrate as visible consultation text', () => {
-  const routedMessage: RestMessage = {
-    id: 'routed-message',
-    threadId: 'thread-1',
-    senderType: 'agent',
-    senderId: '01KQV7M84RVH3FZ82MT665XPBB',
-    senderUserId: '01KQV7M84RVH3FZ82MT665XPBB',
-    content: '',
-    metadata: {
-      senderExternalId: 'north',
-      senderDisplayName: 'North',
-      senderParticipantId: '01KQV7M84RVH3FZ82MT665XPBB',
-      routing: {
-        action: 'ask',
-        targetId: 'east',
-        source: 'model_control',
-        message: 'Please inspect this implementation.',
-      },
-    },
-  };
-
-  assert.equal(shouldRenderHydratedMessage(routedMessage), true);
-  assert.equal(
-    convertServerMessage(routedMessage, { senderOptions: { agents } }).content,
-    'Please inspect this implementation.',
-  );
-});
-
-test('hydrated message contract throws instead of normalizing malformed sender metadata', () => {
-  assert.throws(() => convertServerMessage({
-    id: 'msg-agent',
-    threadId: 'thread-1',
-    senderType: 'agent',
-    senderId: '01KQV7M84RVH3FZ82MT665XPBB',
-    senderUserId: '01KQV7M84RVH3FZ82MT665XPBB',
-    content: 'Ready.',
-    metadata: {
-      senderParticipantId: '01KQV7M84RVH3FZ82MT665XPBB',
-    },
-  }), /senderExternalId/);
-});
-
-test('persisted tool call and tool result hydrate into one completed activity', async () => {
-  const toolCall: RestMessage = {
-    id: 'tool-call-message',
-    threadId: 'thread-1',
-    senderType: 'agent',
-    senderId: '01KQV7M84RVH3FZ82MT665XPBB',
-    senderUserId: '01KQV7M84RVH3FZ82MT665XPBB',
-    content: '',
-    toolCalls: [{
-      id: 'tool-1',
-      args: { action: 'list_cards' },
-      tool: { id: 'kanban' },
+  ],
+  included: {
+    llmAttempts: [{
+      id: 'attempt-1', namespace, threadId, messageId: 'message-user',
+      participantId: 'participant:north', initiatorParticipantId: 'participant:usr-alice', agentId: 'north',
+      provider: 'openai', model: 'gpt-5', status: 'completed', attemptIndex: 0,
+      inputMessageIds: ['message-user'], availableToolIds: ['terminal'],
+      content: [ref('asset-reasoning', 'text', 'reasoning'), ref('asset-calls', 'json', 'llm.tool_calls')],
+      finishReason: 'tool_calls', startedAt: time, finishedAt: '2026-08-13T10:00:01.000Z',
+      metadata: {}, createdAt: time, updatedAt: '2026-08-13T10:00:01.000Z',
     }],
-    metadata: {
-      senderExternalId: 'north',
-      senderDisplayName: 'North',
-      senderParticipantId: '01KQV7M84RVH3FZ82MT665XPBB',
-    },
-    createdAt: '2026-05-05T14:36:25.267Z',
-  };
-  const toolResult: RestMessage = {
-    id: 'tool-result-message',
-    threadId: 'thread-1',
-    senderType: 'tool',
-    senderId: '01KQV7M84RVH3FZ82MT665XPBB',
-    senderUserId: '01KQV7M84RVH3FZ82MT665XPBB',
-    content: '{"cards":[]}',
-    metadata: {
-      senderExternalId: 'north',
-      senderDisplayName: 'North',
-      senderParticipantId: '01KQV7M84RVH3FZ82MT665XPBB',
-      toolExecutionId: 'tool-exec-1',
-      toolCalls: [{
-        id: 'tool-1',
-        args: '{"action":"list_cards"}',
-        tool: { id: 'kanban', name: 'kanban' },
-        output: { cards: [] },
-        status: 'completed',
-      }],
-    },
-    createdAt: '2026-05-05T14:36:25.308Z',
-  };
+    toolExecutions: [{
+      id: 'execution-1', namespace, threadId, messageId: 'message-agent',
+      participantId: 'participant:north', agentId: 'north', toolCallId: 'call-1',
+      tool: { id: 'terminal', name: 'Terminal' }, status: 'failed',
+      content: [ref('asset-args', 'json', 'tool.arguments'), ref('asset-result', 'json', 'tool.projected_output')],
+      safeError: { message: 'Sandbox unavailable.', code: 'tool_error' },
+      startedAt: '2026-08-13T10:00:01.000Z', finishedAt: '2026-08-13T10:00:02.000Z',
+      metadata: {}, createdAt: '2026-08-13T10:00:01.000Z', updatedAt: '2026-08-13T10:00:02.000Z',
+    }],
+    content: [
+      content('asset-user', 'text', 'body', 'Run a terminal check.'),
+      content('asset-reasoning', 'text', 'reasoning', 'I should inspect the terminal.'),
+      content('asset-calls', 'json', 'llm.tool_calls', [{ id: 'call-1', tool: { id: 'terminal', name: 'Terminal' }, args: '{"command":"pwd"}' }]),
+      content('asset-args', 'json', 'tool.arguments', { command: 'pwd' }),
+      content('asset-result', 'json', 'tool.projected_output', { ok: false, error: 'Sandbox unavailable.' }),
+    ],
+  },
+  pageInfo: { hasMore: false },
+});
 
-  const { viewMessages, toolResultUpdates } = await prepareHydratedMessages(
-    [toolCall, toolResult],
-    { senderOptions: { agents }, createId: () => 'generated-id' },
-  );
-
-  assert.equal(viewMessages.length, 1);
-  assert.equal(toolResultUpdates.length, 1);
-  assert.equal(viewMessages[0].activity?.items[0].kind, 'tool');
-  const mergedMessages = mergePersistedToolResults(viewMessages, toolResultUpdates);
-  assert.deepEqual(mergedMessages[0].activity?.items[0].details?.toolCall, {
-    id: 'tool-1',
-    toolExecutionId: 'tool-exec-1',
-    name: 'kanban',
-    arguments: { action: 'list_cards' },
-    status: 'completed',
-    result: { cards: [] },
-    endTime: new Date('2026-05-05T14:36:25.308Z').getTime(),
+test('canonical production-shaped history projects text, tool-only turns, and failed tool results', () => {
+  const output: Record<string, unknown>[] = [];
+  const page = parseCanonicalMessagePage(canonicalHistory());
+  const { viewMessages, toolResultUpdates } = projectCanonicalMessageHistory(page, {
+    senderOptions: { agents: [{ id: 'north', name: 'North', color: '#3b82f6' }] },
+    onToolOutput: (value) => output.push(value),
   });
+
+  assert.deepEqual(viewMessages.map((message) => message.id), ['message-user', 'message-agent']);
+  assert.equal(viewMessages[0].content, 'Run a terminal check.');
+  assert.equal(viewMessages[1].content, '');
+  assert.equal(viewMessages[1].sender?.id, 'north');
+  assert.equal(viewMessages[1].activity?.items[0].details?.reasoning, 'I should inspect the terminal.');
+  assert.equal(viewMessages[1].activity?.items[1].kind, 'tool');
+  assert.equal(viewMessages[1].activity?.items[1].status, 'failed');
+  assert.deepEqual(viewMessages[1].activity?.items[1].details?.toolCall?.arguments, { command: 'pwd' });
+  assert.deepEqual(viewMessages[1].activity?.items[1].details?.result, { ok: false, error: 'Sandbox unavailable.' });
+  assert.equal(viewMessages[1].activity?.items[1].details?.error, 'Sandbox unavailable.');
   assert.deepEqual(toolResultUpdates[0], {
-    id: 'tool-1',
-    toolExecutionId: 'tool-exec-1',
-    name: 'kanban',
-    status: 'completed',
-    result: { cards: [] },
-    endTime: new Date('2026-05-05T14:36:25.308Z').getTime(),
+    id: 'call-1', toolExecutionId: 'execution-1', sourceMessageId: 'message-agent',
+    name: 'Terminal', status: 'failed', result: { ok: false, error: 'Sandbox unavailable.' },
+    error: 'Sandbox unavailable.', endTime: new Date('2026-08-13T10:00:02.000Z').getTime(),
   });
+  assert.deepEqual(output, [{ ok: false, error: 'Sandbox unavailable.' }]);
+  assert.equal(mergePersistedToolResults(viewMessages, toolResultUpdates)[1].activity?.items[1].status, 'failed');
 });
 
-test('persisted job tool call and tool result hydrate into one completed activity', async () => {
-  const jobToolCall: RestMessage = {
-    id: 'job-tool-call-message',
-    threadId: 'thread-1',
-    senderType: 'job',
-    senderId: 'job-1',
-    senderUserId: 'job-1',
-    content: '',
-    toolCalls: [{
-      id: 'tool-1',
-      args: { action: 'list_cards' },
-      tool: { id: 'kanban' },
-    }],
-    metadata: {
-      senderExternalId: 'job-1',
-      senderDisplayName: 'Test Tool Call Job',
-      senderParticipantId: 'job-1',
-      scheduledJob: {
-        jobId: 'job-1',
-        jobName: 'Test Tool Call Job',
-        runId: 'job-1:123',
-      },
-    },
-    createdAt: '2026-05-05T14:36:25.267Z',
-  };
-  const toolResult: RestMessage = {
-    id: 'job-tool-result-message',
-    threadId: 'thread-1',
-    senderType: 'tool',
-    senderId: 'job-1',
-    senderUserId: 'job-1',
-    content: '{"cards":[]}',
-    metadata: {
-      senderExternalId: 'job-1',
-      senderDisplayName: 'Test Tool Call Job',
-      senderParticipantId: 'job-1',
-      toolCalls: [{
-        id: 'tool-1',
-        args: '{"action":"list_cards"}',
-        tool: { id: 'kanban', name: 'kanban' },
-        output: { cards: [] },
-        status: 'completed',
-      }],
-    },
-    createdAt: '2026-05-05T14:36:25.308Z',
-  };
+test('canonical parser rejects the removed flattened message contract', () => {
+  assert.throws(() => parseCanonicalMessagePage({
+    data: [{ id: 'legacy', threadId, senderType: 'agent', content: 'old shape' }],
+    pageInfo: { hasMoreBefore: false },
+  }), /included/);
+});
 
-  const { viewMessages, toolResultUpdates } = await prepareHydratedMessages(
-    [jobToolCall, toolResult],
-    { createId: () => 'generated-id' },
+test('canonical parser accepts an empty immutable content body', () => {
+  const history = canonicalHistory();
+  history.included.content.push({
+    ...content('asset-empty', 'text', 'attachment', ''),
+    base64: '',
+  });
+  assert.equal(
+    parseCanonicalMessagePage(history).included.content.at(-1)?.base64,
+    '',
+  );
+});
+
+test('canonical history binds reused provider call IDs to their source message', () => {
+  const history = canonicalHistory();
+  history.included.toolExecutions.push({
+    ...history.included.toolExecutions[0],
+    id: 'execution-newer',
+    messageId: 'another-agent-message',
+    status: 'completed',
+    content: [
+      ref('asset-args-newer', 'json', 'tool.arguments'),
+      ref('asset-result-newer', 'json', 'tool.projected_output'),
+    ],
+    safeError: undefined,
+  });
+  history.included.content.push(
+    content('asset-args-newer', 'json', 'tool.arguments', { command: 'wrong' }),
+    content('asset-result-newer', 'json', 'tool.projected_output', { ok: true, wrong: true }),
   );
 
-  assert.equal(viewMessages.length, 1);
-  assert.equal(toolResultUpdates.length, 1);
-  assert.equal(viewMessages[0].role, 'assistant');
-  assert.equal(viewMessages[0].sender?.type, 'job');
-  assert.equal(viewMessages[0].sender?.name, 'Test Tool Call Job');
-  assert.equal(viewMessages[0].activity?.items[0].kind, 'tool');
-
-  const mergedMessages = mergePersistedToolResults(viewMessages, toolResultUpdates);
-  assert.deepEqual(mergedMessages[0].activity?.items[0].details?.toolCall, {
-    id: 'tool-1',
-    name: 'kanban',
-    arguments: { action: 'list_cards' },
-    status: 'completed',
-    result: { cards: [] },
-    endTime: new Date('2026-05-05T14:36:25.308Z').getTime(),
+  const { viewMessages } = projectCanonicalMessageHistory(
+    parseCanonicalMessagePage(history),
+  );
+  const tool = viewMessages.find((message) => message.id === 'message-agent')
+    ?.activity?.items.find((item) => item.kind === 'tool');
+  assert.equal(tool?.details?.toolCall?.toolExecutionId, 'execution-1');
+  assert.deepEqual(tool?.details?.result, {
+    ok: false,
+    error: 'Sandbox unavailable.',
   });
 });
 
-test('live tool events parse to the same tool identity as persisted history', () => {
-  const liveCall = extractLiveToolCall({
-    toolCall: {
-      id: 'tool-1',
-      args: { action: 'list_cards' },
-      tool: { id: 'kanban' },
-    },
-  });
-  const liveResult = extractLiveToolResultUpdate({
-    toolCallId: 'tool-1',
-    tool: { id: 'kanban', name: 'kanban' },
-    output: { cards: [] },
-    status: 'completed',
-  }, () => 123);
-
-  assert.deepEqual(liveCall, {
-    id: 'tool-1',
-    name: 'kanban',
-    arguments: { action: 'list_cards' },
-    status: 'running',
-  });
-  assert.deepEqual(liveResult, {
-    id: 'tool-1',
-    name: 'kanban',
-    status: 'completed',
-    result: { cards: [] },
-    endTime: 123,
-  });
-});
-
-test('live failed tool result accepts error without output', () => {
+test('live tool events retain the same call identity as canonical history', () => {
+  assert.deepEqual(extractLiveToolCall({
+    toolCall: { id: 'call-1', args: { command: 'pwd' }, tool: { id: 'terminal' } },
+  }), { id: 'call-1', name: 'terminal', arguments: { command: 'pwd' }, status: 'running' });
   assert.deepEqual(extractLiveToolResultUpdate({
-    toolCallId: 'tool-1',
-    tool: { id: 'browser', name: 'browser' },
-    status: 'failed',
-    error: 'page crashed',
+    toolCallId: 'call-1', tool: { id: 'terminal', name: 'Terminal' },
+    projectedOutput: { ok: true }, status: 'completed',
   }, () => 123), {
-    id: 'tool-1',
-    name: 'browser',
-    status: 'failed',
-    error: 'page crashed',
-    endTime: 123,
+    id: 'call-1', name: 'Terminal', status: 'completed', result: { ok: true }, endTime: 123,
   });
-});
-
-test('live cancelled tool result normalizes to failed activity', () => {
-  assert.deepEqual(extractLiveToolResultUpdate({
-    toolCallId: 'tool-1',
-    tool: { id: 'browser', name: 'browser' },
-    status: 'cancelled',
-    error: { message: 'cancelled by user' },
-  }, () => 123), {
-    id: 'tool-1',
-    name: 'browser',
-    status: 'failed',
-    error: '{"message":"cancelled by user"}',
-    endTime: 123,
-  });
-});
-
-test('tool contract throws instead of defaulting malformed statuses', () => {
-  assert.throws(() => extractLiveToolResultUpdate({
-    toolCallId: 'tool-1',
-    tool: { id: 'kanban', name: 'kanban' },
-    output: { cards: [] },
-    status: 'mystery',
-  }, () => 123), /status/);
 });

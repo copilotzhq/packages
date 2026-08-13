@@ -7,13 +7,27 @@ export {
   deleteThread,
   fetchAgents,
   fetchThreadMessages,
+  fetchThreadMessagesPage,
   fetchThreads,
   runCopilotzStream,
   withAuthHeaders,
   updateThread,
 } from './copilotzService';
 export type { RequestHeadersProvider } from './copilotzService';
-export { getAssetDataUrl, resolveAssetsInMessages } from './assetsService';
+export { parseCanonicalMessagePage } from './canonicalHistory';
+export { getAssetDataUrl } from './assetsService';
+export type {
+  CanonicalAssetRecord,
+  CanonicalContentRef,
+  CanonicalLlmAttempt,
+  CanonicalMessage,
+  CanonicalMessageHistoryIncluded,
+  CanonicalMessagePage,
+  CanonicalMessagePageInfo,
+  CanonicalParticipant,
+  CanonicalResolvedContent,
+  CanonicalToolExecution,
+} from './canonicalHistory';
 export type {
   EventInterceptor,
   EventInterceptorResult,

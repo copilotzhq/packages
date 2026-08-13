@@ -1,22 +1,15 @@
 import type { AgentOption, ChatSender } from '@copilotz/chat-ui';
 import {
   ContractViolation,
-  expectOptionalString,
   expectRecord,
   expectString,
   isRecord,
 } from './contract.ts';
+import type { CanonicalParticipant } from './canonicalHistory.ts';
 
 type SenderType = ChatSender['type'];
 type AgentIdentity = { id?: string | null; name?: string | null };
 type UserIdentity = { id: string; name?: string | null; avatarUrl?: string | null };
-
-type ServerMessageLike = {
-  senderId: string | null;
-  senderType: string;
-  senderUserId?: string | null;
-  metadata?: Record<string, unknown> | null;
-};
 
 export type SenderResolutionOptions = {
   agents?: AgentOption[];
@@ -103,24 +96,27 @@ export const resolveAgentSender = (
   });
 };
 
-export const resolveHydratedMessageSender = (
-  message: ServerMessageLike,
+export const resolveCanonicalParticipantSender = (
+  participant: CanonicalParticipant,
   options: SenderResolutionOptions = {},
 ): ChatSender => {
-  const metadata = message.metadata ? expectRecord(message.metadata, 'message.metadata') : {};
-  const type = expectSenderType(message.senderType, 'message.senderType');
-  const storedId = expectOptionalString(message.senderId, 'message.senderId');
-  const participantId = expectOptionalString(metadata.senderParticipantId, 'message.metadata.senderParticipantId') ??
-    expectOptionalString(message.senderUserId, 'message.senderUserId');
-  const externalId = expectString(metadata.senderExternalId, 'message.metadata.senderExternalId');
-  const displayName = expectString(metadata.senderDisplayName, 'message.metadata.senderDisplayName');
+  const type = expectSenderType(
+    participant.participantType === 'human' ? 'user' : participant.participantType,
+    'participant.participantType',
+  );
+  const participantId = expectString(participant.id, 'participant.id');
+  const externalId = expectString(participant.externalId, 'participant.externalId');
+  const displayName = expectString(
+    participant.name ?? participant.agentId ?? participant.externalId,
+    'participant.name',
+  );
 
   if (type === 'agent' || type === 'tool' || type === 'job') {
-    const agent = findAgent(options.agents, externalId, displayName, storedId);
+    const agent = findAgent(options.agents, participant.agentId, externalId, displayName, participantId);
     if (agent) {
       return fromAgent(agent, defined({
         type,
-        participantId: participantId ?? storedId,
+        participantId,
         externalId: externalId && externalId !== agent.id ? externalId : undefined,
       }));
     }
@@ -129,16 +125,15 @@ export const resolveHydratedMessageSender = (
       type,
       id: externalId,
       name: displayName,
-      agentId: externalId,
-      participantId: participantId ?? storedId,
+      agentId: participant.agentId ?? externalId,
+      participantId,
       externalId,
     });
   }
 
   if (type === 'user') {
     const isCurrentUser = options.user?.id === externalId ||
-      options.user?.id === participantId ||
-      options.user?.id === storedId;
+      options.user?.id === participantId;
     const currentUserName = isCurrentUser ? clean(options.user?.name) : undefined;
 
     return defined({
@@ -147,7 +142,7 @@ export const resolveHydratedMessageSender = (
       externalId,
       name: currentUserName ?? displayName,
       avatarUrl: clean(options.user?.avatarUrl),
-      participantId: participantId ?? storedId,
+      participantId,
     });
   }
 
@@ -155,7 +150,7 @@ export const resolveHydratedMessageSender = (
     type: 'system',
     id: externalId,
     name: displayName,
-    participantId: participantId ?? storedId,
+    participantId,
     externalId,
   });
 };

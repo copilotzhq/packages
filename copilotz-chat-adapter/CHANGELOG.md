@@ -1,5 +1,17 @@
 # @copilotz/chat-adapter
 
+## 0.59.20
+
+### Patch Changes
+
+- Consume strict canonical compound message history with participant, content,
+  LLM-attempt, and tool-execution resources instead of the removed flattened
+  REST message DTO.
+- Restore text, reasoning, tool calls, projected tool output, failures, and
+  attachments after refresh while preserving exact source-message identity.
+- Keep live canonical tool-output streaming unchanged and reconcile it with the
+  same persisted execution after settlement.
+
 ## 0.59.19
 
 ### Patch Changes

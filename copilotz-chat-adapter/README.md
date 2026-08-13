@@ -374,6 +374,7 @@ import {
   runCopilotzStream, 
   fetchThreads, 
   fetchThreadMessages,
+  fetchThreadMessagesPage,
   updateThread,
   deleteThread,
 } from '@copilotz/chat-adapter';
@@ -393,20 +394,23 @@ const threads = await fetchThreads('user-123');
 
 // Fetch messages
 const messages = await fetchThreadMessages('thread-456');
+
+// Or keep the full canonical compound document and pagination cursor
+const page = await fetchThreadMessagesPage('thread-456');
+console.log(page.data, page.included, page.pageInfo.next);
 ```
 
-### Asset Helpers
+### Asset helper
 
-Resolve asset references to data URLs:
+Message history is loaded as one canonical compound document containing the
+messages, their workflow resources, and resolved content. Use the standalone
+asset helper only when another API gives you an asset ID directly:
 
 ```tsx
-import { getAssetDataUrl, resolveAssetsInMessages } from '@copilotz/chat-adapter';
+import { getAssetDataUrl } from '@copilotz/chat-adapter';
 
 // Single asset
 const { dataUrl, mime } = await getAssetDataUrl('asset://abc123');
-
-// Batch resolve in messages
-const messagesWithAssets = await resolveAssetsInMessages(messages);
 ```
 
 ---
@@ -426,14 +430,12 @@ export {
   runCopilotzStream, 
   fetchThreads, 
   fetchThreadMessages, 
+  fetchThreadMessagesPage,
   updateThread, 
   deleteThread,
 } from './copilotzService';
 
-export { 
-  getAssetDataUrl, 
-  resolveAssetsInMessages,
-} from './assetsService';
+export { getAssetDataUrl } from './assetsService';
 
 // Re-exported types from @copilotz/chat-ui
 export type { 
