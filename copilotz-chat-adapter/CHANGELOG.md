@@ -1,6 +1,6 @@
 # @copilotz/chat-adapter
 
-## 0.9.51
+## 0.59.18
 
 ### Patch Changes
 
