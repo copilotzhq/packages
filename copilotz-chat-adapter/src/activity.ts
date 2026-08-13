@@ -135,6 +135,7 @@ export const appendAssistantToolCall = (
     id: toolCall.id,
     kind: 'tool',
     status,
+    toolId: toolCall.toolId ?? toolCall.name,
     toolName: toolCall.name,
     startedAt: toolCall.startTime ?? Date.now(),
     ...(status !== 'active' ? { completedAt: toolCall.endTime ?? Date.now() } : {}),
@@ -166,6 +167,7 @@ export const appendAssistantToolDraft = (
     id: itemId,
     kind: 'tool',
     status: 'active',
+    toolId: draft.toolName,
     toolName: draft.toolName,
     startedAt: draft.startedAt ?? Date.now(),
     details: { toolCallDraftId: draft.draftId },
@@ -190,6 +192,7 @@ export const reconcileAssistantToolDraft = (
     ...next[index],
     id: toolCall.id,
     status,
+    toolId: toolCall.toolId ?? toolCall.name,
     toolName: toolCall.name,
     ...(status !== 'active' ? { completedAt: toolCall.endTime ?? Date.now() } : {}),
     details: {
@@ -249,6 +252,7 @@ export const applyAssistantToolResult = (
   next[index] = {
     ...item,
     status,
+    toolId: nextToolCall.toolId ?? item.toolId ?? nextToolCall.name,
     toolName: update.name,
     ...(status !== 'active' ? { completedAt: update.endTime ?? Date.now() } : {}),
     details,

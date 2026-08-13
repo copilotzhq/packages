@@ -84,6 +84,7 @@ test('draft store appends monotonic deltas and deduplicates replay', () => {
   });
   assert.deepEqual(parseCompletedToolCallDraft(store.getSnapshot('draft-1')!), {
     id: 'call-1',
+    toolId: 'terminal',
     name: 'terminal',
     arguments: { stdin: 'pwd' },
     status: 'running',

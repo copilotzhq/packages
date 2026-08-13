@@ -43,6 +43,10 @@ const workflowMetadata = (metadata: Record<string, unknown>): Record<string, unk
   isRecord(metadata.copilotzWorkflow) ? metadata.copilotzWorkflow : {}
 );
 
+const askMetadata = (metadata: Record<string, unknown>): Record<string, unknown> => (
+  isRecord(metadata.copilotzAsk) ? metadata.copilotzAsk : {}
+);
+
 const canonicalTimestamp = (value: string | undefined, fallback: () => number): number => {
   const timestamp = value ? new Date(value).getTime() : NaN;
   return Number.isFinite(timestamp) ? timestamp : fallback();
@@ -145,6 +149,15 @@ const toolName = (
       : fallback
 );
 
+const toolId = (
+  tool: Record<string, unknown>,
+  fallback: string,
+): string => (
+  typeof tool.id === 'string' && tool.id.trim()
+    ? tool.id.trim()
+    : fallback
+);
+
 const toolArguments = (value: unknown): Record<string, unknown> => {
   if (isRecord(value)) return value;
   if (typeof value !== 'string') return {};
@@ -201,6 +214,7 @@ const mappedToolCall = (
   return {
     id: invocation.id,
     ...(execution ? { toolExecutionId: execution.id } : {}),
+    toolId: toolId(execution?.tool ?? invocation.tool, invocation.tool.id),
     name: toolName(execution?.tool ?? invocation.tool, invocation.tool.id),
     arguments: toolArguments(invocation.args),
     status: toolStatus(execution),
@@ -227,6 +241,7 @@ const activityItems = (
       id: toolCall.id,
       kind: 'tool' as const,
       status: toolCall.status === 'failed' ? 'failed' as const : toolCall.status === 'completed' ? 'complete' as const : 'active' as const,
+      toolId: toolCall.toolId,
       toolName: toolCall.name,
       startedAt: toolCall.startTime,
       completedAt: toolCall.endTime,
@@ -330,9 +345,25 @@ export const projectCanonicalMessageHistory = (
     if (isRecord(output)) options.onToolOutput?.(output);
     return [toolResultUpdate(message, execution, content, now)];
   });
-  const viewMessages = ordered.flatMap((message) => {
+  const projectedMessages = ordered.flatMap((message) => {
     const projected = projectMessage(message, attempts, executions, content, options);
     return projected ? [projected] : [];
+  });
+  const representedAskExecutions = new Set(projectedMessages.flatMap((message) => (
+    message.activity?.items.flatMap((item) => (
+      item.kind === 'tool' && item.toolId === 'ask' && item.details?.toolCall?.toolExecutionId
+        ? [item.details.toolCall.toolExecutionId]
+        : []
+    )) ?? []
+  )));
+  const viewMessages = projectedMessages.filter((message) => {
+    const ask = askMetadata(message.metadata ?? {});
+    return !(
+      ask.schema === 'copilotz.ask.v1' &&
+      ask.phase === 'question' &&
+      typeof ask.toolExecutionId === 'string' &&
+      representedAskExecutions.has(ask.toolExecutionId)
+    );
   });
   return { viewMessages, toolResultUpdates };
 };

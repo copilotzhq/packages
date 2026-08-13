@@ -51,8 +51,17 @@ const withAssetAuthHeaders = async (
   return headers;
 };
 
-const extractAssetId = (refOrId: string) =>
-  refOrId.startsWith('asset://') ? refOrId.slice('asset://'.length) : refOrId;
+const extractAssetId = (refOrId: string): string => {
+  if (!refOrId.startsWith('asset://')) return refOrId;
+  const segments = refOrId.slice('asset://'.length).split('/').filter(Boolean);
+  const encoded = segments.at(-1);
+  if (!encoded) throw new ContractViolation(`Invalid asset ref: ${refOrId}`);
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    throw new ContractViolation(`Invalid asset ref encoding: ${refOrId}`);
+  }
+};
 
 export async function getAssetDataUrl(
   refOrId: string,

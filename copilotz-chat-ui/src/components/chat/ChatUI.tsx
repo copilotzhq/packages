@@ -731,6 +731,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
       onToggleExpanded: handleToggleMessageExpansion,
       toolRenderers,
       toolCallDraftSource,
+      agents: agentOptions,
     }),
     [
       user?.avatar,
@@ -756,6 +757,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
       config.markdown,
       toolRenderers,
       toolCallDraftSource,
+      agentOptions,
       handleMessageAction,
       handleToggleMessageExpansion,
     ]

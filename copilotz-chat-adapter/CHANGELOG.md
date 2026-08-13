@@ -1,5 +1,27 @@
 # @copilotz/chat-adapter
 
+## 0.59.22
+
+### Patch Changes
+
+- Resolve tenant-qualified canonical asset references when downloading message
+  attachments.
+- Reconcile the live conversation with canonical history after settlement so
+  files exported by tools appear as downloadable attachments without embedding
+  their bytes in event frames.
+
+## 0.59.21
+
+### Patch Changes
+
+- Preserve independently accumulated text and reasoning for interleaved,
+  parallel agent attempts instead of replacing one participant's stream when
+  another participant emits a delta.
+- Preserve stable tool resource IDs separately from display names across live
+  and persisted activity, enabling consistent built-in and custom renderers.
+- Reconcile persisted public `ask` questions with their source tool execution
+  so the conversational mention is rendered once after refresh.
+
 ## 0.59.20
 
 ### Patch Changes

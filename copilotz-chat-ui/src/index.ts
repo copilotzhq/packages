@@ -5,6 +5,7 @@ export {
   resolveActivityStableId,
   resolveToolRenderer,
 } from './components/chat/AssistantActivity';
+export { AskToolRenderer, builtInToolRenderers } from './components/chat/AskToolRenderer';
 export { MessageSenderAvatar, resolveMessageSenderDisplay } from './components/chat/MessageSender';
 export { ChatUserContextProvider, useChatUserContext } from './components/chat/UserContext';
 export { defaultChatConfig, mergeConfig } from './config/chatConfig';

@@ -400,6 +400,7 @@ type MediaAttachment =
 ```typescript
 interface ToolCall {
   id: string;
+  toolId?: string; // Stable Copilotz resource ID used for renderer lookup
   name: string;
   arguments: Record<string, any>;
   result?: any;
@@ -407,6 +408,18 @@ interface ToolCall {
   startTime?: number;
   endTime?: number;
 }
+```
+
+Tool renderers are keyed by stable `toolId`. Copilotz ships an inline renderer
+for the public `ask` capability; application renderers override built-ins:
+
+```tsx
+<ChatUI
+  toolRenderers={{
+    ask: CustomAskRenderer,
+    terminal: TerminalRenderer,
+  }}
+/>
 ```
 
 ### AgentOption
@@ -428,6 +441,7 @@ interface AgentOption {
 // Primary components
 export { ChatUI } from './components/chat/ChatUI';
 export { AssistantActivity } from './components/chat/AssistantActivity';
+export { AskToolRenderer, builtInToolRenderers } from './components/chat/AskToolRenderer';
 export { ChatUserContextProvider, useChatUserContext } from './components/chat/UserContext';
 
 // Configuration

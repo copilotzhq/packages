@@ -974,6 +974,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
                   at: getEventTimestamp(event),
                   toolCall: {
                     id: parsedToolCall.id!,
+                    toolId: parsedToolCall.toolId,
                     name: parsedToolCall.name,
                     arguments: parsedToolCall.arguments,
                     status: parsedToolCall.status,
@@ -1261,10 +1262,17 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
 
         // Wait to ensure the assistant message is persisted before refreshing
         await new Promise((r) => setTimeout(r, 1000));
-        // Refresh threads list to update metadata (message count, timestamps, etc.)
-        // Don't reload messages since we already have them from streaming
+        // Refresh both thread metadata and canonical messages. Streaming keeps
+        // interaction responsive, while this authoritative pass materializes
+        // asset-backed tool attachments without sending their bytes as events.
         if (stillShowingSendOwnerThread()) {
-          await fetchAndSetThreadsState(userId, effectiveThreadExternalId ?? existingThreadId ?? null);
+          const persistedThreadId = await fetchAndSetThreadsState(
+            userId,
+            effectiveThreadExternalId ?? existingThreadId ?? null,
+          );
+          if (persistedThreadId) {
+            await refreshThreadMessages(persistedThreadId);
+          }
         }
       } catch (error) {
         if (isAbortError(error)) return;
@@ -1312,7 +1320,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
         });
       }
     },
-    [userId, fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage, getSpecialStateFromError]
+    [userId, fetchAndSetThreadsState, refreshThreadMessages, sendCopilotzMessage, getSpecialStateFromError]
   );
 
   const bootstrapConversation = useCallback(

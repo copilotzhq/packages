@@ -320,6 +320,58 @@ test('runCopilotzStream associates canonical delta phases with their LLM attempt
   }
 });
 
+test('runCopilotzStream preserves interleaved text independently for parallel agent attempts', async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+  const updates: Array<{
+    attemptId?: string;
+    text: string;
+    complete: boolean;
+  }> = [];
+
+  globalThis.fetch = async () => {
+    const body = [
+      sse('text.delta', { type: 'text.delta', payload: { text: 'East one', llmAttemptId: 'attempt-east', agent: { id: 'east', name: 'East' } } }),
+      sse('text.delta', { type: 'text.delta', payload: { text: 'South one', llmAttemptId: 'attempt-south', agent: { id: 'south', name: 'South' } } }),
+      sse('text.delta', { type: 'text.delta', payload: { text: ' East two', llmAttemptId: 'attempt-east', agent: { id: 'east', name: 'East' } } }),
+      sse('text.delta', { type: 'text.delta', payload: { text: ' South two', llmAttemptId: 'attempt-south', agent: { id: 'south', name: 'South' } } }),
+      sse('message.created', { type: 'message.created', payload: { messageId: 'message-east' }, metadata: { copilotzWorkflow: { kind: 'agent_output', llmAttemptId: 'attempt-east' } } }),
+      sse('message.created', { type: 'message.created', payload: { messageId: 'message-south' }, metadata: { copilotzWorkflow: { kind: 'agent_output', llmAttemptId: 'attempt-south' } } }),
+    ].join('');
+
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(body));
+          controller.close();
+        },
+      }),
+      { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+    );
+  };
+
+  try {
+    await runCopilotzStream({
+      content: 'Ask both agents',
+      user: { externalId: 'user-123' },
+      onToken: (text, complete, _raw, context) => {
+        updates.push({ attemptId: context?.llmAttemptId, text, complete });
+      },
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.deepEqual(updates, [
+    { attemptId: 'attempt-east', text: 'East one', complete: false },
+    { attemptId: 'attempt-south', text: 'South one', complete: false },
+    { attemptId: 'attempt-east', text: 'East one East two', complete: false },
+    { attemptId: 'attempt-south', text: 'South one South two', complete: false },
+    { attemptId: 'attempt-east', text: 'East one East two', complete: true },
+    { attemptId: 'attempt-south', text: 'South one South two', complete: true },
+  ]);
+});
+
 test('runCopilotzStream rejects SSE event names that disagree with canonical envelopes', async () => {
   const originalFetch = globalThis.fetch;
   const encoder = new TextEncoder();

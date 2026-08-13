@@ -496,6 +496,7 @@ export const transitionLiveRun = (
       toolCall: {
         id: action.id,
         toolExecutionId: action.toolExecutionId,
+        toolId: action.name ?? action.id,
         name: action.name ?? action.id,
         arguments: {},
         status: 'running',

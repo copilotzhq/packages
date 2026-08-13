@@ -96,6 +96,9 @@ export type CreateVoiceProvider = (
 export interface ToolCall {
   id: string;
   toolExecutionId?: string;
+  /** Stable Copilotz tool resource ID. Use this for behavior and renderers. */
+  toolId?: string;
+  /** Human-readable tool label. */
   name: string;
   arguments: Record<string, any>;
   result?: any;
@@ -137,6 +140,8 @@ export type ToolRendererStatus =
   | ToolCall["status"];
 
 export interface ToolRendererProps {
+  /** Stable Copilotz tool resource ID. */
+  toolId: string;
   toolName: string;
   toolCall?: ToolCall;
   draft?: ToolCallDraftSnapshot;
@@ -144,6 +149,7 @@ export interface ToolRendererProps {
   result?: unknown;
   output?: ToolOutputState;
   error?: string;
+  agents?: readonly AgentOption[];
 }
 
 export type ToolRendererMap = Record<
@@ -158,6 +164,8 @@ export interface AssistantActivityItem {
   id: string;
   kind: AssistantActivityKind;
   status: AssistantActivityStatus;
+  /** Stable Copilotz tool resource ID. */
+  toolId?: string;
   toolName?: string;
   startedAt?: number;
   completedAt?: number;
@@ -521,7 +529,7 @@ export interface ChatV2Props {
   userMenuSections?: ChatUserMenuSection[];
   /** @deprecated Prefer userMenuSections for native menu composition */
   userMenuAdditionalItems?: ReactNode;
-  /** Client-owned tool detail renderers keyed by exact tool name. */
+  /** Client-owned tool renderers keyed by stable Copilotz tool ID. */
   toolRenderers?: ToolRendererMap;
   /** External live-draft source supplied by a streaming adapter. */
   toolCallDraftSource?: ToolCallDraftSource;

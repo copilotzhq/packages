@@ -1,5 +1,6 @@
 import React, { memo, useCallback, useState, useSyncExternalStore } from 'react';
 import type {
+  AgentOption,
   AssistantActivityBlock,
   AssistantActivityItem,
   ChatConfig,
@@ -9,13 +10,14 @@ import type {
 import { cn } from '../../lib/utils';
 import { Button } from '../ui/button';
 import { CheckCircle2, ChevronDown, ChevronRight, CircleAlert, LoaderCircle, Wrench, Brain, Sparkles } from 'lucide-react';
+import { builtInToolRenderers } from './AskToolRenderer';
 
 type ActivityLabels = ChatConfig['labels'];
 
 export const resolveToolRenderer = (
-  toolName: string | undefined,
+  toolId: string | undefined,
   toolRenderers: ToolRendererMap | undefined,
-) => toolName ? toolRenderers?.[toolName] : undefined;
+) => toolId ? toolRenderers?.[toolId] ?? builtInToolRenderers[toolId] : undefined;
 
 export const formatToolDetailValue = (value: unknown): string =>
   JSON.stringify(value, null, 2) ?? String(value);
@@ -33,6 +35,7 @@ interface AssistantActivityProps {
   labels?: ActivityLabels;
   toolRenderers?: ToolRendererMap;
   toolCallDraftSource?: ToolCallDraftSource;
+  agents?: readonly AgentOption[];
 }
 
 const ROOT_CLASS = 'mb-4 w-full max-w-full min-w-0';
@@ -47,6 +50,12 @@ const interpolate = (
 
 const hasActiveItem = (activity: AssistantActivityBlock): boolean =>
   activity.items.some((item) => item.status === 'active');
+
+const toolIdForItem = (item: AssistantActivityItem): string | undefined =>
+  item.toolId || item.details?.toolCall?.toolId || item.toolName || item.details?.toolCall?.name;
+
+const hasInlineToolPresentation = (item: AssistantActivityItem): boolean =>
+  item.kind === 'tool' && toolIdForItem(item) === 'ask';
 
 const hasDetails = (item: AssistantActivityItem): boolean =>
   Boolean(item.details?.reasoning || item.details?.toolCall || item.details?.toolCallDraftId || item.details?.result !== undefined || item.details?.toolOutput || item.details?.error);
@@ -92,10 +101,14 @@ const ActivityDetails = memo(function ActivityDetails({
   item,
   toolRenderers,
   toolCallDraftSource,
+  agents,
+  inline = false,
 }: {
   item: AssistantActivityItem;
   toolRenderers?: ToolRendererMap;
   toolCallDraftSource?: ToolCallDraftSource;
+  agents?: readonly AgentOption[];
+  inline?: boolean;
 }) {
   const toolCall = item.details?.toolCall;
   const draftId = item.details?.toolCallDraftId;
@@ -116,18 +129,20 @@ const ActivityDetails = memo(function ActivityDetails({
     [draftId, toolCallDraftSource],
   );
   const draft = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const toolId = toolIdForItem(item);
   const toolName = item.toolName || toolCall?.name;
-  const ToolRenderer = resolveToolRenderer(toolName, toolRenderers);
+  const ToolRenderer = resolveToolRenderer(toolId, toolRenderers);
   const status = toolCall?.status ?? (item.status === 'failed'
     ? 'failed'
     : item.status === 'complete'
       ? 'completed'
       : 'streaming');
 
-  if (ToolRenderer && toolName) {
+  if (ToolRenderer && toolId && toolName) {
     return (
-      <div className="pb-1 pl-7 pt-2">
+      <div className={inline ? 'pb-1 pt-1' : 'pb-1 pl-7 pt-2'}>
         <ToolRenderer
+          toolId={toolId}
           toolName={toolName}
           toolCall={toolCall}
           draft={draft}
@@ -135,6 +150,7 @@ const ActivityDetails = memo(function ActivityDetails({
           result={item.details?.result ?? toolCall?.result}
           output={item.details?.toolOutput}
           error={item.details?.error}
+          agents={agents}
         />
       </div>
     );
@@ -199,12 +215,14 @@ const ActivityTimeline = memo(function ActivityTimeline({
   labels,
   toolRenderers,
   toolCallDraftSource,
+  agents,
 }: {
   activity: AssistantActivityBlock;
   showActivityDetails: boolean;
   labels?: ActivityLabels;
   toolRenderers?: ToolRendererMap;
   toolCallDraftSource?: ToolCallDraftSource;
+  agents?: readonly AgentOption[];
 }) {
   const [openById, setOpenById] = useState<Record<string, boolean>>({});
 
@@ -213,6 +231,18 @@ const ActivityTimeline = memo(function ActivityTimeline({
       <div className="space-y-1">
         {activity.items.map((item, index) => {
           const stableId = resolveActivityStableId(item);
+          if (hasInlineToolPresentation(item)) {
+            return (
+              <ActivityDetails
+                key={stableId}
+                item={item}
+                toolRenderers={toolRenderers}
+                toolCallDraftSource={toolCallDraftSource}
+                agents={agents}
+                inline
+              />
+            );
+          }
           const detailsAvailable = showActivityDetails && hasDetails(item);
           const open = Boolean(openById[stableId]);
           const isLast = index === activity.items.length - 1;
@@ -247,6 +277,7 @@ const ActivityTimeline = memo(function ActivityTimeline({
                     item={item}
                     toolRenderers={toolRenderers}
                     toolCallDraftSource={toolCallDraftSource}
+                    agents={agents}
                   />
                 )}
               </div>
@@ -265,9 +296,25 @@ export const AssistantActivity = memo(function AssistantActivity({
   labels,
   toolRenderers,
   toolCallDraftSource,
+  agents,
 }: AssistantActivityProps) {
   if (!activity || activity.items.length === 0) return null;
-  if (!showActivity) return hasActiveItem(activity) ? <ActivitySkeleton /> : null;
+  if (!showActivity) {
+    const publicItems = activity.items.filter(hasInlineToolPresentation);
+    if (publicItems.length > 0) {
+      return (
+        <ActivityTimeline
+          activity={{ items: publicItems }}
+          showActivityDetails
+          labels={labels}
+          toolRenderers={toolRenderers}
+          toolCallDraftSource={toolCallDraftSource}
+          agents={agents}
+        />
+      );
+    }
+    return hasActiveItem(activity) ? <ActivitySkeleton /> : null;
+  }
   return (
     <ActivityTimeline
       activity={activity}
@@ -275,6 +322,7 @@ export const AssistantActivity = memo(function AssistantActivity({
       labels={labels}
       toolRenderers={toolRenderers}
       toolCallDraftSource={toolCallDraftSource}
+      agents={agents}
     />
   );
 });

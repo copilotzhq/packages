@@ -19,6 +19,7 @@ export type ToolCallStatus = 'pending' | 'running' | 'completed' | 'failed';
 export type ParsedToolCall = {
   id?: string;
   toolExecutionId?: string;
+  toolId: string;
   name: string;
   arguments: Record<string, unknown>;
   status: ToolCallStatus;
@@ -132,6 +133,9 @@ const expectToolName = (tool: Record<string, unknown>, path: string): string => 
   return expectString(name, path);
 };
 
+const expectToolId = (tool: Record<string, unknown>, path: string): string =>
+  expectString(tool.id, path);
+
 export const matchesToolResultUpdate = (
   target: { id?: string; name?: string },
   update: Pick<ToolResultUpdate, 'id' | 'name'>,
@@ -203,6 +207,7 @@ export const extractLiveToolCall = (
   return {
     id: expectString(toolCall.id, 'TOOL_CALL payload.toolCall.id'),
     ...(typeof payloadRecord.toolExecutionId === 'string' ? { toolExecutionId: payloadRecord.toolExecutionId } : {}),
+    toolId: expectToolId(tool, 'TOOL_CALL payload.toolCall.tool.id'),
     name: expectToolName(tool, 'TOOL_CALL payload.toolCall.tool.id'),
     arguments: expectToolArguments(toolCall.args, 'TOOL_CALL payload.toolCall.args'),
     status: toolCall.status === undefined ? 'running' : expectToolStatus(toolCall.status, 'TOOL_CALL payload.toolCall.status'),
@@ -254,6 +259,7 @@ export const parseCompletedToolCallDraft = (
   }
   return {
     id,
+    toolId: name,
     name,
     arguments: expectToolArguments(
       value.arguments ?? value.args,

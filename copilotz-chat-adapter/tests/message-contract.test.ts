@@ -22,25 +22,39 @@ const participant = (type: 'human' | 'agent' | 'tool', externalId: string, name:
   createdAt: time,
   updatedAt: time,
 });
-const ref = (assetId: string, kind: 'text' | 'json', role: string, mediaType = kind === 'json' ? 'application/json' : 'text/plain; charset=utf-8') => ({
+const ref = (
+  assetId: string,
+  kind: 'text' | 'json' | 'file',
+  role: string,
+  mediaType = kind === 'json' ? 'application/json' : 'text/plain; charset=utf-8',
+  name?: string,
+) => ({
   assetId,
   kind,
   role,
   mediaType,
+  ...(name ? { name } : {}),
 });
 const encoded = (value: unknown) => Buffer.from(
   typeof value === 'string' ? value : JSON.stringify(value),
 ).toString('base64');
-const content = (assetId: string, kind: 'text' | 'json', role: string, value: unknown) => ({
-  ref: ref(assetId, kind, role),
+const content = (
+  assetId: string,
+  kind: 'text' | 'json' | 'file',
+  role: string,
+  value: unknown,
+  mediaType = kind === 'json' ? 'application/json' : 'text/plain; charset=utf-8',
+  name?: string,
+) => ({
+  ref: ref(assetId, kind, role, mediaType, name),
   asset: {
     id: assetId,
     namespace,
-    mediaType: kind === 'json' ? 'application/json' : 'text/plain; charset=utf-8',
+    mediaType,
     byteLength: Buffer.byteLength(typeof value === 'string' ? value : JSON.stringify(value)),
     digest: `sha256:${'0'.repeat(64)}`,
     state: 'ready',
-    location: { kind: 'database', encoding: kind === 'json' ? 'json' : 'utf8' },
+    location: { kind: 'database', encoding: kind === 'json' ? 'json' : kind === 'file' ? 'base64' : 'utf8' },
     createdAt: time,
     readyAt: time,
   },
@@ -125,6 +139,8 @@ test('canonical production-shaped history projects text, tool-only turns, and fa
   assert.equal(viewMessages[1].sender?.id, 'north');
   assert.equal(viewMessages[1].activity?.items[0].details?.reasoning, 'I should inspect the terminal.');
   assert.equal(viewMessages[1].activity?.items[1].kind, 'tool');
+  assert.equal(viewMessages[1].activity?.items[1].toolId, 'terminal');
+  assert.equal(viewMessages[1].activity?.items[1].toolName, 'Terminal');
   assert.equal(viewMessages[1].activity?.items[1].status, 'failed');
   assert.deepEqual(viewMessages[1].activity?.items[1].details?.toolCall?.arguments, { command: 'pwd' });
   assert.deepEqual(viewMessages[1].activity?.items[1].details?.result, { ok: false, error: 'Sandbox unavailable.' });
@@ -136,6 +152,43 @@ test('canonical production-shaped history projects text, tool-only turns, and fa
   });
   assert.deepEqual(output, [{ ok: false, error: 'Sandbox unavailable.' }]);
   assert.equal(mergePersistedToolResults(viewMessages, toolResultUpdates)[1].activity?.items[1].status, 'failed');
+});
+
+test('canonical history renders exported tool files as downloadable attachments', () => {
+  const history = canonicalHistory();
+  const fileRef = ref(
+    'asset-export',
+    'file',
+    'attachment',
+    'text/csv',
+    'report.csv',
+  );
+  history.data[2].content.push(fileRef);
+  history.data[2].metadata.toolStatus = 'completed';
+  history.included.toolExecutions[0].status = 'completed';
+  history.included.toolExecutions[0].safeError = undefined;
+  history.included.toolExecutions[0].content.push(fileRef);
+  history.included.content.push(content(
+    'asset-export',
+    'file',
+    'attachment',
+    'name,value\nalpha,1\n',
+    'text/csv',
+    'report.csv',
+  ));
+
+  const { viewMessages } = projectCanonicalMessageHistory(
+    parseCanonicalMessagePage(history),
+  );
+  const exported = viewMessages.find((message) => message.id === 'message-tool');
+  assert.equal(exported?.sender?.type, 'tool');
+  assert.deepEqual(exported?.attachments, [{
+    kind: 'file',
+    dataUrl: `data:text/csv;base64,${encoded('name,value\nalpha,1\n')}`,
+    mimeType: 'text/csv',
+    fileName: 'report.csv',
+    size: 19,
+  }]);
 });
 
 test('canonical parser rejects the removed flattened message contract', () => {
@@ -187,10 +240,60 @@ test('canonical history binds reused provider call IDs to their source message',
   });
 });
 
+test('canonical ask question is represented once by its mention renderer', () => {
+  const history = canonicalHistory();
+  const copilotzAsk = {
+    schema: 'copilotz.ask.v1',
+    askId: 'ask:execution-1',
+    phase: 'question',
+    toolExecutionId: 'execution-1',
+    questionMessageId: 'message-question',
+    askingParticipantId: 'participant:north',
+    askingAgentId: 'north',
+    askedParticipantId: 'participant:east',
+    askedAgentId: 'east',
+    depth: 1,
+  };
+  history.data.push({
+    id: 'message-question', namespace, threadId,
+    sender: participant('agent', 'north', 'North'),
+    recipientIds: ['participant:east'],
+    content: [ref('asset-question', 'text', 'body')],
+    metadata: { copilotzAsk },
+    createdAt: '2026-08-13T10:00:01.500Z',
+    updatedAt: '2026-08-13T10:00:01.500Z',
+  });
+  history.included.llmAttempts[0].availableToolIds = ['ask'];
+  history.included.toolExecutions[0].tool = { id: 'ask', name: 'Ask Agent' };
+  const toolCalls = history.included.content.find((item) => item.ref.assetId === 'asset-calls')!;
+  toolCalls.base64 = encoded([{
+    id: 'call-1',
+    tool: { id: 'ask', name: 'Ask Agent' },
+    args: '{"target":"east","message":"Review this plan."}',
+  }]);
+  const argumentsContent = history.included.content.find((item) => item.ref.assetId === 'asset-args')!;
+  argumentsContent.base64 = encoded({ target: 'east', message: 'Review this plan.' });
+  history.included.content.push(content('asset-question', 'text', 'body', 'Review this plan.'));
+
+  const projected = projectCanonicalMessageHistory(parseCanonicalMessagePage(history));
+  assert.equal(projected.viewMessages.some((message) => message.id === 'message-question'), false);
+  const ask = projected.viewMessages.find((message) => message.id === 'message-agent')
+    ?.activity?.items.find((item) => item.toolId === 'ask');
+  assert.equal(ask?.toolName, 'Ask Agent');
+  assert.deepEqual(ask?.details?.toolCall?.arguments, {
+    target: 'east',
+    message: 'Review this plan.',
+  });
+
+  history.data = history.data.filter((message) => message.id !== 'message-agent');
+  const withoutSource = projectCanonicalMessageHistory(parseCanonicalMessagePage(history));
+  assert.equal(withoutSource.viewMessages.some((message) => message.id === 'message-question'), true);
+});
+
 test('live tool events retain the same call identity as canonical history', () => {
   assert.deepEqual(extractLiveToolCall({
     toolCall: { id: 'call-1', args: { command: 'pwd' }, tool: { id: 'terminal' } },
-  }), { id: 'call-1', name: 'terminal', arguments: { command: 'pwd' }, status: 'running' });
+  }), { id: 'call-1', toolId: 'terminal', name: 'terminal', arguments: { command: 'pwd' }, status: 'running' });
   assert.deepEqual(extractLiveToolResultUpdate({
     toolCallId: 'call-1', tool: { id: 'terminal', name: 'Terminal' },
     projectedOutput: { ok: true }, status: 'completed',

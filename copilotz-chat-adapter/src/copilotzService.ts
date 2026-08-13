@@ -223,6 +223,15 @@ export type CopilotzStreamResult = {
   media: Record<string, string> | null;
 };
 
+type StreamAttemptAccumulator = {
+  id: string;
+  text: string;
+  reasoning: string;
+  activePhaseKind: "reasoning" | "answer" | null;
+  activePhaseId: string | null;
+  phaseOrdinal: number;
+};
+
 export class CopilotzRequestError extends Error {
   status: number;
   code?: string;
@@ -625,55 +634,50 @@ export async function runCopilotzStream(
   const reader = response.body.getReader();
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
-  let aggregatedText = "";
-  let aggregatedReasoning = "";
   let lastCompletedText = "";
-  let activeLlmAttemptId: string | null = null;
-  let activePhaseKind: "reasoning" | "answer" | null = null;
-  let activePhaseId: string | null = null;
-  let phaseOrdinal = -1;
+  let lastObservedAttemptId: string | null = null;
   let fallbackAttemptOrdinal = 0;
+  const attempts = new Map<string, StreamAttemptAccumulator>();
   const collectedMessages: any[] = [];
   let collectedMedia: Record<string, string> | null = null;
 
-  const resetTokenAggregation = () => {
-    aggregatedText = "";
-    aggregatedReasoning = "";
+  const createAttempt = (id: string): StreamAttemptAccumulator => {
+    const attempt = {
+      id,
+      text: "",
+      reasoning: "",
+      activePhaseKind: null,
+      activePhaseId: null,
+      phaseOrdinal: -1,
+    } satisfies StreamAttemptAccumulator;
+    attempts.set(id, attempt);
+    return attempt;
   };
 
-  const startAttempt = (event: unknown) => {
-    activeLlmAttemptId = getLlmAttemptId(event) ??
-      `stream-attempt:${fallbackAttemptOrdinal++}`;
-    activePhaseKind = null;
-    activePhaseId = null;
-    phaseOrdinal = -1;
-    resetTokenAggregation();
-  };
-
-  const ensureAttempt = (event: unknown) => {
+  const attemptFor = (event: unknown): StreamAttemptAccumulator => {
     const eventAttemptId = getLlmAttemptId(event);
-    if (!activeLlmAttemptId || (
-      eventAttemptId && eventAttemptId !== activeLlmAttemptId
-    )) {
-      startAttempt(event);
-    }
+    const attemptId = eventAttemptId ?? lastObservedAttemptId ??
+      `stream-attempt:${fallbackAttemptOrdinal++}`;
+    lastObservedAttemptId = attemptId;
+    return attempts.get(attemptId) ?? createAttempt(attemptId);
   };
 
-  const getTokenContext = (isReasoning: boolean): StreamTokenContext => {
-    if (!activeLlmAttemptId) {
-      startAttempt(null);
-    }
+  const getTokenContext = (
+    attempt: StreamAttemptAccumulator,
+    isReasoning: boolean,
+  ): StreamTokenContext => {
     const kind = isReasoning ? "reasoning" : "answer";
-    if (activePhaseKind !== kind || !activePhaseId) {
-      phaseOrdinal += 1;
-      activePhaseKind = kind;
-      activePhaseId = `${activeLlmAttemptId}:${kind}:${phaseOrdinal}`;
+    if (attempt.activePhaseKind !== kind || !attempt.activePhaseId) {
+      attempt.phaseOrdinal += 1;
+      attempt.activePhaseKind = kind;
+      attempt.activePhaseId =
+        `${attempt.id}:${kind}:${attempt.phaseOrdinal}`;
     }
     return {
       isReasoning,
-      llmAttemptId: activeLlmAttemptId!,
-      phaseId: activePhaseId,
-      phaseOrdinal,
+      llmAttemptId: attempt.id,
+      phaseId: attempt.activePhaseId,
+      phaseOrdinal: attempt.phaseOrdinal,
     };
   };
 
@@ -713,19 +717,19 @@ export async function runCopilotzStream(
     }
 
     if (event.type === "text.delta" || event.type === "reasoning.delta") {
-      ensureAttempt(event);
+      const attempt = attemptFor(event);
       const inner = event.payload;
       const chunk = typeof inner?.text === "string" ? inner.text : "";
       const isReasoning = event.type === "reasoning.delta";
-      const tokenContext = getTokenContext(isReasoning);
+      const tokenContext = getTokenContext(attempt, isReasoning);
       if (chunk) {
         if (isReasoning) {
-          aggregatedReasoning = appendChunk(aggregatedReasoning, chunk);
+          attempt.reasoning = appendChunk(attempt.reasoning, chunk);
         } else {
-          aggregatedText = appendChunk(aggregatedText, chunk);
+          attempt.text = appendChunk(attempt.text, chunk);
         }
         onToken?.(
-          isReasoning ? aggregatedReasoning : aggregatedText,
+          isReasoning ? attempt.reasoning : attempt.text,
           false,
           event,
           tokenContext,
@@ -738,22 +742,22 @@ export async function runCopilotzStream(
       collectedMessages.push(event);
       const workflow = event.metadata?.copilotzWorkflow;
       if (workflow?.kind === "agent_output") {
-        if (activePhaseKind && activePhaseId && activeLlmAttemptId) {
-          const isReasoning = activePhaseKind === "reasoning";
-          const value = isReasoning ? aggregatedReasoning : aggregatedText;
+        const attemptId = getLlmAttemptId(event) ?? lastObservedAttemptId;
+        const attempt = attemptId ? attempts.get(attemptId) : undefined;
+        if (attempt?.activePhaseKind && attempt.activePhaseId) {
+          const isReasoning = attempt.activePhaseKind === "reasoning";
+          const value = isReasoning ? attempt.reasoning : attempt.text;
           if (value) {
             onToken?.(value, true, event, {
               isReasoning,
-              llmAttemptId: activeLlmAttemptId,
-              phaseId: activePhaseId,
-              phaseOrdinal,
+              llmAttemptId: attempt.id,
+              phaseId: attempt.activePhaseId,
+              phaseOrdinal: attempt.phaseOrdinal,
             });
             if (!isReasoning) lastCompletedText = value;
           }
         }
-        resetTokenAggregation();
-        activePhaseKind = null;
-        activePhaseId = null;
+        if (attemptId) attempts.delete(attemptId);
       }
       await onMessageEvent?.(event);
       return;
@@ -799,7 +803,10 @@ export async function runCopilotzStream(
   }
 
   return {
-    text: lastCompletedText || aggregatedText,
+    text: lastCompletedText ||
+      (lastObservedAttemptId
+        ? attempts.get(lastObservedAttemptId)?.text ?? ""
+        : ""),
     messages: collectedMessages,
     media: collectedMedia,
   };

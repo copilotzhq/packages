@@ -104,6 +104,40 @@ test('live run preserves multi-attempt reasoning, answers, and tools in event or
   assert.equal(messages[1].isComplete, true);
 });
 
+test('live run keeps interleaved parallel agent attempts in independent messages', () => {
+  let nextId = 1;
+  const createId = () => `generated-${nextId++}`;
+  let run = createLiveRunState('placeholder');
+  let messages = [{
+    id: 'placeholder',
+    role: 'assistant' as const,
+    content: '',
+    timestamp: 0,
+    isStreaming: true,
+    isComplete: false,
+    sender,
+  }];
+  const south: ChatSender = {
+    type: 'agent', id: 'south', name: 'South', agentId: 'south',
+  };
+  const dispatch = (action: Parameters<typeof transitionLiveRun>[1]) => {
+    const transition = transitionLiveRun(run, action, { createId });
+    run = transition.state;
+    messages = applyLiveRunOperations(messages, transition.operations);
+  };
+
+  dispatch({ type: 'token', attemptId: 'east-attempt', phaseId: 'east-attempt:answer:0', partial: 'East one', isReasoning: false, sender, at: 1 });
+  dispatch({ type: 'token', attemptId: 'south-attempt', phaseId: 'south-attempt:answer:0', partial: 'South one', isReasoning: false, sender: south, at: 2 });
+  dispatch({ type: 'token', attemptId: 'east-attempt', phaseId: 'east-attempt:answer:0', partial: 'East one two', isReasoning: false, sender, at: 3 });
+  dispatch({ type: 'token', attemptId: 'south-attempt', phaseId: 'south-attempt:answer:0', partial: 'South one two', isReasoning: false, sender: south, at: 4 });
+
+  assert.deepEqual(messages.map((message) => message.content), [
+    'East one two',
+    'South one two',
+  ]);
+  assert.deepEqual(messages.map((message) => message.sender?.id), ['north', 'south']);
+});
+
 test('tool result received before its call is applied when the call arrives', () => {
   let run = createLiveRunState('placeholder');
   let messages = [{

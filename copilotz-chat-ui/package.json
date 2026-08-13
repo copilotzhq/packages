@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/chat-ui",
-  "version": "0.59.20",
+  "version": "0.59.22",
   "description": "Copilotz chat UI components",
   "type": "module",
   "main": "./dist/index.cjs",

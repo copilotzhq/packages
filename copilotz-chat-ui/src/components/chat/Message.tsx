@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect, memo } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import { ChatConfig, ChatMarkdownConfig, ChatMessage, MediaAttachment, MessageActionEvent, ToolCallDraftSource, ToolRendererMap } from '../../types/chatTypes';
+import { AgentOption, ChatConfig, ChatMarkdownConfig, ChatMessage, MediaAttachment, MessageActionEvent, ToolCallDraftSource, ToolRendererMap } from '../../types/chatTypes';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { Textarea } from '../ui/textarea';
@@ -66,6 +66,7 @@ interface MessageProps {
   onToggleExpanded?: (messageId: string) => void;
   toolRenderers?: ToolRendererMap;
   toolCallDraftSource?: ToolCallDraftSource;
+  agents?: readonly AgentOption[];
 }
 
 const hasRenderableAssistantBody = (message: ChatMessage): boolean => {
@@ -526,6 +527,7 @@ const arePropsEqual = (prevProps: MessageProps, nextProps: MessageProps): boolea
   if (prevProps.assistantAvatar !== nextProps.assistantAvatar) return false;
   if (prevProps.toolRenderers !== nextProps.toolRenderers) return false;
   if (prevProps.toolCallDraftSource !== nextProps.toolCallDraftSource) return false;
+  if (prevProps.agents !== nextProps.agents) return false;
   
   return true;
 };
@@ -561,6 +563,7 @@ export const Message: React.FC<MessageProps> = memo(({
   onToggleExpanded,
   toolRenderers,
   toolCallDraftSource,
+  agents,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(message.content);
@@ -751,6 +754,7 @@ export const Message: React.FC<MessageProps> = memo(({
                           labels={labels}
                           toolRenderers={toolRenderers}
                           toolCallDraftSource={toolCallDraftSource}
+                          agents={agents}
                         />
                       )}
 
@@ -772,6 +776,7 @@ export const Message: React.FC<MessageProps> = memo(({
                           labels={labels}
                           toolRenderers={toolRenderers}
                           toolCallDraftSource={toolCallDraftSource}
+                          agents={agents}
                         />
                       )}
 

@@ -4,6 +4,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
   AssistantActivity,
+  AskToolRenderer,
   defaultChatConfig,
   formatToolDetailValue,
   mergeConfig,
@@ -107,6 +108,39 @@ test('tool renderer registry uses exact names and preserves JSON fallback format
     formatToolDetailValue({ query: 'evidence' }),
     '{\n  "query": "evidence"\n}',
   );
+});
+
+test('built-in ask renderer presents a public agent mention and remains overridable', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(AssistantActivity, {
+      agents: [{ id: 'east', name: 'East', color: '#84cc16' }],
+      activity: {
+        items: [{
+          id: 'call-ask',
+          kind: 'tool',
+          status: 'active',
+          toolId: 'ask',
+          toolName: 'Ask Agent',
+          details: {
+            toolCall: {
+              id: 'call-ask',
+              toolId: 'ask',
+              name: 'Ask Agent',
+              arguments: { target: 'east', message: 'Review this plan.' },
+              status: 'running',
+            },
+          },
+        }],
+      },
+    }),
+  );
+  assert.match(html, /@East/);
+  assert.match(html, /Review this plan\./);
+  assert.doesNotMatch(html, /Using Ask Agent/);
+  assert.equal(resolveToolRenderer('ask', undefined), AskToolRenderer);
+
+  const Override = () => React.createElement('div', null, 'Custom ask');
+  assert.equal(resolveToolRenderer('ask', { ask: Override }), Override);
 });
 
 test('tool activity keeps one expansion identity across draft reconciliation', () => {
