@@ -299,6 +299,7 @@ test('runCopilotzStream associates canonical delta phases with their LLM attempt
         phaseId: 'attempt-1:reasoning:0',
         phaseOrdinal: 0,
         isReasoning: true,
+        agent: { id: 'north', name: 'North' },
       },
       {
         text: 'Answer',
@@ -306,6 +307,7 @@ test('runCopilotzStream associates canonical delta phases with their LLM attempt
         phaseId: 'attempt-1:answer:1',
         phaseOrdinal: 1,
         isReasoning: false,
+        agent: { id: 'north', name: 'North' },
       },
       {
         text: 'Answer',
@@ -313,6 +315,7 @@ test('runCopilotzStream associates canonical delta phases with their LLM attempt
         phaseId: 'attempt-1:answer:1',
         phaseOrdinal: 1,
         isReasoning: false,
+        agent: { id: 'north', name: 'North' },
       },
     ]);
   } finally {
@@ -325,6 +328,7 @@ test('runCopilotzStream preserves interleaved text independently for parallel ag
   const encoder = new TextEncoder();
   const updates: Array<{
     attemptId?: string;
+    agentId?: string;
     text: string;
     complete: boolean;
   }> = [];
@@ -355,7 +359,12 @@ test('runCopilotzStream preserves interleaved text independently for parallel ag
       content: 'Ask both agents',
       user: { externalId: 'user-123' },
       onToken: (text, complete, _raw, context) => {
-        updates.push({ attemptId: context?.llmAttemptId, text, complete });
+        updates.push({
+          attemptId: context?.llmAttemptId,
+          agentId: context?.agent?.id,
+          text,
+          complete,
+        });
       },
     });
   } finally {
@@ -363,12 +372,12 @@ test('runCopilotzStream preserves interleaved text independently for parallel ag
   }
 
   assert.deepEqual(updates, [
-    { attemptId: 'attempt-east', text: 'East one', complete: false },
-    { attemptId: 'attempt-south', text: 'South one', complete: false },
-    { attemptId: 'attempt-east', text: 'East one East two', complete: false },
-    { attemptId: 'attempt-south', text: 'South one South two', complete: false },
-    { attemptId: 'attempt-east', text: 'East one East two', complete: true },
-    { attemptId: 'attempt-south', text: 'South one South two', complete: true },
+    { attemptId: 'attempt-east', agentId: 'east', text: 'East one', complete: false },
+    { attemptId: 'attempt-south', agentId: 'south', text: 'South one', complete: false },
+    { attemptId: 'attempt-east', agentId: 'east', text: 'East one East two', complete: false },
+    { attemptId: 'attempt-south', agentId: 'south', text: 'South one South two', complete: false },
+    { attemptId: 'attempt-east', agentId: 'east', text: 'East one East two', complete: true },
+    { attemptId: 'attempt-south', agentId: 'south', text: 'South one South two', complete: true },
   ]);
 });
 

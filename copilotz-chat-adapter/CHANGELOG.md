@@ -1,5 +1,13 @@
 # @copilotz/chat-adapter
 
+## 0.59.24
+
+### Patch Changes
+
+- Preserve each LLM attempt's agent identity through terminal stream events so
+  parallel agent answers keep their sender, avatar, and independent render row
+  when the originating agent resumes.
+
 ## 0.59.22
 
 ### Patch Changes

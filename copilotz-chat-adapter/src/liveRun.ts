@@ -209,6 +209,14 @@ export const createLiveRunState = (initialMessageId: string): LiveRunState => ({
   draftIdByCallId: new Map(),
 });
 
+export const selectLiveRunSender = (
+  state: LiveRunState,
+  attemptId: string,
+  incoming: ChatSender | undefined,
+  fallback: ChatSender | undefined,
+): ChatSender | undefined =>
+  incoming ?? state.attemptsById.get(attemptId)?.sender ?? fallback;
+
 const ensureAttempt = (
   state: LiveRunState,
   attemptId: string,

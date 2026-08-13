@@ -86,3 +86,22 @@ test('recovery-linked fragments hydrate as one exact streamed answer', () => {
   assert.equal(groups.length, 1);
   assert.equal(joinMessageGroupContent(groups[0].messages), 'partial answer');
 });
+
+test('adjacent parallel-agent completions retain independent avatar groups', () => {
+  const east: ChatSender = {
+    type: 'agent', id: 'east', name: 'East', agentId: 'east',
+  };
+  const south: ChatSender = {
+    type: 'agent', id: 'south', name: 'South', agentId: 'south',
+  };
+  const groups = groupMessagesForRender([
+    { id: 'east-answer', role: 'assistant', content: 'East answer', timestamp: 1, sender: east, isComplete: true },
+    { id: 'south-answer', role: 'assistant', content: 'South answer', timestamp: 2, sender: south, isComplete: true },
+  ]);
+
+  assert.equal(groups.length, 2);
+  assert.deepEqual(groups.map((group) => group.primaryMessage.sender?.id), [
+    'east',
+    'south',
+  ]);
+});

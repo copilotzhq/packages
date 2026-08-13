@@ -4,6 +4,7 @@ import type { ChatSender } from '@copilotz/chat-ui';
 import {
   applyLiveRunOperations,
   createLiveRunState,
+  selectLiveRunSender,
   transitionLiveRun,
 } from '../src/liveRun.ts';
 
@@ -130,12 +131,21 @@ test('live run keeps interleaved parallel agent attempts in independent messages
   dispatch({ type: 'token', attemptId: 'south-attempt', phaseId: 'south-attempt:answer:0', partial: 'South one', isReasoning: false, sender: south, at: 2 });
   dispatch({ type: 'token', attemptId: 'east-attempt', phaseId: 'east-attempt:answer:0', partial: 'East one two', isReasoning: false, sender, at: 3 });
   dispatch({ type: 'token', attemptId: 'south-attempt', phaseId: 'south-attempt:answer:0', partial: 'South one two', isReasoning: false, sender: south, at: 4 });
+  dispatch({ type: 'token', attemptId: 'east-attempt', phaseId: 'east-attempt:answer:0', partial: 'East one two', isReasoning: false, at: 5 });
+  dispatch({ type: 'token', attemptId: 'south-attempt', phaseId: 'south-attempt:answer:0', partial: 'South one two', isReasoning: false, at: 6 });
+  dispatch({ type: 'attempt-result', attemptId: 'east-attempt', at: 7 });
+  dispatch({ type: 'attempt-result', attemptId: 'south-attempt', at: 8 });
 
   assert.deepEqual(messages.map((message) => message.content), [
     'East one two',
     'South one two',
   ]);
   assert.deepEqual(messages.map((message) => message.sender?.id), ['north', 'south']);
+  assert.deepEqual(messages.map((message) => message.isStreaming), [false, false]);
+  assert.equal(
+    selectLiveRunSender(run, 'south-attempt', undefined, sender)?.id,
+    'south',
+  );
 });
 
 test('tool result received before its call is applied when the call arrives', () => {

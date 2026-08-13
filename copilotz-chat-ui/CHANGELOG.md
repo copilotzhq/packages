@@ -1,5 +1,12 @@
 # @copilotz/chat-ui
 
+## 0.59.24
+
+### Patch Changes
+
+- Keep adjacent completed answers from different agents in independent message
+  groups so each participant retains its own header and avatar.
+
 ## 0.59.22
 
 ### Patch Changes

@@ -179,6 +179,10 @@ export type StreamTokenContext = {
   llmAttemptId: string;
   phaseId: string;
   phaseOrdinal: number;
+  agent?: {
+    id: string;
+    name: string;
+  };
 };
 
 type StreamCallbacks = {
@@ -230,6 +234,10 @@ type StreamAttemptAccumulator = {
   activePhaseKind: "reasoning" | "answer" | null;
   activePhaseId: string | null;
   phaseOrdinal: number;
+  agent?: {
+    id: string;
+    name: string;
+  };
 };
 
 export class CopilotzRequestError extends Error {
@@ -641,7 +649,31 @@ export async function runCopilotzStream(
   const collectedMessages: any[] = [];
   let collectedMedia: Record<string, string> | null = null;
 
-  const createAttempt = (id: string): StreamAttemptAccumulator => {
+  const streamAgent = (
+    event: unknown,
+  ): StreamAttemptAccumulator["agent"] => {
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      return undefined;
+    }
+    const raw = event as Record<string, unknown>;
+    const payload = raw.payload && typeof raw.payload === "object" &&
+        !Array.isArray(raw.payload)
+      ? raw.payload as Record<string, unknown>
+      : raw;
+    const value = payload.agent && typeof payload.agent === "object" &&
+        !Array.isArray(payload.agent)
+      ? payload.agent as Record<string, unknown>
+      : undefined;
+    return value && typeof value.id === "string" && value.id.trim() &&
+        typeof value.name === "string" && value.name.trim()
+      ? { id: value.id.trim(), name: value.name.trim() }
+      : undefined;
+  };
+
+  const createAttempt = (
+    id: string,
+    agent?: StreamAttemptAccumulator["agent"],
+  ): StreamAttemptAccumulator => {
     const attempt = {
       id,
       text: "",
@@ -649,6 +681,7 @@ export async function runCopilotzStream(
       activePhaseKind: null,
       activePhaseId: null,
       phaseOrdinal: -1,
+      ...(agent ? { agent } : {}),
     } satisfies StreamAttemptAccumulator;
     attempts.set(id, attempt);
     return attempt;
@@ -659,7 +692,10 @@ export async function runCopilotzStream(
     const attemptId = eventAttemptId ?? lastObservedAttemptId ??
       `stream-attempt:${fallbackAttemptOrdinal++}`;
     lastObservedAttemptId = attemptId;
-    return attempts.get(attemptId) ?? createAttempt(attemptId);
+    const agent = streamAgent(event);
+    const attempt = attempts.get(attemptId) ?? createAttempt(attemptId, agent);
+    if (agent) attempt.agent = agent;
+    return attempt;
   };
 
   const getTokenContext = (
@@ -678,6 +714,7 @@ export async function runCopilotzStream(
       llmAttemptId: attempt.id,
       phaseId: attempt.activePhaseId,
       phaseOrdinal: attempt.phaseOrdinal,
+      ...(attempt.agent ? { agent: attempt.agent } : {}),
     };
   };
 
@@ -753,6 +790,7 @@ export async function runCopilotzStream(
               llmAttemptId: attempt.id,
               phaseId: attempt.activePhaseId,
               phaseOrdinal: attempt.phaseOrdinal,
+              ...(attempt.agent ? { agent: attempt.agent } : {}),
             });
             if (!isReasoning) lastCompletedText = value;
           }

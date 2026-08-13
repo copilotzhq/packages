@@ -18,7 +18,7 @@ import {
 import { canAttachToStreamingAssistant, extractLiveToolCallDelta, extractToolExecutionLifecycle, extractToolOutputDelta, mergePersistedToolResults, matchesToolResultUpdate, parseCompletedToolCallDraft, prependUniqueMessages, type ToolResultUpdate } from './toolActivity';
 import { isSameThreadIdentity } from './threadIdentity';
 import { CLIENT_MESSAGE_ID_METADATA_KEY, reconcileThreadMessages } from './messageReconciliation';
-import { applyLiveRunOperations, createLiveRunState, getLatestLiveRunMessageId, transitionLiveRun, type LiveRunAction } from './liveRun';
+import { applyLiveRunOperations, createLiveRunState, getLatestLiveRunMessageId, selectLiveRunSender, transitionLiveRun, type LiveRunAction } from './liveRun';
 import {
   createToolCallDraftStore,
   type ToolCallDraftStore,
@@ -906,14 +906,21 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
           targetAgent: targetAgentNameRef.current,
           getRequestHeaders,
           onToken: (token, _isComplete, raw, opts) => {
-            const rawAgent = raw?.payload?.agent ?? raw?.agent ?? null;
-            const sender = rawAgent
-              ? resolveAgentSender(rawAgent, senderOptionsRef.current)
-              : params.assistantSender;
             const attemptId = opts?.llmAttemptId ??
               liveRunState.activeAttemptId ??
               liveRunState.lastAttemptId ??
               `stream-attempt:${initialAssistantMessageId}`;
+            const rawAgent = raw?.payload?.agent ?? raw?.agent ?? null;
+            const agent = rawAgent ?? opts?.agent;
+            const incomingSender = agent
+              ? resolveAgentSender(agent, senderOptionsRef.current)
+              : undefined;
+            const sender = selectLiveRunSender(
+              liveRunState,
+              attemptId,
+              incomingSender,
+              params.assistantSender,
+            );
             const isReasoning = opts?.isReasoning ?? false;
             const phaseId = opts?.phaseId ??
               `${attemptId}:${isReasoning ? 'reasoning' : 'answer'}:0`;
