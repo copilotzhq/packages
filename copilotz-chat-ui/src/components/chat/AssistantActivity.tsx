@@ -49,7 +49,7 @@ const hasActiveItem = (activity: AssistantActivityBlock): boolean =>
   activity.items.some((item) => item.status === 'active');
 
 const hasDetails = (item: AssistantActivityItem): boolean =>
-  Boolean(item.details?.reasoning || item.details?.toolCall || item.details?.toolCallDraftId || item.details?.result !== undefined || item.details?.error);
+  Boolean(item.details?.reasoning || item.details?.toolCall || item.details?.toolCallDraftId || item.details?.result !== undefined || item.details?.toolOutput || item.details?.error);
 
 const resolveActivityLabel = (
   item: AssistantActivityItem,
@@ -133,6 +133,7 @@ const ActivityDetails = memo(function ActivityDetails({
           draft={draft}
           status={status}
           result={item.details?.result ?? toolCall?.result}
+          output={item.details?.toolOutput}
           error={item.details?.error}
         />
       </div>
@@ -162,6 +163,15 @@ const ActivityDetails = memo(function ActivityDetails({
       {item.details?.result !== undefined && (
         <pre className="overflow-x-auto rounded-md bg-muted/60 p-2 text-xs">
           {formatToolDetailValue(item.details.result)}
+        </pre>
+      )}
+      {item.details?.result === undefined && item.details?.toolOutput && (
+        <pre className="overflow-x-auto rounded-md bg-muted/60 p-2 text-xs">
+          {formatToolDetailValue(Object.fromEntries(
+            Object.entries(item.details.toolOutput.channels).map(
+              ([channel, state]) => [channel, state.value],
+            ),
+          ))}
         </pre>
       )}
     </div>

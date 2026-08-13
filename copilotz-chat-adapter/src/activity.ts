@@ -3,6 +3,7 @@ import type {
   AssistantActivityStatus,
   ChatMessage,
   ToolCall,
+  ToolOutputState,
 } from '@copilotz/chat-ui';
 
 export interface InternalChatMessage extends ChatMessage {}
@@ -255,17 +256,130 @@ export const applyAssistantToolResult = (
   return setItems(message, next);
 };
 
+export type AssistantToolOutputUpdate = {
+  id: string;
+  toolExecutionId: string;
+  channel: string;
+  mode: 'append' | 'replace';
+  delta: unknown;
+  sequence: number;
+  mediaType?: string;
+};
+
+const appendOutputValue = (current: unknown, delta: unknown): unknown => {
+  if (current === undefined) return delta;
+  if (typeof current === 'string' && typeof delta === 'string') {
+    return current + delta;
+  }
+  if (Array.isArray(current) && Array.isArray(delta)) {
+    return [...current, ...delta];
+  }
+  return Array.isArray(current) ? [...current, delta] : [current, delta];
+};
+
+export const applyAssistantToolOutput = (
+  message: InternalChatMessage,
+  update: AssistantToolOutputUpdate,
+): InternalChatMessage => {
+  if (message.role !== 'assistant') return message;
+  const items = getItems(message);
+  const index = items.findIndex((item) => (
+    item.kind === 'tool' && (
+      item.id === update.id ||
+      item.details?.toolCall?.toolExecutionId === update.toolExecutionId
+    )
+  ));
+  if (index === -1) return message;
+
+  const item = items[index];
+  const currentOutput: ToolOutputState = item.details?.toolOutput ?? {
+    channels: {},
+  };
+  const currentChannel = currentOutput.channels[update.channel];
+  if (currentChannel && update.sequence <= currentChannel.sequence) {
+    return message;
+  }
+  const value = update.mode === 'append'
+    ? appendOutputValue(currentChannel?.value, update.delta)
+    : update.delta;
+  const toolOutput: ToolOutputState = {
+    channels: {
+      ...currentOutput.channels,
+      [update.channel]: {
+        value,
+        sequence: update.sequence,
+        ...(update.mediaType ? { mediaType: update.mediaType } : {}),
+      },
+    },
+  };
+  const currentToolCall = item.details?.toolCall;
+  const toolCall = currentToolCall
+    ? {
+      ...currentToolCall,
+      toolExecutionId: update.toolExecutionId,
+      ...(update.channel === 'result' ? { result: value } : {}),
+    }
+    : currentToolCall;
+  const next = [...items];
+  next[index] = {
+    ...item,
+    status: 'active',
+    details: {
+      ...(item.details ?? {}),
+      ...(toolCall ? { toolCall } : {}),
+      toolOutput,
+      ...(update.channel === 'result' ? { result: value } : {}),
+    },
+  };
+  return setItems({
+    ...message,
+    isStreaming: true,
+    isComplete: false,
+  }, next);
+};
+
+export const bindAssistantToolExecution = (
+  message: InternalChatMessage,
+  input: {
+    id: string;
+    toolExecutionId: string;
+    name?: string;
+    status?: ToolCall['status'];
+  },
+): InternalChatMessage => {
+  if (message.role !== 'assistant') return message;
+  const item = getItems(message).find((candidate) => (
+    candidate.kind === 'tool' && candidate.id === input.id
+  ));
+  if (!item) return message;
+  const currentToolCall = item.details?.toolCall;
+  if (
+    currentToolCall?.toolExecutionId === input.toolExecutionId &&
+    currentToolCall.status === (input.status ?? 'running') &&
+    (!input.name || currentToolCall.name === input.name)
+  ) return message;
+  return applyAssistantToolResult(message, {
+    id: input.id,
+    toolExecutionId: input.toolExecutionId,
+    name: input.name ?? item.toolName ?? input.id,
+    status: input.status ?? 'running',
+  });
+};
+
 export const finalizeAssistantMessage = (
   message: InternalChatMessage,
   finalAnswer?: string,
   completedAt = Date.now(),
 ): InternalChatMessage => {
   if (message.role !== 'assistant') return message;
+  const hasActiveTool = getItems(message).some((item) => (
+    item.kind === 'tool' && item.status === 'active'
+  ));
   const completed = completeItems({
     ...message,
     ...(typeof finalAnswer === 'string' && finalAnswer.length > 0 ? { content: finalAnswer } : {}),
-    isStreaming: false,
-    isComplete: true,
+    isStreaming: hasActiveTool,
+    isComplete: !hasActiveTool,
   }, (item) => item.kind === 'thinking' || item.kind === 'answering', completedAt);
   return setItems(completed, getItems(completed).filter((item) => item.kind !== 'answering'));
 };

@@ -512,7 +512,7 @@ function App() {
 ## Requirements
 
 - React 18+
-- Copilotz backend with `/v1/providers/web` endpoint
+- Copilotz backend with the canonical `/v1/channels/web` endpoint
 - Environment variables configured
 
 ---

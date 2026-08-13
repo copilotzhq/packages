@@ -616,7 +616,7 @@ export async function runCopilotzStream(
     },
   };
 
-  const response = await fetch(apiUrl("/v1/providers/web"), {
+  const response = await fetch(apiUrl("/v1/channels/web"), {
     method: "POST",
     headers: await withAuthHeaders({
       "Content-Type": "application/json",
@@ -656,8 +656,6 @@ export async function runCopilotzStream(
   let aggregatedText = "";
   let aggregatedReasoning = "";
   let lastCompletedText = "";
-  let lastTokenWasReasoning = false;
-  let hadNonReasoningContent = false;
   let activeLlmAttemptId: string | null = null;
   let activePhaseKind: "reasoning" | "answer" | null = null;
   let activePhaseId: string | null = null;
@@ -669,8 +667,6 @@ export async function runCopilotzStream(
   const resetTokenAggregation = () => {
     aggregatedText = "";
     aggregatedReasoning = "";
-    lastTokenWasReasoning = false;
-    hadNonReasoningContent = false;
   };
 
   const startAttempt = (event: unknown) => {
@@ -680,6 +676,15 @@ export async function runCopilotzStream(
     activePhaseId = null;
     phaseOrdinal = -1;
     resetTokenAggregation();
+  };
+
+  const ensureAttempt = (event: unknown) => {
+    const eventAttemptId = getLlmAttemptId(event);
+    if (!activeLlmAttemptId || (
+      eventAttemptId && eventAttemptId !== activeLlmAttemptId
+    )) {
+      startAttempt(event);
+    }
   };
 
   const getTokenContext = (isReasoning: boolean): StreamTokenContext => {
@@ -715,9 +720,9 @@ export async function runCopilotzStream(
 
     if (!dataRaw) return;
 
-    let payload: any;
+    let event: any;
     try {
-      payload = JSON.parse(dataRaw);
+      event = JSON.parse(dataRaw);
     } catch (error) {
       console.warn(
         "copilotzService: failed to parse SSE payload",
@@ -726,117 +731,78 @@ export async function runCopilotzStream(
       );
       return;
     }
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      throw new Error("Copilotz channel event must be an object");
+    }
+    if (typeof event.type !== "string" || event.type !== eventType) {
+      throw new Error(
+        `Copilotz channel event mismatch: '${eventType}' does not match payload`,
+      );
+    }
 
-    switch (eventType) {
-      case "LLM_CALL": {
-        startAttempt(payload);
-        await onMessageEvent?.(payload);
-        break;
-      }
-      case "TOKEN": {
-        const inner = payload?.payload ?? payload;
-        const chunk = typeof inner?.token === "string" ? inner.token : "";
-        const isComplete = Boolean(inner?.isComplete);
-        // Explicit flags always win. Legacy non-empty tokens without a flag
-        // are answer text; only an empty completion may inherit its phase.
-        const isReasoning = typeof inner?.isReasoning === "boolean"
-          ? inner.isReasoning
-          : chunk.length === 0 && isComplete
-            ? activePhaseKind === "reasoning" || lastTokenWasReasoning
-            : false;
-        // Establish a fallback attempt before appending the first token;
-        // startAttempt() resets the per-attempt aggregation buffers.
-        const tokenContext = getTokenContext(isReasoning);
-        if (isReasoning && !lastTokenWasReasoning && hadNonReasoningContent) {
-          aggregatedReasoning = "";
-          aggregatedText = "";
-          hadNonReasoningContent = false;
+    if (event.type === "text.delta" || event.type === "reasoning.delta") {
+      ensureAttempt(event);
+      const inner = event.payload;
+      const chunk = typeof inner?.text === "string" ? inner.text : "";
+      const isReasoning = event.type === "reasoning.delta";
+      const tokenContext = getTokenContext(isReasoning);
+      if (chunk) {
+        if (isReasoning) {
+          aggregatedReasoning = appendChunk(aggregatedReasoning, chunk);
+        } else {
+          aggregatedText = appendChunk(aggregatedText, chunk);
         }
-        lastTokenWasReasoning = isReasoning;
-        if (!isReasoning) hadNonReasoningContent = true;
-        if (chunk) {
-          if (isReasoning) {
-            aggregatedReasoning = appendChunk(aggregatedReasoning, chunk);
-          } else {
-            aggregatedText = appendChunk(aggregatedText, chunk);
+        onToken?.(
+          isReasoning ? aggregatedReasoning : aggregatedText,
+          false,
+          event,
+          tokenContext,
+        );
+      }
+      return;
+    }
+
+    if (event.type === "message.created") {
+      collectedMessages.push(event);
+      const workflow = event.metadata?.copilotzWorkflow;
+      if (workflow?.kind === "agent_output") {
+        if (activePhaseKind && activePhaseId && activeLlmAttemptId) {
+          const isReasoning = activePhaseKind === "reasoning";
+          const value = isReasoning ? aggregatedReasoning : aggregatedText;
+          if (value) {
+            onToken?.(value, true, event, {
+              isReasoning,
+              llmAttemptId: activeLlmAttemptId,
+              phaseId: activePhaseId,
+              phaseOrdinal,
+            });
+            if (!isReasoning) lastCompletedText = value;
           }
-        }
-        if (chunk || isComplete) {
-          const tokenText = isReasoning ? aggregatedReasoning : aggregatedText;
-          onToken?.(tokenText, isComplete, payload, tokenContext);
-          if (isComplete) {
-            if (!isReasoning && tokenText) {
-              lastCompletedText = tokenText;
-            }
-            resetTokenAggregation();
-            activePhaseKind = null;
-            activePhaseId = null;
-          }
-        }
-        break;
-      }
-      case "NEW_MESSAGE": {
-        hadNonReasoningContent = true;
-        lastTokenWasReasoning = false;
-        collectedMessages.push(payload);
-        await onMessageEvent?.(payload);
-        break;
-      }
-      case "TOOL_CALL": {
-        hadNonReasoningContent = true;
-        lastTokenWasReasoning = false;
-        await onMessageEvent?.(payload);
-        break;
-      }
-      case "TOOL_CALL_DELTA": {
-        await onMessageEvent?.(payload);
-        break;
-      }
-      case "TOOL_RESULT":
-      case "LLM_RESULT": {
-        const resultAnswer =
-          typeof payload?.payload?.answer === "string"
-            ? payload.payload.answer
-            : typeof payload?.answer === "string"
-              ? payload.answer
-              : undefined;
-        if (resultAnswer) {
-          lastCompletedText = resultAnswer;
         }
         resetTokenAggregation();
-        await onMessageEvent?.(payload);
-        break;
+        activePhaseKind = null;
+        activePhaseId = null;
       }
-      case "ASSET_CREATED": {
-        const assetPayload =
-          (payload && typeof payload === "object" && "payload" in payload)
-            ? (payload as { payload?: any }).payload
-            : payload;
-        // Convert ASSET_CREATED to media format for backward compatibility
-        if (assetPayload?.dataUrl) {
-          collectedMedia = {
-            [assetPayload.assetId || "0"]: assetPayload.dataUrl,
-          };
-        }
-        // Call the asset event handler
-        await onAssetEvent?.(assetPayload);
-        break;
-      }
-      case "ERROR":
-        throw new Error(payload?.error || "Copilotz stream error");
-      default: {
-        // Forward non-contract/custom events without turning them into
-        // lifecycle primitives implicitly.
-        const hasEnvelope =
-          payload && typeof payload === "object" && "type" in payload;
-        if (hasEnvelope) {
-          await onMessageEvent?.(payload);
-        } else {
-          await onMessageEvent?.({ type: eventType, payload });
-        }
-        break;
-      }
+      await onMessageEvent?.(event);
+      return;
     }
+
+    if (event.type === "asset.created") {
+      const assetPayload = event.payload;
+      if (assetPayload?.dataUrl) {
+        collectedMedia = {
+          [assetPayload.assetId || "0"]: assetPayload.dataUrl,
+        };
+      }
+      await onAssetEvent?.(assetPayload);
+      return;
+    }
+
+    if (event.type === "error" || event.type === "stream.failed") {
+      throw new Error(event.payload?.message || "Copilotz stream error");
+    }
+
+    await onMessageEvent?.(event);
   };
 
   while (true) {

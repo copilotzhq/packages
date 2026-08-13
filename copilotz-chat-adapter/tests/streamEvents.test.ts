@@ -4,6 +4,7 @@ import {
   getLlmAttemptId,
   getRoutingMessage,
   getVisibleLlmResultAnswer,
+  isAgentOutputMessageEvent,
   isTerminalEmptyLlmResultEvent,
 } from '../src/streamEvents.ts';
 
@@ -29,6 +30,32 @@ test('LLM attempt identity is read from event metadata with subject fallback', (
   }), 'attempt-from-subject');
 
   assert.equal(getLlmAttemptId({ subjectType: 'thread', subjectId: 'thread-1' }), null);
+});
+
+test('canonical events expose attempt identity from payload, subject, and workflow metadata', () => {
+  assert.equal(getLlmAttemptId({
+    type: 'text.delta',
+    payload: { llmAttemptId: 'attempt-from-payload' },
+  }), 'attempt-from-payload');
+  assert.equal(getLlmAttemptId({
+    type: 'llm_attempt.completed',
+    subject: { type: 'llm_attempt', id: 'attempt-from-subject' },
+  }), 'attempt-from-subject');
+  const message = {
+    type: 'message.created',
+    metadata: {
+      copilotzWorkflow: {
+        kind: 'agent_output',
+        llmAttemptId: 'attempt-from-workflow',
+      },
+    },
+  };
+  assert.equal(getLlmAttemptId(message), 'attempt-from-workflow');
+  assert.equal(isAgentOutputMessageEvent(message), true);
+  assert.equal(isAgentOutputMessageEvent({
+    ...message,
+    metadata: { copilotzWorkflow: { kind: 'tool_result' } },
+  }), false);
 });
 
 test('terminal empty LLM result is detected when it has no tools or routing', () => {

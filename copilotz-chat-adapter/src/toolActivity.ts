@@ -1,4 +1,8 @@
-import type { AssistantActivityItem, ChatMessage as ChatViewMessage } from '@copilotz/chat-ui';
+import type {
+  AssistantActivityItem,
+  ChatMessage as ChatViewMessage,
+  ToolCallDraftSnapshot,
+} from '@copilotz/chat-ui';
 // @ts-expect-error Direct Node TypeScript tests require the source extension.
 import { applyAssistantToolResult, type InternalChatMessage } from './activity.ts';
 import {
@@ -42,6 +46,27 @@ export type ToolResultUpdate = {
   result?: unknown;
   error?: string;
   endTime: number;
+};
+
+export type ParsedToolOutputDelta = {
+  id: string;
+  toolExecutionId: string;
+  name?: string;
+  channel: string;
+  mode: 'append' | 'replace';
+  delta: unknown;
+  sequence: number;
+  mediaType?: string;
+};
+
+export type ParsedToolExecutionLifecycle = {
+  id: string;
+  toolExecutionId: string;
+  name?: string;
+  status: ToolCallStatus;
+  error?: string;
+  terminal: boolean;
+  endTime?: number;
 };
 
 const fail = (message: string): never => {
@@ -203,6 +228,99 @@ export const extractLiveToolCallDelta = (
     phase,
     delta: expectStringValue(value.delta, 'TOOL_CALL_DELTA payload.delta'),
     ...(toolCallId ? { toolCallId } : {}),
+  };
+};
+
+export const parseCompletedToolCallDraft = (
+  snapshot: ToolCallDraftSnapshot,
+): ParsedToolCall => {
+  if (snapshot.phase !== 'complete') {
+    return fail('tool call draft must be complete');
+  }
+  const id = expectString(snapshot.toolCallId, 'tool call draft.toolCallId');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(snapshot.rawInput);
+  } catch {
+    return fail('tool call draft rawInput must be valid JSON');
+  }
+  const value = expectRecord(parsed, 'tool call draft rawInput');
+  const name = expectString(value.name, 'tool call draft rawInput.name');
+  if (name !== snapshot.toolName) {
+    return fail('tool call draft name changed during streaming');
+  }
+  return {
+    id,
+    name,
+    arguments: expectToolArguments(
+      value.arguments ?? value.args,
+      'tool call draft rawInput.arguments',
+    ),
+    status: 'running',
+  };
+};
+
+export const extractToolOutputDelta = (
+  event: Record<string, unknown>,
+): ParsedToolOutputDelta => {
+  const value = expectRecord(event.payload, 'tool_output.delta payload');
+  const mode = value.mode;
+  if (mode !== 'append' && mode !== 'replace') {
+    return fail('tool_output.delta payload.mode must be append or replace');
+  }
+  const mediaType = value.mediaType === undefined
+    ? undefined
+    : expectString(value.mediaType, 'tool_output.delta payload.mediaType');
+  const name = expectString(value.toolId, 'tool_output.delta payload.toolId');
+  return {
+    id: expectString(value.toolCallId, 'tool_output.delta payload.toolCallId'),
+    toolExecutionId: expectString(
+      value.toolExecutionId,
+      'tool_output.delta payload.toolExecutionId',
+    ),
+    name,
+    channel: expectString(value.channel, 'tool_output.delta payload.channel'),
+    mode,
+    delta: value.delta,
+    sequence: expectNonNegativeInteger(
+      event.sequence,
+      'tool_output.delta sequence',
+    ),
+    ...(mediaType ? { mediaType } : {}),
+  };
+};
+
+export const extractToolExecutionLifecycle = (
+  event: Record<string, unknown>,
+  now: () => number = () => Date.now(),
+): ParsedToolExecutionLifecycle => {
+  const type = expectString(event.type, 'tool execution event.type');
+  const value = expectRecord(event.payload, `${type} payload`);
+  const status = expectToolStatus(value.status, `${type} payload.status`);
+  const terminal = type === 'tool_execution.completed' ||
+    type === 'tool_execution.failed' ||
+    type === 'tool_execution.cancelled';
+  if (type !== 'tool_execution.created' && !terminal) {
+    return fail(`unsupported tool execution lifecycle '${type}'`);
+  }
+  const safeError = value.safeError === undefined
+    ? undefined
+    : expectRecord(value.safeError, `${type} payload.safeError`);
+  const error = safeError === undefined
+    ? undefined
+    : formatToolError(safeError.message ?? safeError);
+  const name = expectString(value.toolId, `${type} payload.toolId`);
+  return {
+    id: expectString(value.toolCallId, `${type} payload.toolCallId`),
+    toolExecutionId: expectString(
+      value.toolExecutionId,
+      `${type} payload.toolExecutionId`,
+    ),
+    name,
+    status,
+    ...(error ? { error } : {}),
+    terminal,
+    ...(terminal ? { endTime: now() } : {}),
   };
 };
 

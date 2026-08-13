@@ -3,10 +3,13 @@ import type { ChatSender, ToolCall } from '@copilotz/chat-ui';
 import {
   appendAssistantToolCall,
   appendAssistantToolDraft,
+  applyAssistantToolOutput,
   applyAssistantToolResult,
+  bindAssistantToolExecution,
   finalizeAssistantMessage,
   reconcileAssistantToolDraft,
   removeAssistantToolDraft,
+  type AssistantToolOutputUpdate,
   type InternalChatMessage,
   updateAssistantMessageToken,
 } from './activity.ts';
@@ -26,7 +29,11 @@ export type LiveRunState = {
   lastAttemptId: string | null;
   attemptsById: Map<string, AttemptCursor>;
   toolMessageByCallId: Map<string, string>;
+  toolExecutionByCallId: Map<string, string>;
+  toolCallByExecutionId: Map<string, string>;
+  settledToolCallIds: Set<string>;
   pendingToolResultsByCallId: Map<string, ToolResultUpdate>;
+  pendingToolOutputsByCallId: Map<string, AssistantToolOutputUpdate[]>;
   draftMessageById: Map<string, string>;
   draftIdByCallId: Map<string, string>;
 };
@@ -59,6 +66,19 @@ export type LiveRunAction =
     toolCall: ToolCall;
     sender?: ChatSender;
     at: number;
+  }
+  | {
+    type: 'tool-execution-start';
+    attemptId?: string | null;
+    id: string;
+    toolExecutionId: string;
+    name?: string;
+    sender?: ChatSender;
+    at: number;
+  }
+  | {
+    type: 'tool-output';
+    update: AssistantToolOutputUpdate;
   }
   | {
     type: 'tool-draft-start';
@@ -137,6 +157,18 @@ export type LiveRunOperation =
     type: 'resolve-tool';
     messageId: string;
     update: ToolResultUpdate;
+  }
+  | {
+    type: 'bind-tool-execution';
+    messageId: string;
+    id: string;
+    toolExecutionId: string;
+    name?: string;
+  }
+  | {
+    type: 'apply-tool-output';
+    messageId: string;
+    update: AssistantToolOutputUpdate;
   };
 
 type TransitionOptions = {
@@ -147,7 +179,16 @@ const copyState = (state: LiveRunState): LiveRunState => ({
   ...state,
   attemptsById: new Map(state.attemptsById),
   toolMessageByCallId: new Map(state.toolMessageByCallId),
+  toolExecutionByCallId: new Map(state.toolExecutionByCallId),
+  toolCallByExecutionId: new Map(state.toolCallByExecutionId),
+  settledToolCallIds: new Set(state.settledToolCallIds),
   pendingToolResultsByCallId: new Map(state.pendingToolResultsByCallId),
+  pendingToolOutputsByCallId: new Map(
+    [...state.pendingToolOutputsByCallId].map(([id, updates]) => [
+      id,
+      [...updates],
+    ]),
+  ),
   draftMessageById: new Map(state.draftMessageById),
   draftIdByCallId: new Map(state.draftIdByCallId),
 });
@@ -159,7 +200,11 @@ export const createLiveRunState = (initialMessageId: string): LiveRunState => ({
   lastAttemptId: null,
   attemptsById: new Map(),
   toolMessageByCallId: new Map(),
+  toolExecutionByCallId: new Map(),
+  toolCallByExecutionId: new Map(),
+  settledToolCallIds: new Set(),
   pendingToolResultsByCallId: new Map(),
+  pendingToolOutputsByCallId: new Map(),
   draftMessageById: new Map(),
   draftIdByCallId: new Map(),
 });
@@ -327,8 +372,27 @@ export const transitionLiveRun = (
   }
 
   if (action.type === 'tool-call') {
-    if (state.toolMessageByCallId.has(action.toolCall.id)) {
+    if (state.settledToolCallIds.has(action.toolCall.id)) {
       return { state, operations: [] };
+    }
+    const existingMessageId = state.toolMessageByCallId.get(action.toolCall.id);
+    if (existingMessageId) {
+      const toolExecutionId = state.toolExecutionByCallId.get(
+        action.toolCall.id,
+      );
+      return {
+        state,
+        operations: [{
+          type: 'append-tool',
+          messageId: existingMessageId,
+          toolCall: {
+            ...action.toolCall,
+            ...(toolExecutionId ? { toolExecutionId } : {}),
+          },
+          sender: action.sender,
+          at: action.at,
+        }],
+      };
     }
     const draftId = state.draftIdByCallId.get(action.toolCall.id);
     const draftMessageId = draftId
@@ -353,6 +417,10 @@ export const transitionLiveRun = (
         options,
       );
     const next = copyState(ensured.state);
+    const knownExecutionId = next.toolExecutionByCallId.get(action.toolCall.id);
+    const toolCall = knownExecutionId
+      ? { ...action.toolCall, toolExecutionId: knownExecutionId }
+      : action.toolCall;
     next.toolMessageByCallId.set(action.toolCall.id, ensured.cursor.messageId);
     if (draftId) {
       next.draftMessageById.delete(draftId);
@@ -361,7 +429,12 @@ export const transitionLiveRun = (
     const pendingResult = next.pendingToolResultsByCallId.get(action.toolCall.id);
     if (pendingResult) {
       next.pendingToolResultsByCallId.delete(action.toolCall.id);
+      next.settledToolCallIds.add(action.toolCall.id);
     }
+    const pendingOutputs = next.pendingToolOutputsByCallId.get(
+      action.toolCall.id,
+    ) ?? [];
+    next.pendingToolOutputsByCallId.delete(action.toolCall.id);
     return {
       state: next,
       operations: [
@@ -371,23 +444,88 @@ export const transitionLiveRun = (
             type: 'reconcile-tool-draft' as const,
             messageId: ensured.cursor.messageId,
             draftId,
-            toolCall: action.toolCall,
+            toolCall,
             sender: action.sender ?? ensured.cursor.sender,
             at: action.at,
           }
           : {
             type: 'append-tool' as const,
             messageId: ensured.cursor.messageId,
-            toolCall: action.toolCall,
+            toolCall,
             sender: action.sender ?? ensured.cursor.sender,
             at: action.at,
           },
+        ...pendingOutputs.map((update) => ({
+          type: 'apply-tool-output' as const,
+          messageId: ensured.cursor.messageId,
+          update,
+        })),
         ...(pendingResult ? [{
           type: 'resolve-tool' as const,
           messageId: ensured.cursor.messageId,
           update: pendingResult,
         }] : []),
       ],
+    };
+  }
+
+  if (action.type === 'tool-execution-start') {
+    const next = copyState(state);
+    next.toolExecutionByCallId.set(action.id, action.toolExecutionId);
+    next.toolCallByExecutionId.set(action.toolExecutionId, action.id);
+    const messageId = next.toolMessageByCallId.get(action.id);
+    if (messageId) {
+      return {
+        state: next,
+        operations: [{
+          type: 'bind-tool-execution',
+          messageId,
+          id: action.id,
+          toolExecutionId: action.toolExecutionId,
+          ...(action.name ? { name: action.name } : {}),
+        }],
+      };
+    }
+    const attemptId = action.attemptId ?? state.activeAttemptId ??
+      state.lastAttemptId ?? `tool-attempt:${action.id}`;
+    return transitionLiveRun(next, {
+      type: 'tool-call',
+      attemptId,
+      sender: action.sender,
+      at: action.at,
+      toolCall: {
+        id: action.id,
+        toolExecutionId: action.toolExecutionId,
+        name: action.name ?? action.id,
+        arguments: {},
+        status: 'running',
+      },
+    }, options);
+  }
+
+  if (action.type === 'tool-output') {
+    const callId = action.update.id ||
+      state.toolCallByExecutionId.get(action.update.toolExecutionId);
+    if (!callId || state.settledToolCallIds.has(callId)) {
+      return { state, operations: [] };
+    }
+    const messageId = state.toolMessageByCallId.get(callId);
+    if (!messageId) {
+      const next = copyState(state);
+      const pending = next.pendingToolOutputsByCallId.get(callId) ?? [];
+      next.pendingToolOutputsByCallId.set(callId, [...pending, {
+        ...action.update,
+        id: callId,
+      }]);
+      return { state: next, operations: [] };
+    }
+    return {
+      state,
+      operations: [{
+        type: 'apply-tool-output',
+        messageId,
+        update: { ...action.update, id: callId },
+      }],
     };
   }
 
@@ -400,8 +538,10 @@ export const transitionLiveRun = (
     next.pendingToolResultsByCallId.set(action.update.id, action.update);
     return { state: next, operations: [] };
   }
+  const next = copyState(state);
+  next.settledToolCallIds.add(action.update.id);
   return {
-    state,
+    state: next,
     operations: [{ type: 'resolve-tool', messageId, update: action.update }],
   };
 };
@@ -501,6 +641,14 @@ const applyOperation = (
     };
   } else if (operation.type === 'remove-tool-draft') {
     updated = removeAssistantToolDraft(current, operation.draftId);
+  } else if (operation.type === 'bind-tool-execution') {
+    updated = bindAssistantToolExecution(current, {
+      id: operation.id,
+      toolExecutionId: operation.toolExecutionId,
+      ...(operation.name ? { name: operation.name } : {}),
+    });
+  } else if (operation.type === 'apply-tool-output') {
+    updated = applyAssistantToolOutput(current, operation.update);
   } else {
     const toolItem = current.activity?.items.find((item) => (
       item.kind === 'tool' && item.id === operation.update.id

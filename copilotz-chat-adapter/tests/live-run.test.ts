@@ -365,3 +365,78 @@ test('discarded tool draft removes its provisional activity', () => {
   assert.equal(messages[0].activity, undefined);
   assert.equal(run.draftMessageById.has('draft-1'), false);
 });
+
+test('tool output is visible before lifecycle settlement and survives it', () => {
+  let run = createLiveRunState('placeholder');
+  let messages = [{
+    id: 'placeholder',
+    role: 'assistant' as const,
+    content: '',
+    timestamp: 0,
+    isStreaming: true,
+    isComplete: false,
+    sender,
+  }];
+  const dispatch = (action: Parameters<typeof transitionLiveRun>[1]) => {
+    const transition = transitionLiveRun(run, action, {
+      createId: () => 'unused',
+    });
+    run = transition.state;
+    messages = applyLiveRunOperations(messages, transition.operations);
+  };
+
+  dispatch({ type: 'attempt-start', attemptId: 'attempt-1', sender, at: 1 });
+  dispatch({
+    type: 'tool-call',
+    attemptId: 'attempt-1',
+    sender,
+    at: 2,
+    toolCall: {
+      id: 'call-1',
+      name: 'terminal',
+      arguments: { stdin: 'pwd' },
+      status: 'running',
+    },
+  });
+  dispatch({
+    type: 'tool-execution-start',
+    id: 'call-1',
+    toolExecutionId: 'execution-1',
+    name: 'Terminal',
+    at: 3,
+  });
+  dispatch({
+    type: 'tool-output',
+    update: {
+      id: 'call-1',
+      toolExecutionId: 'execution-1',
+      channel: 'stdout',
+      mode: 'append',
+      delta: '/workspace\n',
+      sequence: 0,
+    },
+  });
+
+  assert.equal(messages[0].activity?.items[0].status, 'active');
+  assert.equal(
+    messages[0].activity?.items[0].details?.toolOutput?.channels.stdout.value,
+    '/workspace\n',
+  );
+
+  dispatch({
+    type: 'tool-result',
+    update: {
+      id: 'call-1',
+      toolExecutionId: 'execution-1',
+      name: 'Terminal',
+      status: 'completed',
+      endTime: 4,
+    },
+  });
+
+  assert.equal(messages[0].activity?.items[0].status, 'complete');
+  assert.equal(
+    messages[0].activity?.items[0].details?.toolOutput?.channels.stdout.value,
+    '/workspace\n',
+  );
+});

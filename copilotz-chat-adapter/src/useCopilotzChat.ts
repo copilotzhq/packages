@@ -12,14 +12,16 @@ import { isInternalMessageMetadata, prepareHydratedMessages } from './messageCon
 import {
   getLlmAttemptId,
   getStreamEventPayload,
-  getVisibleLlmResultAnswer,
-  isTerminalEmptyLlmResultEvent,
+  isAgentOutputMessageEvent,
 } from './streamEvents';
-import { canAttachToStreamingAssistant, extractLiveToolCall, extractLiveToolCallDelta, extractLiveToolResultUpdate, mergePersistedToolResults, matchesToolResultUpdate, prependUniqueMessages, type ToolResultUpdate } from './toolActivity';
+import { canAttachToStreamingAssistant, extractLiveToolCallDelta, extractToolExecutionLifecycle, extractToolOutputDelta, mergePersistedToolResults, matchesToolResultUpdate, parseCompletedToolCallDraft, prependUniqueMessages, type ToolResultUpdate } from './toolActivity';
 import { isSameThreadIdentity } from './threadIdentity';
 import { CLIENT_MESSAGE_ID_METADATA_KEY, reconcileThreadMessages } from './messageReconciliation';
 import { applyLiveRunOperations, createLiveRunState, getLatestLiveRunMessageId, transitionLiveRun, type LiveRunAction } from './liveRun';
-import { ToolCallDraftStore } from './toolCallDraftStore';
+import {
+  createToolCallDraftStore,
+  type ToolCallDraftStore,
+} from './toolCallDraftStore';
 
 const nowTs = () => Date.now();
 const generateId = () => (globalThis.crypto?.randomUUID?.() ?? `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`) as string;
@@ -154,7 +156,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   const recoveryPollGenerationRef = useRef(0);
   const toolCallDraftStoreRef = useRef<ToolCallDraftStore | null>(null);
   if (!toolCallDraftStoreRef.current) {
-    toolCallDraftStoreRef.current = new ToolCallDraftStore();
+    toolCallDraftStoreRef.current = createToolCallDraftStore();
   }
   const toolCallDraftStore = toolCallDraftStoreRef.current;
 
@@ -945,29 +947,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
             const type = (event?.type as string) || '';
             const payload = getEventPayload(event);
 
-            if (type === 'LLM_CALL') {
-              const attemptId = getLlmAttemptId(event);
-              if (attemptId) {
-                dispatchLiveRunAction({
-                  type: 'attempt-start',
-                  attemptId,
-                  sender: resolveLiveEventSender(event, senderOptionsRef.current),
-                  at: getEventTimestamp(event),
-                });
-              }
-              return;
-            }
-
-            if (type === 'TOOL_RESULT') {
-              processToolOutput((payload ?? {}) as Record<string, unknown>);
-              dispatchLiveRunAction({
-                type: 'tool-result',
-                update: extractLiveToolResultUpdate((payload ?? {}) as Record<string, unknown>),
-              });
-              return;
-            }
-
-            if (type === 'TOOL_CALL_DELTA') {
+            if (type === 'tool_call.delta') {
               const delta = extractLiveToolCallDelta((payload ?? {}) as Record<string, unknown>);
               const applied = toolCallDraftStore.apply(delta);
               if (applied === 'created') {
@@ -988,6 +968,25 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
                   draftId: delta.draftId,
                   toolCallId: delta.toolCallId,
                 });
+                const snapshot = toolCallDraftStore.getSnapshot(delta.draftId);
+                if (!snapshot) {
+                  throw new Error(`Completed tool draft '${delta.draftId}' disappeared.`);
+                }
+                const parsedToolCall = parseCompletedToolCallDraft(snapshot);
+                dispatchLiveRunAction({
+                  type: 'tool-call',
+                  attemptId: delta.llmAttemptId,
+                  sender: resolveLiveEventSender(event, senderOptionsRef.current),
+                  at: getEventTimestamp(event),
+                  toolCall: {
+                    id: parsedToolCall.id!,
+                    name: parsedToolCall.name,
+                    arguments: parsedToolCall.arguments,
+                    status: parsedToolCall.status,
+                  },
+                });
+                liveDraftIds.delete(delta.draftId);
+                hasStreamProgress = true;
               } else if (applied === 'discarded') {
                 liveDraftIds.delete(delta.draftId);
                 for (const [toolCallId, draftId] of draftIdByToolCallId) {
@@ -1003,61 +1002,64 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
               return;
             }
 
-            if (type === 'LLM_RESULT') {
-              const finalAnswer = getVisibleLlmResultAnswer(event);
+            if (type === 'tool_execution.created') {
+              const lifecycle = extractToolExecutionLifecycle(event);
+              dispatchLiveRunAction({
+                type: 'tool-execution-start',
+                attemptId: liveRunState.activeAttemptId ?? liveRunState.lastAttemptId,
+                id: lifecycle.id,
+                toolExecutionId: lifecycle.toolExecutionId,
+                name: lifecycle.name,
+                at: getEventTimestamp(event),
+              });
+              hasStreamProgress = true;
+              return;
+            }
+
+            if (type === 'tool_output.delta') {
+              const update = extractToolOutputDelta(event);
+              if (update.channel === 'result' && isRecord(update.delta)) {
+                processToolOutput(update.delta);
+              }
+              dispatchLiveRunAction({ type: 'tool-output', update });
+              hasStreamProgress = true;
+              return;
+            }
+
+            if (
+              type === 'tool_execution.completed' ||
+              type === 'tool_execution.failed' ||
+              type === 'tool_execution.cancelled'
+            ) {
+              const lifecycle = extractToolExecutionLifecycle(event);
+              dispatchLiveRunAction({
+                type: 'tool-result',
+                update: {
+                  id: lifecycle.id,
+                  toolExecutionId: lifecycle.toolExecutionId,
+                  name: lifecycle.name,
+                  status: lifecycle.status,
+                  ...(lifecycle.error ? { error: lifecycle.error } : {}),
+                  endTime: lifecycle.endTime ?? getEventTimestamp(event),
+                },
+              });
+              return;
+            }
+
+            if (isAgentOutputMessageEvent(event)) {
               const attemptId = getLlmAttemptId(event) ??
-                liveRunState.activeAttemptId ??
-                liveRunState.lastAttemptId;
+                liveRunState.activeAttemptId ?? liveRunState.lastAttemptId;
               if (attemptId) {
                 dispatchLiveRunAction({
                   type: 'attempt-result',
                   attemptId,
-                  answer: finalAnswer,
                   at: getEventTimestamp(event),
                 });
               }
-              if (isTerminalEmptyLlmResultEvent(event)) {
-                finalizeStreamingPlaceholders();
-              }
               return;
             }
 
-            if (type === 'MESSAGE' || type === 'NEW_MESSAGE') {
-              return;
-            }
-
-            if (type === 'TOOL_CALL') {
-              const parsedToolCall = extractLiveToolCall((payload ?? {}) as Record<string, unknown>);
-              const eventSender = resolveLiveEventSender(event, senderOptionsRef.current);
-              const callId = parsedToolCall.id ?? generateId();
-              dispatchLiveRunAction({
-                type: 'tool-call',
-                attemptId: getLlmAttemptId(event) ??
-                  liveRunState.activeAttemptId ??
-                  liveRunState.lastAttemptId,
-                sender: eventSender,
-                at: getEventTimestamp(event),
-                toolCall: {
-                  id: callId,
-                  name: parsedToolCall.name,
-                  arguments: parsedToolCall.arguments,
-                  status: parsedToolCall.status,
-                  ...(parsedToolCall.toolExecutionId
-                    ? { toolExecutionId: parsedToolCall.toolExecutionId }
-                    : {}),
-                  ...(parsedToolCall.result !== undefined
-                    ? { result: parsedToolCall.result }
-                    : {}),
-                },
-              });
-              const reconciledDraftId = draftIdByToolCallId.get(callId);
-              if (reconciledDraftId) {
-                liveDraftIds.delete(reconciledDraftId);
-                draftIdByToolCallId.delete(callId);
-              }
-              hasStreamProgress = true;
-              return;
-            }
+            if (type === 'message.created') return;
 
             // Fallback for unknown events
             handleStreamMessageEvent(event);

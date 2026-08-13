@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   appendAssistantToolCall,
+  applyAssistantToolOutput,
   applyAssistantToolResult,
   finalizeAssistantMessage,
   updateAssistantMessageToken,
@@ -142,6 +143,79 @@ test('failed tool result exposes the error in activity details', () => {
   assert.equal(failed.activity?.items[0].status, 'failed');
   assert.equal(failed.activity?.items[0].details?.error, 'page crashed');
   assert.equal(failed.activity?.items[0].details?.result, undefined);
+});
+
+test('tool output streams independently before terminal settlement', () => {
+  let message = appendAssistantToolCall({
+    id: 'm1',
+    role: 'assistant',
+    content: '',
+    timestamp: Date.now(),
+  }, {
+    id: 'tool-1',
+    toolExecutionId: 'execution-1',
+    name: 'terminal',
+    arguments: { stdin: 'printf hello' },
+    status: 'running',
+  });
+
+  message = applyAssistantToolOutput(message, {
+    id: 'tool-1',
+    toolExecutionId: 'execution-1',
+    channel: 'stdout',
+    mode: 'append',
+    delta: 'hel',
+    sequence: 0,
+  });
+  message = applyAssistantToolOutput(message, {
+    id: 'tool-1',
+    toolExecutionId: 'execution-1',
+    channel: 'stdout',
+    mode: 'append',
+    delta: 'lo',
+    sequence: 1,
+  });
+  message = applyAssistantToolOutput(message, {
+    id: 'tool-1',
+    toolExecutionId: 'execution-1',
+    channel: 'stderr',
+    mode: 'append',
+    delta: 'warning',
+    sequence: 2,
+  });
+  const replayed = applyAssistantToolOutput(message, {
+    id: 'tool-1',
+    toolExecutionId: 'execution-1',
+    channel: 'stdout',
+    mode: 'append',
+    delta: 'duplicate',
+    sequence: 1,
+  });
+
+  assert.equal(replayed, message);
+  assert.equal(
+    message.activity?.items[0].details?.toolOutput?.channels.stdout.value,
+    'hello',
+  );
+  assert.equal(
+    message.activity?.items[0].details?.toolOutput?.channels.stderr.value,
+    'warning',
+  );
+  assert.equal(message.activity?.items[0].status, 'active');
+  assert.equal(message.isStreaming, true);
+
+  const settled = applyAssistantToolResult(message, {
+    id: 'tool-1',
+    toolExecutionId: 'execution-1',
+    name: 'terminal',
+    status: 'completed',
+    endTime: 3,
+  });
+  assert.equal(settled.activity?.items[0].status, 'complete');
+  assert.equal(
+    settled.activity?.items[0].details?.toolOutput?.channels.stdout.value,
+    'hello',
+  );
 });
 
 test('finalizeAssistantMessage removes transient answering activity', () => {

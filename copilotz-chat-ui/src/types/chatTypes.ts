@@ -104,6 +104,16 @@ export interface ToolCall {
   endTime?: number;
 }
 
+export interface ToolOutputChannelState {
+  value: any;
+  sequence: number;
+  mediaType?: string;
+}
+
+export interface ToolOutputState {
+  channels: Record<string, ToolOutputChannelState>;
+}
+
 export type ToolCallDraftPhase = "streaming" | "complete";
 
 export interface ToolCallDraftSnapshot {
@@ -132,6 +142,7 @@ export interface ToolRendererProps {
   draft?: ToolCallDraftSnapshot;
   status: ToolRendererStatus;
   result?: unknown;
+  output?: ToolOutputState;
   error?: string;
 }
 
@@ -155,6 +166,7 @@ export interface AssistantActivityItem {
     toolCall?: ToolCall;
     toolCallDraftId?: string;
     result?: any;
+    toolOutput?: ToolOutputState;
     error?: string;
   };
 }

@@ -1,5 +1,19 @@
 # @copilotz/chat-adapter
 
+## 0.59.19
+
+### Patch Changes
+
+- Consume the canonical event-native `/channels/web` stream directly instead
+  of relying on uppercase compatibility events.
+- Reconstruct streamed tool calls from canonical deltas and settle them from
+  `tool_execution.*` lifecycle events.
+- Accumulate named `tool_output.delta` channels so tool renderers receive live
+  output while execution is still running.
+- Keep renderer lookup bound to the stable tool ID rather than replacing it
+  with a human-readable OpenAPI operation label.
+- Replace the tool-call draft class with a factory-based store.
+
 ## 0.59.18
 
 ### Patch Changes

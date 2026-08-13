@@ -4,6 +4,21 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const hasValues = (value: unknown): boolean =>
   Array.isArray(value) && value.length > 0;
 
+const text = (value: unknown): string | null =>
+  typeof value === 'string' && value.trim().length > 0
+    ? value.trim()
+    : null;
+
+export const getWorkflowMetadata = (
+  event: unknown,
+): Record<string, unknown> | null => {
+  if (!isRecord(event)) return null;
+  const metadata = isRecord(event.metadata) ? event.metadata : null;
+  return metadata && isRecord(metadata.copilotzWorkflow)
+    ? metadata.copilotzWorkflow
+    : null;
+};
+
 export const getStreamEventPayload = (event: unknown): unknown => {
   if (!isRecord(event)) return event;
   return 'payload' in event ? event.payload : event;
@@ -13,28 +28,38 @@ export const getLlmAttemptId = (event: unknown): string | null => {
   if (!isRecord(event)) return null;
 
   const metadata = isRecord(event.metadata) ? event.metadata : {};
+  const workflow = getWorkflowMetadata(event);
+  const payload = isRecord(event.payload) ? event.payload : {};
+  const nested = [
+    metadata.streamLlmAttemptId,
+    metadata.llmAttemptId,
+    workflow?.llmAttemptId,
+    workflow?.parentLlmAttemptId,
+    payload.llmAttemptId,
+  ].map(text).find(Boolean);
+  if (nested) return nested;
+
   if (
-    typeof metadata.streamLlmAttemptId === 'string' &&
-    metadata.streamLlmAttemptId.trim().length > 0
+    isRecord(event.subject) &&
+    event.subject.type === 'llm_attempt' &&
+    text(event.subject.id)
   ) {
-    return metadata.streamLlmAttemptId.trim();
-  }
-  if (
-    typeof metadata.llmAttemptId === 'string' &&
-    metadata.llmAttemptId.trim().length > 0
-  ) {
-    return metadata.llmAttemptId.trim();
+    return text(event.subject.id);
   }
 
   if (
     event.subjectType === 'llm_attempt' &&
-    typeof event.subjectId === 'string' &&
-    event.subjectId.trim().length > 0
+    text(event.subjectId)
   ) {
-    return event.subjectId.trim();
+    return text(event.subjectId);
   }
 
   return null;
+};
+
+export const isAgentOutputMessageEvent = (event: unknown): boolean => {
+  if (!isRecord(event) || event.type !== 'message.created') return false;
+  return getWorkflowMetadata(event)?.kind === 'agent_output';
 };
 
 export const getRoutingMessageFromMetadata = (
