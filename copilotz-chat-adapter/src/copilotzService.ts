@@ -873,7 +873,6 @@ export async function fetchThreads(
 ) {
   const params = new URLSearchParams();
   params.set("participantId", userId);
-  params.set("status", "all");
   params.set("order", "desc");
 
   const res = await fetch(apiUrl(`/v1/threads?${params.toString()}`), {

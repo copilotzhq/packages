@@ -1,5 +1,12 @@
 # @copilotz/chat-adapter
 
+## 0.9.51
+
+### Patch Changes
+
+- Omit the legacy `status=all` wildcard when loading thread history so the
+  event-native API returns threads across every status.
+
 ## 0.9.50
 
 ### Patch Changes

@@ -1,9 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runCopilotzStream } from '../src/copilotzService.ts';
+import { fetchThreads, runCopilotzStream } from '../src/copilotzService.ts';
 
 const sse = (event: string, data: unknown) =>
   `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+
+test('fetchThreads omits the legacy all-status wildcard', async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedUrl: URL | undefined;
+
+  globalThis.fetch = async (input: RequestInfo | URL) => {
+    capturedUrl = new URL(String(input), 'https://example.test');
+    return Response.json({ data: [] });
+  };
+
+  try {
+    assert.deepEqual(await fetchThreads('user-123'), []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(capturedUrl?.pathname, '/api/v1/threads');
+  assert.equal(capturedUrl?.searchParams.get('participantId'), 'user-123');
+  assert.equal(capturedUrl?.searchParams.get('order'), 'desc');
+  assert.equal(capturedUrl?.searchParams.has('status'), false);
+});
 
 test('runCopilotzStream sends stable participant and target identifiers', async () => {
   const originalFetch = globalThis.fetch;
