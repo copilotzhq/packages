@@ -1,5 +1,8 @@
 export class ContractViolation extends Error {
-  constructor(message: string) { super(message); this.name = 'ContractViolation'; }
+  constructor(message: string) {
+    super(message);
+    Object.defineProperty(this, 'name', { value: 'ContractViolation' });
+  }
 }
 
 export const isRecord = (value: unknown): value is Record<string, unknown> =>

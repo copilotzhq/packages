@@ -1,5 +1,13 @@
 # @copilotz/chat-adapter
 
+## 0.60.18
+
+### Patch Changes
+
+- Match canonical history's safe asset transport contract, which intentionally
+  omits private database and object-store locations.
+- Preserve contract errors when host runtimes freeze intrinsic prototypes.
+
 ## 0.59.24
 
 ### Patch Changes

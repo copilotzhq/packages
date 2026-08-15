@@ -54,7 +54,6 @@ const content = (
     byteLength: Buffer.byteLength(typeof value === 'string' ? value : JSON.stringify(value)),
     digest: `sha256:${'0'.repeat(64)}`,
     state: 'ready',
-    location: { kind: 'database', encoding: kind === 'json' ? 'json' : kind === 'file' ? 'base64' : 'utf8' },
     createdAt: time,
     readyAt: time,
   },
@@ -128,6 +127,7 @@ const canonicalHistory = () => ({
 test('canonical production-shaped history projects text, tool-only turns, and failed tool results', () => {
   const output: Record<string, unknown>[] = [];
   const page = parseCanonicalMessagePage(canonicalHistory());
+  assert.equal('location' in page.included.content[0].asset, false);
   const { viewMessages, toolResultUpdates } = projectCanonicalMessageHistory(page, {
     senderOptions: { agents: [{ id: 'north', name: 'North', color: '#3b82f6' }] },
     onToolOutput: (value) => output.push(value),

@@ -112,7 +112,6 @@ export type CanonicalAssetRecord = {
   byteLength: number;
   digest: string;
   state: 'staging' | 'ready' | 'failed' | 'abandoned' | 'deleted';
-  location: Record<string, unknown>;
   createdAt: string;
   readyAt?: string;
   deletedAt?: string;
@@ -314,7 +313,6 @@ const parseAsset = (value: unknown, path: string): CanonicalAssetRecord => {
     byteLength: expectNumber(asset.byteLength, `${path}.byteLength`),
     digest: expectString(asset.digest, `${path}.digest`),
     state,
-    location: expectRecord(asset.location, `${path}.location`),
     createdAt: expectString(asset.createdAt, `${path}.createdAt`),
     ...(optionalString(asset.readyAt, `${path}.readyAt`) ? { readyAt: optionalString(asset.readyAt, `${path}.readyAt`) } : {}),
     ...(optionalString(asset.deletedAt, `${path}.deletedAt`) ? { deletedAt: optionalString(asset.deletedAt, `${path}.deletedAt`) } : {}),
