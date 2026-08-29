@@ -33,7 +33,7 @@ test('fetchThreadMessagesPage requests canonical compound history newest-first',
     capturedUrl = new URL(String(input), 'https://example.test');
     return Response.json({
       data: [],
-      included: { llmAttempts: [], toolExecutions: [], content: [] },
+      included: { content: [] },
       pageInfo: { next: 'message-older', hasMore: true },
     });
   };
@@ -45,8 +45,31 @@ test('fetchThreadMessagesPage requests canonical compound history newest-first',
   }
   assert.equal(capturedUrl?.pathname, '/api/v1/threads/thread-1/messages');
   assert.equal(capturedUrl?.searchParams.get('order'), 'desc');
-  assert.equal(capturedUrl?.searchParams.get('include'), 'content,workflow');
+  assert.equal(capturedUrl?.searchParams.get('include'), 'content');
   assert.equal(capturedUrl?.searchParams.get('before'), 'message-newer');
+});
+
+test('thread history percent-encodes canonical workflow ids as one path segment', async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedInput = '';
+  globalThis.fetch = async (input: RequestInfo | URL) => {
+    capturedInput = String(input);
+    return Response.json({
+      data: [],
+      included: { content: [] },
+      pageInfo: { next: null, hasMore: false },
+    });
+  };
+
+  const threadId = 'channel-thread:%005b%0022web%0022%005d';
+  try {
+    await fetchThreadMessagesPage(threadId);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.match(capturedInput, /channel-thread%3A%25005b%250022web%250022%25005d/);
+  assert.doesNotMatch(capturedInput, /channel-thread:%005b/);
 });
 
 test('runCopilotzStream sends stable participant and target identifiers', async () => {
@@ -201,6 +224,94 @@ test('runCopilotzStream sends attachment bytes as canonical content only', async
     JSON.stringify(capturedBody.input.metadata).includes('data:image/png'),
     false,
   );
+});
+
+test('runCopilotzStream uploads generic files and sends only their ContentRef', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalRevokeObjectUrl = URL.revokeObjectURL;
+  let uploaded = new Uint8Array();
+  let uploadHeaders: Headers | undefined;
+  let channelBody: any = null;
+  let previewRevoked = false;
+
+  URL.revokeObjectURL = () => {
+    previewRevoked = true;
+  };
+
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), 'https://example.test');
+    if (url.pathname === '/api/v1/assets') {
+      uploadHeaders = new Headers(init?.headers);
+      uploaded = new Uint8Array(await (init?.body as Blob).arrayBuffer());
+      return Response.json({
+        data: {
+          asset: {
+            id: 'asset-zip',
+            mediaType: 'application/zip',
+            byteLength: uploaded.byteLength,
+          },
+          assetRef: 'asset://tenant-a/asset-zip',
+          content: {
+            assetId: 'asset-zip',
+            kind: 'file',
+            role: 'attachment',
+            mediaType: 'application/zip',
+            name: 'archive.zip',
+            disposition: 'attachment',
+          },
+        },
+      }, { status: 201 });
+    }
+    channelBody = JSON.parse(String(init?.body ?? '{}'));
+    return new Response('', {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    });
+  };
+
+  try {
+    await runCopilotzStream({
+      content: 'Inspect this archive',
+      user: { externalId: 'user-123' },
+      selectedAgent: 'west',
+      attachments: [{
+        kind: 'file',
+        dataUrl: 'blob:local-preview',
+        source: new Blob([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], {
+          type: 'application/zip',
+        }),
+        uploadId: 'upload-zip-1',
+        mimeType: 'application/zip',
+        fileName: 'archive.zip',
+        size: 4,
+      }],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+    URL.revokeObjectURL = originalRevokeObjectUrl;
+  }
+
+  assert.deepEqual([...uploaded], [0x50, 0x4b, 0x03, 0x04]);
+  assert.equal(uploadHeaders?.get('content-type'), 'application/zip');
+  assert.equal(uploadHeaders?.get('idempotency-key'), 'upload-zip-1');
+  assert.equal(
+    uploadHeaders?.get('content-disposition'),
+    "attachment; filename*=UTF-8''archive.zip",
+  );
+  assert.deepEqual(channelBody.input.content, [
+    { type: 'text', text: 'Inspect this archive' },
+    {
+      assetId: 'asset-zip',
+      kind: 'file',
+      role: 'attachment',
+      mediaType: 'application/zip',
+      name: 'archive.zip',
+      disposition: 'attachment',
+    },
+  ]);
+  assert.equal(JSON.stringify(channelBody).includes('dataBase64'), false);
+  assert.equal(JSON.stringify(channelBody).includes('UEsDBA'), false);
+  assert.equal(previewRevoked, false);
 });
 
 test('runCopilotzStream resets canonical deltas between durable agent messages', async () => {

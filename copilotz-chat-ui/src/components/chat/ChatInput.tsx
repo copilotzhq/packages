@@ -378,6 +378,12 @@ const resolveVoiceErrorMessage = (error: unknown, config?: ChatConfig): string =
 const clearVoiceTranscript = (): VoiceTranscript => ({});
 const resolveVoiceSegmentDuration = (segment: VoiceSegment): number => segment.attachment.durationMs ?? 0;
 
+const releaseAttachmentPreview = (attachment: MediaAttachment): void => {
+  if (attachment.kind === 'file' && attachment.dataUrl.startsWith('blob:')) {
+    URL.revokeObjectURL(attachment.dataUrl);
+  }
+};
+
 export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   value: externalValue,
   onChange,
@@ -588,7 +594,11 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   }, [submitResolvedMessage]);
 
   const removeStagedMessage = useCallback((id: string) => {
-    setStagedSends((prev) => prev.filter((item) => item.id !== id));
+    setStagedSends((prev) => {
+      const removed = prev.find((item) => item.id === id);
+      removed?.attachments.forEach(releaseAttachmentPreview);
+      return prev.filter((item) => item.id !== id);
+    });
   }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -669,12 +679,17 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
         })));
       }
 
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
+      const kind = getAttachmentKindFromMimeType(file.type);
+      // Generic files are uploaded by the Copilotz adapter as raw bytes. Their
+      // object URL is browser-local preview state and is never request data.
+      const dataUrl = kind === 'file'
+        ? URL.createObjectURL(file)
+        : await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
 
       setUploadProgress(prev => {
         const newMap = new Map(prev);
@@ -683,11 +698,14 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
       });
 
       const attachment: MediaAttachment = {
-        kind: getAttachmentKindFromMimeType(file.type),
+        kind,
         dataUrl,
         mimeType: file.type || 'application/octet-stream',
         fileName: file.name,
         size: file.size,
+        ...(kind === 'file'
+          ? { source: file, uploadId: crypto.randomUUID() }
+          : {}),
       };
 
       // For video files, try to get duration
@@ -1141,6 +1159,8 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   }, [voiceState, voiceDraft, voiceReviewMode, voiceAutoSendDelayMs, isVoiceAutoSendActive, sendVoiceDraft]);
 
   const removeAttachment = (index: number) => {
+    const removed = attachments[index];
+    if (removed) releaseAttachmentPreview(removed);
     const newAttachments = attachments.filter((_, i) => i !== index);
     onAttachmentsChange(newAttachments);
   };

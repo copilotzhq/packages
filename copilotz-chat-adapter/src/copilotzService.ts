@@ -1,6 +1,7 @@
 import type { AgentOption, MediaAttachment } from "@copilotz/chat-ui";
 import {
   parseCanonicalMessagePage,
+  type CanonicalContentRef,
   type CanonicalMessagePage,
   // @ts-expect-error Direct Node TypeScript tests require the source extension.
 } from "./canonicalHistory.ts";
@@ -107,6 +108,7 @@ export type ThreadActivity = {
 type MessageContent =
   | string
   | Array<
+    | CanonicalContentRef
     | { type: "text"; text: string }
     | {
       type: "image";
@@ -420,6 +422,87 @@ const convertAudioDataUrlToWavBase64 = async (
   }
 };
 
+const uploadedContentRef = (value: unknown): CanonicalContentRef => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new TypeError("Asset upload returned an invalid ContentRef.");
+  }
+  const ref = value as Record<string, unknown>;
+  if (
+    typeof ref.assetId !== "string" || !ref.assetId.trim() ||
+    ref.kind !== "file" || ref.role !== "attachment" ||
+    typeof ref.mediaType !== "string" || !ref.mediaType.trim() ||
+    ref.disposition !== "attachment"
+  ) {
+    throw new TypeError("Asset upload returned an invalid ContentRef.");
+  }
+  return Object.freeze({
+    assetId: ref.assetId.trim(),
+    kind: "file",
+    role: "attachment",
+    mediaType: ref.mediaType.trim(),
+    ...(typeof ref.name === "string" && ref.name.trim()
+      ? { name: ref.name.trim() }
+      : {}),
+    disposition: "attachment",
+  });
+};
+
+const uploadFileAttachment = async (
+  attachment: Extract<MediaAttachment, { kind: "file" }>,
+  getRequestHeaders: RequestHeadersProvider | undefined,
+  signal: AbortSignal,
+): Promise<CanonicalContentRef> => {
+  const mediaType = attachment.mimeType || "application/octet-stream";
+  const body = attachment.source ?? (() => {
+    const bytes = new Uint8Array(dataUrlToArrayBuffer(attachment.dataUrl));
+    if (!bytes.byteLength) {
+      throw new TypeError("File attachment has no uploadable body.");
+    }
+    return new Blob([bytes], { type: mediaType });
+  })();
+  const fileName = attachment.fileName?.trim();
+  const response = await fetch(apiUrl("/v1/assets"), {
+    method: "POST",
+    headers: await withAuthHeaders({
+      Accept: "application/json",
+      "Content-Type": mediaType,
+      "Content-Disposition": fileName
+        ? `attachment; filename*=UTF-8''${encodeURIComponent(fileName)}`
+        : "attachment",
+      "Idempotency-Key": attachment.uploadId ?? crypto.randomUUID(),
+    }, getRequestHeaders),
+    body,
+    signal,
+  });
+  const payload = await response.json().catch(() => null) as
+    | Record<string, unknown>
+    | null;
+  if (!response.ok) {
+    const error = payload?.error && typeof payload.error === "object"
+      ? payload.error as Record<string, unknown>
+      : {};
+    throw new CopilotzRequestError(
+      typeof error.message === "string" && error.message.trim()
+        ? error.message
+        : response.statusText || "Failed to upload attachment",
+      {
+        status: response.status,
+        ...(typeof error.code === "string" ? { code: error.code } : {}),
+        ...(payload ? { details: payload } : {}),
+      },
+    );
+  }
+  const data = payload?.data && typeof payload.data === "object" &&
+      !Array.isArray(payload.data)
+    ? payload.data as Record<string, unknown>
+    : null;
+  const content = uploadedContentRef(data?.content);
+  // The optimistic user Message still uses this browser-local URL for its
+  // download link until authoritative history replaces it. The UI owns that
+  // preview lifetime; transport must not revoke it after upload.
+  return content;
+};
+
 export async function runCopilotzStream(
   options: RunOptions,
 ): Promise<CopilotzStreamResult> {
@@ -529,6 +612,14 @@ export async function runCopilotzStream(
 
   const preparedAttachmentParts: Exclude<MessageContent, string> = [];
   for (const [index, attachment] of (attachments ?? []).entries()) {
+    if (attachment.kind === "file") {
+      preparedAttachmentParts.push(await uploadFileAttachment(
+        attachment,
+        getRequestHeaders,
+        controller.signal,
+      ));
+      continue;
+    }
     const parsed = parseDataUrl(attachment.dataUrl);
     if (!parsed) {
       throw new TypeError(
@@ -575,7 +666,10 @@ export async function runCopilotzStream(
       : "";
     parts.push({ type: "text", text });
     for (const part of preparedAttachmentParts) parts.push(part);
-    if (parts.length === 1 && parts[0].type === "text") return parts[0].text;
+    const only = parts[0];
+    if (
+      parts.length === 1 && "type" in only && only.type === "text"
+    ) return only.text;
     return parts;
   })();
 
@@ -946,7 +1040,7 @@ export async function fetchThreadMessagesPage(
   const params = new URLSearchParams();
   params.set("limit", String(options?.limit ?? 50));
   params.set("order", "desc");
-  params.set("include", "content,workflow");
+  params.set("include", "content");
   if (options?.before) {
     params.set("before", options.before);
   }
@@ -955,7 +1049,9 @@ export async function fetchThreadMessagesPage(
   }
 
   const res = await fetch(
-    apiUrl(`/v1/threads/${threadId}/messages?${params.toString()}`),
+    apiUrl(
+      `/v1/threads/${encodeURIComponent(threadId)}/messages?${params.toString()}`,
+    ),
     {
       headers: await withAuthHeaders(
         { Accept: "application/json" },
@@ -979,7 +1075,7 @@ export async function updateThread(
   updates: Partial<RestThread>,
   getRequestHeaders?: RequestHeadersProvider,
 ) {
-  const res = await fetch(apiUrl(`/v1/threads/${threadId}`), {
+  const res = await fetch(apiUrl(`/v1/threads/${encodeURIComponent(threadId)}`), {
     method: "PATCH",
     headers: await withAuthHeaders({
       "Content-Type": "application/json",
@@ -1004,7 +1100,11 @@ export async function editThreadMessage(
   getRequestHeaders?: RequestHeadersProvider,
 ) {
   const res = await fetch(
-    apiUrl(`/v1/threads/${threadId}/messages/${messageId}/edit`),
+    apiUrl(
+      `/v1/threads/${encodeURIComponent(threadId)}/messages/${
+        encodeURIComponent(messageId)
+      }/edit`,
+    ),
     {
       method: "POST",
       headers: await withAuthHeaders({
@@ -1028,7 +1128,7 @@ export async function deleteThread(
   threadId: string,
   getRequestHeaders?: RequestHeadersProvider,
 ) {
-  const res = await fetch(apiUrl(`/v1/threads/${threadId}`), {
+  const res = await fetch(apiUrl(`/v1/threads/${encodeURIComponent(threadId)}`), {
     method: "DELETE",
     headers: await withAuthHeaders(
       { Accept: "application/json" },

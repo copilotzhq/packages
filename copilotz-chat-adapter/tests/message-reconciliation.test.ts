@@ -79,3 +79,24 @@ test('ambiguous correlations never discard optimistic messages', () => {
     ['optimistic-assistant', 'persisted-assistant-1', 'persisted-assistant-2'],
   );
 });
+
+test('a persisted continuation without a live attempt correlation appends on refresh', () => {
+  const current = [
+    message('optimistic-north', 'assistant', 'North streamed update', 1, {
+      [LLM_ATTEMPT_ID_METADATA_KEY]: 'attempt-north',
+    }),
+  ];
+  const fresh = [
+    message('persisted-north', 'assistant', 'North final continuation', 2, {
+      copilotzWorkflow: { kind: 'agent_output', parentLlmAttemptId: 'attempt-north' },
+    }),
+  ];
+
+  const reconciled = reconcileThreadMessages(current, fresh);
+
+  assert.deepEqual(
+    reconciled.messages.map((item) => item.id),
+    ['optimistic-north', 'persisted-north'],
+  );
+  assert.equal(reconciled.messages[1].content, 'North final continuation');
+});

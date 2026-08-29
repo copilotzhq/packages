@@ -3,7 +3,6 @@ import {
   expectRecord,
   expectString,
   expectStringValue,
-  isRecord,
   // @ts-expect-error Direct Node TypeScript tests require the source extension.
 } from './contract.ts';
 
@@ -48,63 +47,6 @@ export type CanonicalMessage = {
   updatedAt: string;
 };
 
-export type CanonicalSafeWorkflowError = {
-  name?: string;
-  message: string;
-  code?: string;
-  retryable?: boolean;
-  metadata?: Record<string, unknown>;
-};
-
-export type CanonicalLlmAttempt = {
-  id: string;
-  namespace: string;
-  threadId: string;
-  messageId?: string;
-  participantId?: string;
-  initiatorParticipantId?: string;
-  agentId?: string;
-  provider?: string;
-  model?: string;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'superseded';
-  attemptIndex: number;
-  parentAttemptId?: string;
-  inputMessageIds: string[];
-  availableToolIds: string[];
-  content: CanonicalContentRef[];
-  finishReason?: string;
-  usage?: Record<string, unknown>;
-  cost?: Record<string, unknown>;
-  safeError?: CanonicalSafeWorkflowError;
-  startedAt: string;
-  finishedAt?: string;
-  metricsFinalizedAt?: string;
-  metadata: Record<string, unknown>;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type CanonicalToolExecution = {
-  id: string;
-  namespace: string;
-  threadId: string;
-  messageId?: string;
-  participantId?: string;
-  agentId?: string;
-  toolCallId: string;
-  tool: Record<string, unknown>;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
-  content: CanonicalContentRef[];
-  historyVisibility?: string;
-  safeError?: CanonicalSafeWorkflowError;
-  startedAt: string;
-  finishedAt?: string;
-  durationMs?: number;
-  metadata: Record<string, unknown>;
-  createdAt: string;
-  updatedAt: string;
-};
-
 export type CanonicalAssetRecord = {
   id: string;
   namespace: string;
@@ -125,8 +67,6 @@ export type CanonicalResolvedContent = {
 };
 
 export type CanonicalMessageHistoryIncluded = {
-  llmAttempts: CanonicalLlmAttempt[];
-  toolExecutions: CanonicalToolExecution[];
   content: CanonicalResolvedContent[];
 };
 
@@ -151,9 +91,8 @@ const expectStringArray = (value: unknown, path: string): string[] => {
   return value.map((entry, index) => expectString(entry, `${path}[${index}]`));
 };
 
-const expectRecordValue = (value: unknown, path: string): Record<string, unknown> => (
-  value === undefined || value === null ? {} : expectRecord(value, path)
-);
+const expectRecordValue = (value: unknown, path: string): Record<string, unknown> =>
+  value === undefined || value === null ? {} : expectRecord(value, path);
 
 const expectNumber = (value: unknown, path: string): number => {
   if (typeof value !== 'number' || Number.isNaN(value)) {
@@ -227,80 +166,9 @@ const parseMessage = (value: unknown, path: string): CanonicalMessage => {
   };
 };
 
-const parseWorkflowStatus = <T extends string>(
-  value: unknown,
-  allowed: readonly T[],
-  path: string,
-): T => {
+const parseWorkflowStatus = <T extends string>(value: unknown, allowed: readonly T[], path: string): T => {
   if (typeof value === 'string' && allowed.includes(value as T)) return value as T;
   throw new ContractViolation(`${path} has an unsupported status`);
-};
-
-const parseSafeError = (value: unknown, path: string): CanonicalSafeWorkflowError | undefined => {
-  if (value === undefined || value === null) return undefined;
-  const error = expectRecord(value, path);
-  return {
-    message: expectString(error.message, `${path}.message`),
-    ...(optionalString(error.name, `${path}.name`) ? { name: optionalString(error.name, `${path}.name`) } : {}),
-    ...(optionalString(error.code, `${path}.code`) ? { code: optionalString(error.code, `${path}.code`) } : {}),
-    ...(typeof error.retryable === 'boolean' ? { retryable: error.retryable } : {}),
-    ...(error.metadata === undefined ? {} : { metadata: expectRecord(error.metadata, `${path}.metadata`) }),
-  };
-};
-
-const parseLlmAttempt = (value: unknown, path: string): CanonicalLlmAttempt => {
-  const attempt = expectRecord(value, path);
-  return {
-    id: expectString(attempt.id, `${path}.id`),
-    namespace: expectString(attempt.namespace, `${path}.namespace`),
-    threadId: expectString(attempt.threadId, `${path}.threadId`),
-    ...(optionalString(attempt.messageId, `${path}.messageId`) ? { messageId: optionalString(attempt.messageId, `${path}.messageId`) } : {}),
-    ...(optionalString(attempt.participantId, `${path}.participantId`) ? { participantId: optionalString(attempt.participantId, `${path}.participantId`) } : {}),
-    ...(optionalString(attempt.initiatorParticipantId, `${path}.initiatorParticipantId`) ? { initiatorParticipantId: optionalString(attempt.initiatorParticipantId, `${path}.initiatorParticipantId`) } : {}),
-    ...(optionalString(attempt.agentId, `${path}.agentId`) ? { agentId: optionalString(attempt.agentId, `${path}.agentId`) } : {}),
-    ...(optionalString(attempt.provider, `${path}.provider`) ? { provider: optionalString(attempt.provider, `${path}.provider`) } : {}),
-    ...(optionalString(attempt.model, `${path}.model`) ? { model: optionalString(attempt.model, `${path}.model`) } : {}),
-    status: parseWorkflowStatus(attempt.status, ['pending', 'running', 'completed', 'failed', 'cancelled', 'superseded'], `${path}.status`),
-    attemptIndex: expectNumber(attempt.attemptIndex, `${path}.attemptIndex`),
-    ...(optionalString(attempt.parentAttemptId, `${path}.parentAttemptId`) ? { parentAttemptId: optionalString(attempt.parentAttemptId, `${path}.parentAttemptId`) } : {}),
-    inputMessageIds: expectStringArray(attempt.inputMessageIds, `${path}.inputMessageIds`),
-    availableToolIds: expectStringArray(attempt.availableToolIds, `${path}.availableToolIds`),
-    content: parseContent(attempt.content, `${path}.content`),
-    ...(optionalString(attempt.finishReason, `${path}.finishReason`) ? { finishReason: optionalString(attempt.finishReason, `${path}.finishReason`) } : {}),
-    ...(isRecord(attempt.usage) ? { usage: attempt.usage } : {}),
-    ...(isRecord(attempt.cost) ? { cost: attempt.cost } : {}),
-    ...(parseSafeError(attempt.safeError, `${path}.safeError`) ? { safeError: parseSafeError(attempt.safeError, `${path}.safeError`) } : {}),
-    startedAt: expectString(attempt.startedAt, `${path}.startedAt`),
-    ...(optionalString(attempt.finishedAt, `${path}.finishedAt`) ? { finishedAt: optionalString(attempt.finishedAt, `${path}.finishedAt`) } : {}),
-    ...(optionalString(attempt.metricsFinalizedAt, `${path}.metricsFinalizedAt`) ? { metricsFinalizedAt: optionalString(attempt.metricsFinalizedAt, `${path}.metricsFinalizedAt`) } : {}),
-    metadata: expectRecordValue(attempt.metadata, `${path}.metadata`),
-    createdAt: expectString(attempt.createdAt, `${path}.createdAt`),
-    updatedAt: expectString(attempt.updatedAt, `${path}.updatedAt`),
-  };
-};
-
-const parseToolExecution = (value: unknown, path: string): CanonicalToolExecution => {
-  const execution = expectRecord(value, path);
-  return {
-    id: expectString(execution.id, `${path}.id`),
-    namespace: expectString(execution.namespace, `${path}.namespace`),
-    threadId: expectString(execution.threadId, `${path}.threadId`),
-    ...(optionalString(execution.messageId, `${path}.messageId`) ? { messageId: optionalString(execution.messageId, `${path}.messageId`) } : {}),
-    ...(optionalString(execution.participantId, `${path}.participantId`) ? { participantId: optionalString(execution.participantId, `${path}.participantId`) } : {}),
-    ...(optionalString(execution.agentId, `${path}.agentId`) ? { agentId: optionalString(execution.agentId, `${path}.agentId`) } : {}),
-    toolCallId: expectString(execution.toolCallId, `${path}.toolCallId`),
-    tool: expectRecord(execution.tool, `${path}.tool`),
-    status: parseWorkflowStatus(execution.status, ['pending', 'running', 'completed', 'failed', 'cancelled'], `${path}.status`),
-    content: parseContent(execution.content, `${path}.content`),
-    ...(optionalString(execution.historyVisibility, `${path}.historyVisibility`) ? { historyVisibility: optionalString(execution.historyVisibility, `${path}.historyVisibility`) } : {}),
-    ...(parseSafeError(execution.safeError, `${path}.safeError`) ? { safeError: parseSafeError(execution.safeError, `${path}.safeError`) } : {}),
-    startedAt: expectString(execution.startedAt, `${path}.startedAt`),
-    ...(optionalString(execution.finishedAt, `${path}.finishedAt`) ? { finishedAt: optionalString(execution.finishedAt, `${path}.finishedAt`) } : {}),
-    ...(typeof execution.durationMs === 'number' ? { durationMs: execution.durationMs } : {}),
-    metadata: expectRecordValue(execution.metadata, `${path}.metadata`),
-    createdAt: expectString(execution.createdAt, `${path}.createdAt`),
-    updatedAt: expectString(execution.updatedAt, `${path}.updatedAt`),
-  };
 };
 
 const parseAsset = (value: unknown, path: string): CanonicalAssetRecord => {
@@ -324,19 +192,15 @@ export const parseCanonicalMessagePage = (value: unknown): CanonicalMessagePage 
   const document = expectRecord(value, 'message history response');
   if (!Array.isArray(document.data)) throw new ContractViolation('message history response.data must be an array');
   const included = expectRecord(document.included, 'message history response.included');
-  const llmAttempts = included.llmAttempts;
-  const toolExecutions = included.toolExecutions;
   const content = included.content;
-  if (!Array.isArray(llmAttempts) || !Array.isArray(toolExecutions) || !Array.isArray(content)) {
-    throw new ContractViolation('message history response.included must contain llmAttempts, toolExecutions, and content arrays');
+  if (!Array.isArray(content)) {
+    throw new ContractViolation('message history response.included must contain a content array');
   }
   const pageInfo = expectRecord(document.pageInfo, 'message history response.pageInfo');
   if (typeof pageInfo.hasMore !== 'boolean') throw new ContractViolation('message history response.pageInfo.hasMore must be a boolean');
   return {
     data: document.data.map((message, index) => parseMessage(message, `message history response.data[${index}]`)),
     included: {
-      llmAttempts: llmAttempts.map((attempt, index) => parseLlmAttempt(attempt, `message history response.included.llmAttempts[${index}]`)),
-      toolExecutions: toolExecutions.map((execution, index) => parseToolExecution(execution, `message history response.included.toolExecutions[${index}]`)),
       content: content.map((entry, index) => {
         const resolved = expectRecord(entry, `message history response.included.content[${index}]`);
         return {
@@ -348,7 +212,11 @@ export const parseCanonicalMessagePage = (value: unknown): CanonicalMessagePage 
     },
     pageInfo: {
       hasMore: pageInfo.hasMore,
-      ...(optionalString(pageInfo.next, 'message history response.pageInfo.next') ? { next: optionalString(pageInfo.next, 'message history response.pageInfo.next') } : {}),
+      ...(optionalString(pageInfo.next, 'message history response.pageInfo.next')
+        ? {
+            next: optionalString(pageInfo.next, 'message history response.pageInfo.next'),
+          }
+        : {}),
     },
   };
 };

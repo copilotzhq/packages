@@ -1,5 +1,12 @@
 # @copilotz/chat-ui
 
+## 0.60.19
+
+### Patch Changes
+
+- Retain a browser `Blob` for generic file uploads instead of converting those
+  files to base64 data URLs before the chat adapter publishes their Asset.
+
 ## 0.59.24
 
 ### Patch Changes

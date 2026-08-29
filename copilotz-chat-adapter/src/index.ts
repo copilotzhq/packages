@@ -19,14 +19,12 @@ export { getAssetDataUrl } from './assetsService';
 export type {
   CanonicalAssetRecord,
   CanonicalContentRef,
-  CanonicalLlmAttempt,
   CanonicalMessage,
   CanonicalMessageHistoryIncluded,
   CanonicalMessagePage,
   CanonicalMessagePageInfo,
   CanonicalParticipant,
   CanonicalResolvedContent,
-  CanonicalToolExecution,
 } from './canonicalHistory';
 export type {
   EventInterceptor,

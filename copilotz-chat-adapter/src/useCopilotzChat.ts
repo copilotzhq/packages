@@ -1110,7 +1110,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
             if (activity.status === 'running') {
               recoveryStarted = true;
               startThreadActivityRecovery(activityThreadId);
-            } else if (streamError || activity.status === 'failed') {
+            } else {
               setIsRecoveringStream(false);
               await refreshThreadMessages(activityThreadId);
             }

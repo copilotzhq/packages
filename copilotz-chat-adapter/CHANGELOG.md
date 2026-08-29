@@ -1,5 +1,16 @@
 # @copilotz/chat-adapter
 
+## 0.60.19
+
+### Patch Changes
+
+- Percent-encode canonical thread and message identifiers as single URL path
+  segments so workflow-derived IDs remain valid through edge proxies.
+- Restore reasoning, Tool calls/results, and Agent Ask mentions after reload from
+  durable v4 Message metadata instead of removed workflow collections.
+- Upload generic files as raw Assets before Web Channel ingress and send only
+  their canonical attachment ContentRef in the conversation request.
+
 ## 0.60.18
 
 ### Patch Changes

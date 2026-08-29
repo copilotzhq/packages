@@ -35,6 +35,10 @@ export type MediaAttachment =
   | {
       kind: "file";
       dataUrl: string;
+      /** Browser-local body retained until the adapter publishes the Asset. */
+      source?: Blob;
+      /** Stable upload identity reused when a failed message send is retried. */
+      uploadId?: string;
       mimeType: string;
       fileName?: string;
       size?: number;
