@@ -286,6 +286,16 @@ export class CopilotzRequestError extends Error {
   }
 }
 
+/** Whether canonical history bootstrap may safely retry this failure. */
+export const isRetryableCanonicalHistoryError = (error: unknown): boolean => {
+  if (error instanceof CopilotzRequestError) {
+    return error.status === 0 || error.status === 409 ||
+      error.status === 410 || error.status === 429 ||
+      (error.status >= 500 && error.status <= 599);
+  }
+  return false;
+};
+
 const SSE_LINE_BREAK = "\n\n";
 
 const appendChunk = (buffer: string, chunk: string): string => {
@@ -309,6 +319,32 @@ const parseErrorText = (rawText: string): unknown => {
   } catch {
     return null;
   }
+};
+
+const requestErrorFromResponse = (
+  response: Response,
+  raw: string,
+  fallback: string,
+): CopilotzRequestError => {
+  const parsed = parseErrorText(raw);
+  const envelope = parsed && typeof parsed === "object" &&
+      !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : undefined;
+  const nested = envelope?.error && typeof envelope.error === "object" &&
+      !Array.isArray(envelope.error)
+    ? envelope.error as Record<string, unknown>
+    : envelope;
+  return new CopilotzRequestError(
+    typeof nested?.message === "string" && nested.message.trim()
+      ? nested.message
+      : raw || response.statusText || fallback,
+    {
+      status: response.status,
+      ...(typeof nested?.code === "string" ? { code: nested.code } : {}),
+      ...(parsed !== null ? { details: parsed } : {}),
+    },
+  );
 };
 
 const toAttachmentPayload = (attachments?: MediaAttachment[]) => {
@@ -1271,6 +1307,7 @@ export async function cancelCopilotzOperation(
 export async function fetchThreads(
   userId: string,
   getRequestHeaders?: RequestHeadersProvider,
+  signal?: AbortSignal,
 ) {
   const params = new URLSearchParams();
   params.set("participantId", userId);
@@ -1281,6 +1318,7 @@ export async function fetchThreads(
       { Accept: "application/json" },
       getRequestHeaders,
     ),
+    signal,
   });
 
   if (!res.ok) {
@@ -1358,6 +1396,7 @@ export async function fetchThreadMessagesPage(
     limit?: number;
     before?: string | null;
     after?: string | null;
+    signal?: AbortSignal;
   },
   getRequestHeaders?: RequestHeadersProvider,
 ): Promise<CanonicalMessagePage> {
@@ -1372,22 +1411,38 @@ export async function fetchThreadMessagesPage(
     params.set("after", options.after);
   }
 
-  const res = await fetch(
-    apiUrl(
-      `/v1/threads/${encodeURIComponent(threadId)}/messages?${params.toString()}`,
-    ),
-    {
-      headers: await withAuthHeaders(
-        { Accept: "application/json" },
-        getRequestHeaders,
-      ),
-    },
+  const headers = await withAuthHeaders(
+    { Accept: "application/json" },
+    getRequestHeaders,
   );
+  let res: Response;
+  try {
+    res = await fetch(
+      apiUrl(
+        `/v1/threads/${encodeURIComponent(threadId)}/messages?${params.toString()}`,
+      ),
+      { headers, signal: options?.signal },
+    );
+  } catch (error) {
+    if (
+      options?.signal?.aborted ||
+      (error && typeof error === "object" &&
+        (error as { name?: unknown }).name === "AbortError")
+    ) throw error;
+    throw new CopilotzRequestError(
+      error instanceof Error && error.message.trim()
+        ? error.message
+        : "Thread history transport failed",
+      { status: 0, code: "transport_error" },
+    );
+  }
 
   if (!res.ok) {
-    const errorText = await res.text().catch(() => res.statusText);
-    throw new Error(
-      errorText || `Failed to load thread messages (${res.status})`,
+    const raw = await res.text().catch(() => res.statusText);
+    throw requestErrorFromResponse(
+      res,
+      raw,
+      `Failed to load thread messages (${res.status})`,
     );
   }
 

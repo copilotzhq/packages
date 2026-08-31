@@ -1,5 +1,15 @@
 # @copilotz/chat-adapter
 
+## 0.64.2
+
+### Patch Changes
+
+- Preserve structured HTTP status and error codes from canonical thread-history
+  failures so reconnect recovery can distinguish transient and terminal errors.
+- Retry transient history-bootstrap failures with bounded backoff, cancel
+  obsolete fetches on navigation, and surface a visible failure when thread
+  history cannot be recovered.
+
 ## 0.64.1
 
 ### Patch Changes

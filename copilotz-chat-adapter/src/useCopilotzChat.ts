@@ -1,6 +1,6 @@
 // deno-lint-ignore-file no-explicit-any
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { cancelCopilotzOperation, CopilotzRequestError, fetchThreads, fetchThreadMessagesPage, observeThreadFeed, startCopilotzRun, updateThread as updateThreadApi, editThreadMessage, deleteThread as deleteThreadApi } from './copilotzService';
+import { cancelCopilotzOperation, CopilotzRequestError, fetchThreads, fetchThreadMessagesPage, isRetryableCanonicalHistoryError, observeThreadFeed, startCopilotzRun, updateThread as updateThreadApi, editThreadMessage, deleteThread as deleteThreadApi } from './copilotzService';
 import { getAttachmentKindFromMimeType, getMimeTypeFromDataUrl } from '@copilotz/chat-ui';
 import type { AgentOption, AssistantActivityBlock, ChatMessage as ChatViewMessage, ChatSender, ChatThread, ChatThreadTag, MediaAttachment, ChatUserContext } from '@copilotz/chat-ui';
 import { useUrlState } from './useUrlState';
@@ -23,6 +23,7 @@ import {
   type ToolCallDraftStore,
 } from './toolCallDraftStore';
 import { selectAcceptedOperationFeedCursor } from './feedBootstrap';
+import { isCurrentInitializationRun, type InitializationRunState } from './initializationRun';
 
 const nowTs = () => Date.now();
 const generateId = () => (globalThis.crypto?.randomUUID?.() ?? `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`) as string;
@@ -67,6 +68,9 @@ const THREAD_MESSAGES_PAGE_SIZE = 50;
 
 type FeedConnectionStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'failed';
 type ActiveOperationStatus = 'running' | 'stopping';
+type CanonicalLoadStatus = 'idle' | 'retrying' | 'failed';
+
+const CANONICAL_HISTORY_MAX_RETRIES = 5;
 
 type LiveOperationProjection = {
   state: LiveRunState;
@@ -98,6 +102,28 @@ const feedRetryDelay = (
   const ceiling = Math.min(10_000, serverRetry ?? 250 * (2 ** Math.min(attempt, 6)));
   return Math.max(0, Math.floor(random() * ceiling));
 };
+
+const abortableDelay = (
+  milliseconds: number,
+  signal: AbortSignal,
+): Promise<void> => new Promise<void>((resolve, reject) => {
+  if (signal.aborted) {
+    reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    return;
+  }
+  const done = () => {
+    clearTimeout(timeout);
+    signal.removeEventListener('abort', aborted);
+    resolve();
+  };
+  const aborted = () => {
+    clearTimeout(timeout);
+    signal.removeEventListener('abort', aborted);
+    reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+  };
+  const timeout = setTimeout(done, milliseconds);
+  signal.addEventListener('abort', aborted, { once: true });
+});
 
 const createEmptyMessagePageInfo = (): CanonicalMessagePageInfo => ({
   hasMore: false,
@@ -158,6 +184,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   const [threadActivityStatus, setThreadActivityStatus] = useState<ThreadActivityStatus>('idle');
   const [isRecoveringStream, setIsRecoveringStream] = useState(false);
   const [feedConnectionStatus, setFeedConnectionStatus] = useState<FeedConnectionStatus>('idle');
+  const [canonicalLoadStatus, setCanonicalLoadStatus] = useState<CanonicalLoadStatus>('idle');
   const [isStopping, setIsStopping] = useState(false);
   const [feedBootstrap, setFeedBootstrap] = useState<{
     threadId: string;
@@ -195,6 +222,8 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   const threadTransportGenerationRef = useRef(0);
   const currentFeedCursorRef = useRef<string | null>(null);
   const feedAbortControllerRef = useRef<AbortController | null>(null);
+  const historyAbortControllerRef = useRef<AbortController | null>(null);
+  const initializationAbortControllerRef = useRef<AbortController | null>(null);
   const canonicalRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toolCallDraftStoreRef = useRef<ToolCallDraftStore | null>(null);
   if (!toolCallDraftStoreRef.current) {
@@ -223,7 +252,11 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
 
   const messagesRequestRef = useRef<number>(0);
   // Guard to prevent double initialization in StrictMode
-  const initializationRef = useRef<{ userId: string | null; started: boolean }>({ userId: null, started: false });
+  const initializationRef = useRef<InitializationRunState>({
+    userId: null,
+    started: false,
+    generation: 0,
+  });
 
   useEffect(() => {
     if (initialContext) {
@@ -234,6 +267,8 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   useEffect(() => () => {
     toolCallDraftStore.clear();
     feedAbortControllerRef.current?.abort();
+    historyAbortControllerRef.current?.abort();
+    initializationAbortControllerRef.current?.abort();
     if (canonicalRefreshTimerRef.current) {
       clearTimeout(canonicalRefreshTimerRef.current);
     }
@@ -405,9 +440,23 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   }, []); // No dependencies needed now as we use refs for reading current state
 
   const fetchAndSetThreadsState = useCallback(
-    async (uid: string, preferredExternalId?: string | null) => {
+    async (
+      uid: string,
+      preferredExternalId?: string | null,
+      options: Readonly<{
+        signal?: AbortSignal;
+        isCurrent?: () => boolean;
+      }> = {},
+    ) => {
       try {
-        const rawThreads = await fetchThreads(uid, getRequestHeaders);
+        const rawThreads = await fetchThreads(
+          uid,
+          getRequestHeaders,
+          options.signal,
+        );
+        if (options.signal?.aborted || options.isCurrent?.() === false) {
+          return null;
+        }
         return updateThreadsState(rawThreads, preferredExternalId);
       } catch (error) {
         if (isAbortError(error)) return;
@@ -432,6 +481,9 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   const loadThreadMessages = useCallback(
     async (threadId: string, options: Readonly<{ rethrow?: boolean }> = {}) => {
       if (currentThreadIdRef.current !== threadId) return;
+      historyAbortControllerRef.current?.abort();
+      const controller = new AbortController();
+      historyAbortControllerRef.current = controller;
       const transportGeneration = threadTransportGenerationRef.current;
       const requestId = messagesRequestRef.current + 1;
       messagesRequestRef.current = requestId;
@@ -440,15 +492,51 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       if (!options.rethrow) {
         setMessagePageInfo(createEmptyMessagePageInfo());
         persistedToolUpdatesRef.current = [];
+        setCanonicalLoadStatus('idle');
       }
       try {
-        const page = await fetchThreadMessagesPage(threadId, { limit: THREAD_MESSAGES_PAGE_SIZE }, getRequestHeaders);
-        const { viewMessages, toolResultUpdates } = prepareThreadMessages(page);
+        let retries = 0;
+        let page: CanonicalMessagePage;
+        while (true) {
+          if (
+            controller.signal.aborted ||
+            messagesRequestRef.current !== requestId ||
+            threadTransportGenerationRef.current !== transportGeneration ||
+            currentThreadIdRef.current !== threadId
+          ) return;
+          try {
+            page = await fetchThreadMessagesPage(threadId, {
+              limit: THREAD_MESSAGES_PAGE_SIZE,
+              signal: controller.signal,
+            }, getRequestHeaders);
+            break;
+          } catch (error) {
+            if (isAbortError(error)) return;
+            if (options.rethrow) throw error;
+            if (
+              messagesRequestRef.current !== requestId ||
+              threadTransportGenerationRef.current !== transportGeneration ||
+              currentThreadIdRef.current !== threadId
+            ) return;
+            if (
+              !isRetryableCanonicalHistoryError(error) ||
+              retries >= CANONICAL_HISTORY_MAX_RETRIES
+            ) throw error;
+            retries += 1;
+            setCanonicalLoadStatus('retrying');
+            await abortableDelay(
+              feedRetryDelay(retries - 1, undefined),
+              controller.signal,
+            );
+          }
+        }
         if (
+          controller.signal.aborted ||
           messagesRequestRef.current !== requestId ||
           threadTransportGenerationRef.current !== transportGeneration ||
           currentThreadIdRef.current !== threadId
         ) return;
+        const { viewMessages, toolResultUpdates } = prepareThreadMessages(page);
 
         persistedToolUpdatesRef.current = toolResultUpdates;
         const hydratedMessages = mergePersistedToolResults(viewMessages, persistedToolUpdatesRef.current);
@@ -464,6 +552,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
         setIsStreaming(activeOperationsRef.current.size > 0);
         setThreadActivityStatus(activeOperationsRef.current.size > 0 ? 'running' : 'idle');
         setIsStopping(false);
+        setCanonicalLoadStatus('idle');
         setFeedBootstrap({
           threadId,
           cursor: page.pageInfo.replayCursor ?? null,
@@ -475,6 +564,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
         console.error(`Error loading messages for thread ${threadId}`, error);
         persistedToolUpdatesRef.current = [];
         setMessagePageInfo(createEmptyMessagePageInfo());
+        setCanonicalLoadStatus('failed');
       } finally {
         if (
           messagesRequestRef.current === requestId &&
@@ -482,6 +572,9 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
           currentThreadIdRef.current === threadId
         ) {
           setIsMessagesLoading(false);
+        }
+        if (historyAbortControllerRef.current === controller) {
+          historyAbortControllerRef.current = null;
         }
       }
     },
@@ -519,6 +612,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
           hasMore: prev.hasMore || page.pageInfo.hasMore,
           ...(prev.next ? { next: prev.next } : page.pageInfo.next ? { next: page.pageInfo.next } : {}),
         }));
+        setCanonicalLoadStatus('idle');
       } catch (error) {
         if (isAbortError(error)) return;
         console.error(`Error refreshing messages for thread ${threadId}`, error);
@@ -578,12 +672,15 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     }
     feedAbortControllerRef.current?.abort();
     feedAbortControllerRef.current = null;
+    historyAbortControllerRef.current?.abort();
+    historyAbortControllerRef.current = null;
     activeOperationsRef.current.clear();
     liveOperationsRef.current.clear();
     streamOffsetsRef.current.clear();
     currentFeedCursorRef.current = null;
     setFeedBootstrap(null);
     setFeedConnectionStatus('idle');
+    setCanonicalLoadStatus('idle');
     setThreadActivityStatus('idle');
     setIsRecoveringStream(false);
     setIsStreaming(false);
@@ -1709,28 +1806,54 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
 
   // Initialize when userId changes
   useEffect(() => {
-    if (userId) {
-      // Guard against double initialization in StrictMode
-      if (initializationRef.current.userId === userId && initializationRef.current.started) {
-        return;
-      }
-      initializationRef.current = { userId, started: true };
+    initializationAbortControllerRef.current?.abort();
+    const controller = new AbortController();
+    initializationAbortControllerRef.current = controller;
+    const generation = initializationRef.current.generation + 1;
+    initializationRef.current = {
+      userId,
+      started: Boolean(userId),
+      generation,
+    };
+    const isCurrent = () => userId !== null && isCurrentInitializationRun(
+      initializationRef.current,
+      { userId, generation },
+      controller.signal,
+    );
 
+    if (userId) {
       const init = async () => {
         // Use URL thread ID as preferred if available
         const urlPreferredThread = isUrlSyncEnabled ? urlState.threadId : undefined;
-        const preferredThreadId = await fetchAndSetThreadsState(userId, urlPreferredThread);
+        const preferredThreadId = await fetchAndSetThreadsState(
+          userId,
+          urlPreferredThread,
+          { signal: controller.signal, isCurrent },
+        );
+        if (!isCurrent()) return;
         if (preferredThreadId) {
           await loadThreadMessages(preferredThreadId);
-        } else if (bootstrap) {
+        } else if (bootstrap && isCurrent()) {
           await bootstrapConversation(userId);
         }
       };
-      init();
+      void init();
     } else {
-      initializationRef.current = { userId: null, started: false };
       reset();
     }
+    return () => {
+      controller.abort();
+      if (initializationAbortControllerRef.current === controller) {
+        initializationAbortControllerRef.current = null;
+      }
+      if (initializationRef.current.generation === generation) {
+        initializationRef.current = {
+          userId: null,
+          started: false,
+          generation: generation + 1,
+        };
+      }
+    };
     // urlState.threadId intentionally excluded: only needed on first init (captured
     // by the lazy initializer in useUrlState). Including it would re-trigger the
     // effect when the thread-sync effect writes back to the URL.
@@ -1764,6 +1887,16 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     ? {
       tone: 'info' as const,
       message: 'Stopping the current operation...',
+    }
+    : canonicalLoadStatus === 'retrying'
+    ? {
+      tone: 'info' as const,
+      message: 'Connection interrupted. Retrying thread synchronization...',
+    }
+    : canonicalLoadStatus === 'failed'
+    ? {
+      tone: 'error' as const,
+      message: 'Thread history could not be loaded. Refresh to try again.',
     }
     : feedConnectionStatus === 'reconnecting' ||
       (threadActivityStatus === 'running' && isRecoveringStream)

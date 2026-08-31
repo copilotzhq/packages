@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   cancelCopilotzOperation,
+  CopilotzRequestError,
   fetchThreadMessagesPage,
   fetchThreads,
+  isRetryableCanonicalHistoryError,
   observeThreadFeed,
   runCopilotzStream,
   startCopilotzRun,
@@ -31,6 +33,24 @@ test('fetchThreads omits the legacy all-status wildcard', async () => {
   assert.equal(capturedUrl?.searchParams.get('participantId'), 'user-123');
   assert.equal(capturedUrl?.searchParams.get('order'), 'desc');
   assert.equal(capturedUrl?.searchParams.has('status'), false);
+});
+
+test('fetchThreads forwards its initialization abort signal', async () => {
+  const originalFetch = globalThis.fetch;
+  const controller = new AbortController();
+  let receivedSignal: AbortSignal | null | undefined;
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    receivedSignal = init?.signal;
+    return Response.json({ data: [] });
+  };
+
+  try {
+    await fetchThreads('user-123', undefined, controller.signal);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(receivedSignal, controller.signal);
 });
 
 test('fetchThreadMessagesPage requests canonical compound history newest-first', async () => {
@@ -66,6 +86,78 @@ test('fetchThreadMessagesPage requests canonical compound history newest-first',
   assert.equal(capturedUrl?.searchParams.get('before'), 'message-newer');
 });
 
+test('thread history forwards its abort signal to fetch', async () => {
+  const originalFetch = globalThis.fetch;
+  const controller = new AbortController();
+  let receivedSignal: AbortSignal | null | undefined;
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    receivedSignal = init?.signal;
+    return Response.json({
+      data: [],
+      included: { content: [] },
+      pageInfo: { hasMore: false },
+    });
+  };
+
+  try {
+    await fetchThreadMessagesPage('thread-1', {
+      signal: controller.signal,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(receivedSignal, controller.signal);
+});
+
+test('thread history wraps only fetch transport failures as retryable', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new TypeError('connection reset');
+  };
+
+  try {
+    await assert.rejects(
+      () => fetchThreadMessagesPage('thread-1'),
+      (error: unknown) => {
+        assert(error instanceof CopilotzRequestError);
+        assert.equal(error.status, 0);
+        assert.equal(error.code, 'transport_error');
+        assert.equal(isRetryableCanonicalHistoryError(error), true);
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('thread history does not wrap header-provider or abort failures', async () => {
+  const headerFailure = new TypeError('invalid auth headers');
+  await assert.rejects(
+    () => fetchThreadMessagesPage(
+      'thread-1',
+      undefined,
+      () => Promise.reject(headerFailure),
+    ),
+    (error: unknown) => error === headerFailure,
+  );
+
+  const originalFetch = globalThis.fetch;
+  const abortFailure = new DOMException('Aborted', 'AbortError');
+  globalThis.fetch = async () => {
+    throw abortFailure;
+  };
+  try {
+    await assert.rejects(
+      () => fetchThreadMessagesPage('thread-1'),
+      (error: unknown) => error === abortFailure,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('thread history percent-encodes canonical workflow ids as one path segment', async () => {
   const originalFetch = globalThis.fetch;
   let capturedInput = '';
@@ -87,6 +179,61 @@ test('thread history percent-encodes canonical workflow ids as one path segment'
 
   assert.match(capturedInput, /channel-thread%3A%25005b%250022web%250022%25005d/);
   assert.doesNotMatch(capturedInput, /channel-thread:%005b/);
+});
+
+test('thread history preserves structured HTTP status and error code', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({
+    error: {
+      code: 'operation_not_found',
+      message: 'Operation was not found.',
+    },
+  }, { status: 404 });
+
+  try {
+    await assert.rejects(
+      () => fetchThreadMessagesPage('thread-1'),
+      (error: unknown) => {
+        assert(error instanceof CopilotzRequestError);
+        assert.equal(error.status, 404);
+        assert.equal(error.code, 'operation_not_found');
+        assert.equal(error.message, 'Operation was not found.');
+        return true;
+      },
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('canonical history retries only explicit transient and transport failures', () => {
+  for (const status of [0, 409, 410, 429, 500, 503]) {
+    assert.equal(
+      isRetryableCanonicalHistoryError(
+        new CopilotzRequestError('retry', { status }),
+      ),
+      true,
+    );
+  }
+  for (const status of [400, 401, 403, 404]) {
+    assert.equal(
+      isRetryableCanonicalHistoryError(
+        new CopilotzRequestError('stop', { status }),
+      ),
+      false,
+    );
+  }
+  assert.equal(
+    isRetryableCanonicalHistoryError(new TypeError('invalid page')),
+    false,
+  );
+  assert.equal(
+    isRetryableCanonicalHistoryError(
+      new DOMException('Aborted', 'AbortError'),
+    ),
+    false,
+  );
+  assert.equal(isRetryableCanonicalHistoryError(new Error('invalid page')), false);
 });
 
 test('runCopilotzStream sends stable participant and target identifiers', async () => {
