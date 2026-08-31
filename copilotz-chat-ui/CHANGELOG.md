@@ -1,5 +1,12 @@
 # @copilotz/chat-ui
 
+## 0.64.0
+
+### Minor Changes
+
+- Surface reconnecting and durable stopping states without discarding streamed
+  messages, Tool calls, Ask mentions, or reasoning progress.
+
 ## 0.60.19
 
 ### Patch Changes

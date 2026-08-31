@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchThreadMessagesPage, fetchThreads, runCopilotzStream } from '../src/copilotzService.ts';
+import {
+  cancelCopilotzOperation,
+  fetchThreadMessagesPage,
+  fetchThreads,
+  observeThreadFeed,
+  runCopilotzStream,
+  startCopilotzRun,
+} from '../src/copilotzService.ts';
 
 const sse = (event: string, data: unknown) =>
   `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -34,12 +41,22 @@ test('fetchThreadMessagesPage requests canonical compound history newest-first',
     return Response.json({
       data: [],
       included: { content: [] },
-      pageInfo: { next: 'message-older', hasMore: true },
+      pageInfo: {
+        next: 'message-older',
+        hasMore: true,
+        replayCursor: 'thread-cursor-1',
+        activeOperationIds: ['operation-1'],
+      },
     });
   };
   try {
     const page = await fetchThreadMessagesPage('thread-1', { limit: 50, before: 'message-newer' });
-    assert.deepEqual(page.pageInfo, { next: 'message-older', hasMore: true });
+    assert.deepEqual(page.pageInfo, {
+      next: 'message-older',
+      hasMore: true,
+      replayCursor: 'thread-cursor-1',
+      activeOperationIds: ['operation-1'],
+    });
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -110,6 +127,133 @@ test('runCopilotzStream sends stable participant and target identifiers', async 
   assert.equal(capturedBody.participant.participantType, 'human');
   assert.equal(capturedBody.input.content, 'Hello team');
   assert.equal(capturedUrl?.pathname, '/api/v1/channels/web');
+});
+
+test('startCopilotzRun uses a stable idempotency identity and parses the async receipt', async () => {
+  const originalFetch = globalThis.fetch;
+  let headers = new Headers();
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    headers = new Headers(init?.headers);
+    return Response.json({
+      data: {
+        operationId: 'operation-1',
+        status: 'accepted',
+        thread: { id: 'thread-1', externalId: 'browser-thread-1' },
+        replayCursor: 'cursor-before-operation',
+        acceptedAt: '2026-08-30T12:00:00.000Z',
+      },
+    }, { status: 202 });
+  };
+  try {
+    const receipt = await startCopilotzRun({
+      operationId: 'operation-1',
+      content: 'Hello',
+      user: { externalId: 'user-1' },
+      threadId: 'thread-1',
+    });
+    assert.equal(receipt.operationId, 'operation-1');
+    assert.equal(receipt.thread.id, 'thread-1');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(headers.get('idempotency-key'), 'operation-1');
+  assert.equal(headers.get('accept'), 'application/json');
+  assert.equal(headers.get('prefer'), 'respond-async');
+});
+
+test('startCopilotzRun retries a lost receipt with the same idempotency key', async () => {
+  const originalFetch = globalThis.fetch;
+  const keys: Array<string | null> = [];
+  globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    keys.push(new Headers(init?.headers).get('idempotency-key'));
+    if (keys.length === 1) throw new TypeError('connection reset after accept');
+    return Response.json({
+      data: {
+        operationId: 'operation-retry',
+        status: 'running',
+        thread: { id: 'thread-1', externalId: 'browser-thread-1' },
+        replayCursor: 'cursor-before-operation',
+        acceptedAt: '2026-08-30T12:00:00.000Z',
+      },
+    }, { status: 202 });
+  };
+  try {
+    const receipt = await startCopilotzRun({
+      operationId: 'operation-retry',
+      content: 'Hello once',
+      user: { externalId: 'user-1' },
+      threadId: 'thread-1',
+    });
+    assert.equal(receipt.operationId, 'operation-retry');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.deepEqual(keys, ['operation-retry', 'operation-retry']);
+});
+
+test('observeThreadFeed forwards operation identities and resumes only after applied frames', async () => {
+  const originalFetch = globalThis.fetch;
+  let requestUrl: URL | undefined;
+  let requestHeaders = new Headers();
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    requestUrl = new URL(String(input));
+    requestHeaders = new Headers(init?.headers);
+    return new Response(
+      sse('text.delta', {
+        type: 'text.delta',
+        operationId: 'operation-1',
+        threadId: 'thread-1',
+        streamId: 'stream-1',
+        fromOffset: 0,
+        toOffset: 2,
+        payload: { text: 'Oi' },
+      }).replace('event: text.delta\n', 'event: text.delta\nid: cursor-2\n'),
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    );
+  };
+  const applied: string[] = [];
+  try {
+    const result = await observeThreadFeed({
+      threadId: 'thread-1',
+      operationIds: ['operation-1', 'operation-2', 'operation-1'],
+      cursor: 'cursor-1',
+      watchdogMs: 1_000,
+      onEvent: async (event) => {
+        await Promise.resolve();
+        applied.push(event.id);
+      },
+    });
+    assert.equal(result.cursor, 'cursor-2');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.deepEqual(applied, ['cursor-2']);
+  assert.deepEqual(requestUrl?.searchParams.getAll('operationId'), [
+    'operation-1',
+    'operation-2',
+  ]);
+  assert.equal(requestHeaders.get('last-event-id'), 'cursor-1');
+});
+
+test('cancelCopilotzOperation issues explicit idempotent DELETE', async () => {
+  const originalFetch = globalThis.fetch;
+  let method = '';
+  let pathname = '';
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    method = init?.method ?? '';
+    pathname = new URL(String(input), 'https://example.test').pathname;
+    return Response.json({
+      data: { operationId: 'operation/1', status: 'stopping' },
+    }, { status: 202 });
+  };
+  try {
+    const result = await cancelCopilotzOperation('operation/1');
+    assert.equal(result.status, 'stopping');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.equal(method, 'DELETE');
+  assert.equal(pathname, '/api/v1/operations/operation%2F1');
 });
 
 test('runCopilotzStream never impersonates an agent for tool-bearing input', async () => {

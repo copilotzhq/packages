@@ -4,16 +4,32 @@ export {
   CopilotzRequestError,
   apiUrl,
   apiUrlObject,
+  cancelCopilotzOperation,
   deleteThread,
   fetchAgents,
   fetchThreadMessages,
   fetchThreadMessagesPage,
   fetchThreads,
+  observeThreadFeed,
   runCopilotzStream,
+  startCopilotzRun,
   withAuthHeaders,
   updateThread,
 } from './copilotzService';
-export type { RequestHeadersProvider } from './copilotzService';
+export type {
+  CopilotzRunReceipt,
+  ObserveThreadFeedOptions,
+  OperationCancellation,
+  RequestHeadersProvider,
+  RunOptions,
+  ThreadFeedEvent,
+  ThreadFeedResult,
+} from './copilotzService';
+export {
+  parseServerSentEventStream,
+  ServerSentEventParser,
+} from './sse';
+export type { ServerSentEvent } from './sse';
 export { parseCanonicalMessagePage } from './canonicalHistory';
 export { getAssetDataUrl } from './assetsService';
 export type {

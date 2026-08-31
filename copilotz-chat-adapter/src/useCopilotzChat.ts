@@ -1,11 +1,11 @@
 // deno-lint-ignore-file no-explicit-any
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { runCopilotzStream, fetchThreads, fetchThreadMessagesPage, fetchThreadActivity, updateThread as updateThreadApi, editThreadMessage, deleteThread as deleteThreadApi } from './copilotzService';
+import { cancelCopilotzOperation, CopilotzRequestError, fetchThreads, fetchThreadMessagesPage, observeThreadFeed, startCopilotzRun, updateThread as updateThreadApi, editThreadMessage, deleteThread as deleteThreadApi } from './copilotzService';
 import { getAttachmentKindFromMimeType, getMimeTypeFromDataUrl } from '@copilotz/chat-ui';
 import type { AgentOption, AssistantActivityBlock, ChatMessage as ChatViewMessage, ChatSender, ChatThread, ChatThreadTag, MediaAttachment, ChatUserContext } from '@copilotz/chat-ui';
 import { useUrlState } from './useUrlState';
 import type { EventInterceptor, RunErrorInterceptor, SpecialChatState } from './specialState';
-import type { RequestHeadersProvider, ThreadActivityStatus } from './copilotzService';
+import type { RequestHeadersProvider, ThreadActivityStatus, ThreadFeedEvent } from './copilotzService';
 import type { CanonicalMessagePage, CanonicalMessagePageInfo } from './canonicalHistory';
 import { closeAssistantMessage, hasVisibleAssistantOutput, type InternalChatMessage, toPublicChatMessage } from './activity';
 import { resolveAgentSender, resolveAssistantFallbackSender, resolveLiveEventSender, resolveUserSender, type SenderResolutionOptions } from './senders';
@@ -16,9 +16,8 @@ import {
   isAgentOutputMessageEvent,
 } from './streamEvents';
 import { canAttachToStreamingAssistant, extractLiveToolCallDelta, extractToolExecutionLifecycle, extractToolOutputDelta, mergePersistedToolResults, matchesToolResultUpdate, parseCompletedToolCallDraft, prependUniqueMessages, type ToolResultUpdate } from './toolActivity';
-import { isSameThreadIdentity } from './threadIdentity';
 import { CLIENT_MESSAGE_ID_METADATA_KEY, reconcileThreadMessages } from './messageReconciliation';
-import { applyLiveRunOperations, createLiveRunState, getLatestLiveRunMessageId, selectLiveRunSender, transitionLiveRun, type LiveRunAction } from './liveRun';
+import { applyLiveRunOperations, createLiveRunState, getLatestLiveRunMessageId, selectLiveRunSender, transitionLiveRun, type LiveRunAction, type LiveRunState } from './liveRun';
 import {
   createToolCallDraftStore,
   type ToolCallDraftStore,
@@ -64,6 +63,40 @@ const patchMetadataPublicTags = (metadata: Record<string, unknown> | undefined, 
 
 type ServerThread = Awaited<ReturnType<typeof fetchThreads>>[number];
 const THREAD_MESSAGES_PAGE_SIZE = 50;
+
+type FeedConnectionStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'failed';
+type ActiveOperationStatus = 'running' | 'stopping';
+
+type LiveOperationProjection = {
+  state: LiveRunState;
+  assistantSender?: ChatSender;
+  liveDraftIds: Set<string>;
+  draftIdByToolCallId: Map<string, string>;
+  accumulated: Map<string, string>;
+  messageOrdinal: number;
+  hasProgress: boolean;
+};
+
+const feedOperationId = (event: Record<string, unknown>): string | null => {
+  const payload = isRecord(event.payload) ? event.payload : undefined;
+  const candidates = [event.operationId, payload?.operationId, event.correlationId];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+  }
+  return null;
+};
+
+const feedStreamOffsetKey = (operationId: string, streamId: string): string =>
+  `${operationId}\u0000${streamId}`;
+
+const feedRetryDelay = (
+  attempt: number,
+  serverRetry: number | undefined,
+  random = Math.random,
+): number => {
+  const ceiling = Math.min(10_000, serverRetry ?? 250 * (2 ** Math.min(attempt, 6)));
+  return Math.max(0, Math.floor(random() * ceiling));
+};
 
 const createEmptyMessagePageInfo = (): CanonicalMessagePageInfo => ({
   hasMore: false,
@@ -123,6 +156,13 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   const [isStreaming, setIsStreaming] = useState(false);
   const [threadActivityStatus, setThreadActivityStatus] = useState<ThreadActivityStatus>('idle');
   const [isRecoveringStream, setIsRecoveringStream] = useState(false);
+  const [feedConnectionStatus, setFeedConnectionStatus] = useState<FeedConnectionStatus>('idle');
+  const [isStopping, setIsStopping] = useState(false);
+  const [feedBootstrap, setFeedBootstrap] = useState<{
+    threadId: string;
+    cursor: string | null;
+    generation: number;
+  } | null>(null);
   const [specialState, setSpecialState] = useState<SpecialChatState | null>(null);
 
   const [userContextSeed, setUserContextSeed] = useState<Partial<ChatUserContext>>(initialContext || {});
@@ -140,17 +180,21 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   const userContextSeedRef = useRef(userContextSeed);
   const messagePageInfoRef = useRef(messagePageInfo);
   const isLoadingOlderMessagesRef = useRef(isLoadingOlderMessages);
-  const isStreamingRef = useRef(isStreaming);
   const threadActivityStatusRef = useRef(threadActivityStatus);
-  const isRecoveringStreamRef = useRef(isRecoveringStream);
   const senderOptionsRef = useRef<SenderResolutionOptions>({
     agents: agentOptions,
     user: userId ? { id: userId, name: userName, avatarUrl: userAvatar } : null,
     assistantName,
   });
   const persistedToolUpdatesRef = useRef<ToolResultUpdate[]>([]);
-  const stopRequestedRef = useRef(false);
-  const recoveryPollGenerationRef = useRef(0);
+  const feedBootstrapGenerationRef = useRef(0);
+  const activeOperationsRef = useRef<Map<string, ActiveOperationStatus>>(new Map());
+  const liveOperationsRef = useRef<Map<string, LiveOperationProjection>>(new Map());
+  const streamOffsetsRef = useRef<Map<string, number>>(new Map());
+  const threadTransportGenerationRef = useRef(0);
+  const currentFeedCursorRef = useRef<string | null>(null);
+  const feedAbortControllerRef = useRef<AbortController | null>(null);
+  const canonicalRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toolCallDraftStoreRef = useRef<ToolCallDraftStore | null>(null);
   if (!toolCallDraftStoreRef.current) {
     toolCallDraftStoreRef.current = createToolCallDraftStore();
@@ -166,9 +210,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   userContextSeedRef.current = userContextSeed;
   messagePageInfoRef.current = messagePageInfo;
   isLoadingOlderMessagesRef.current = isLoadingOlderMessages;
-  isStreamingRef.current = isStreaming;
   threadActivityStatusRef.current = threadActivityStatus;
-  isRecoveringStreamRef.current = isRecoveringStream;
   senderOptionsRef.current = {
     agents: agentOptions,
     user: userId ? { id: userId, name: userName, avatarUrl: userAvatar } : null,
@@ -178,7 +220,6 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   participantsRef.current = participants ?? null;
   targetAgentNameRef.current = targetAgentName ?? null;
 
-  const abortControllerRef = useRef<AbortController | null>(null);
   const messagesRequestRef = useRef<number>(0);
   // Guard to prevent double initialization in StrictMode
   const initializationRef = useRef<{ userId: string | null; started: boolean }>({ userId: null, started: false });
@@ -189,7 +230,13 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     }
   }, [initialContext]);
 
-  useEffect(() => () => toolCallDraftStore.clear(), [toolCallDraftStore]);
+  useEffect(() => () => {
+    toolCallDraftStore.clear();
+    feedAbortControllerRef.current?.abort();
+    if (canonicalRefreshTimerRef.current) {
+      clearTimeout(canonicalRefreshTimerRef.current);
+    }
+  }, [toolCallDraftStore]);
 
   const processToolOutput = useCallback(
     (output: Record<string, unknown>) => {
@@ -348,6 +395,10 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
 
     setCurrentThreadId(nextThreadId ?? null);
     setCurrentThreadExternalId(nextThreadId ? externalMap[nextThreadId] ?? null : null);
+    currentThreadIdRef.current = nextThreadId ?? null;
+    currentThreadExternalIdRef.current = nextThreadId
+      ? externalMap[nextThreadId] ?? null
+      : null;
 
     return nextThreadId;
   }, []); // No dependencies needed now as we use refs for reading current state
@@ -378,29 +429,57 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
   );
 
   const loadThreadMessages = useCallback(
-    async (threadId: string) => {
+    async (threadId: string, options: Readonly<{ rethrow?: boolean }> = {}) => {
+      if (currentThreadIdRef.current !== threadId) return;
+      const transportGeneration = threadTransportGenerationRef.current;
       const requestId = messagesRequestRef.current + 1;
       messagesRequestRef.current = requestId;
       setIsMessagesLoading(true);
       setIsLoadingOlderMessages(false);
-      setMessagePageInfo(createEmptyMessagePageInfo());
-      persistedToolUpdatesRef.current = [];
+      if (!options.rethrow) {
+        setMessagePageInfo(createEmptyMessagePageInfo());
+        persistedToolUpdatesRef.current = [];
+      }
       try {
         const page = await fetchThreadMessagesPage(threadId, { limit: THREAD_MESSAGES_PAGE_SIZE }, getRequestHeaders);
         const { viewMessages, toolResultUpdates } = prepareThreadMessages(page);
-        if (messagesRequestRef.current !== requestId) return;
+        if (
+          messagesRequestRef.current !== requestId ||
+          threadTransportGenerationRef.current !== transportGeneration ||
+          currentThreadIdRef.current !== threadId
+        ) return;
 
         persistedToolUpdatesRef.current = toolResultUpdates;
         const hydratedMessages = mergePersistedToolResults(viewMessages, persistedToolUpdatesRef.current);
         setMessages(hydratedMessages);
         setMessagePageInfo(page.pageInfo);
+        streamOffsetsRef.current.clear();
+        currentFeedCursorRef.current = page.pageInfo.replayCursor ?? null;
+        liveOperationsRef.current.clear();
+        activeOperationsRef.current.clear();
+        for (const operationId of page.pageInfo.activeOperationIds ?? []) {
+          activeOperationsRef.current.set(operationId, 'running');
+        }
+        setIsStreaming(activeOperationsRef.current.size > 0);
+        setThreadActivityStatus(activeOperationsRef.current.size > 0 ? 'running' : 'idle');
+        setIsStopping(false);
+        setFeedBootstrap({
+          threadId,
+          cursor: page.pageInfo.replayCursor ?? null,
+          generation: ++feedBootstrapGenerationRef.current,
+        });
       } catch (error) {
         if (isAbortError(error)) return;
+        if (options.rethrow) throw error;
         console.error(`Error loading messages for thread ${threadId}`, error);
         persistedToolUpdatesRef.current = [];
         setMessagePageInfo(createEmptyMessagePageInfo());
       } finally {
-        if (messagesRequestRef.current === requestId) {
+        if (
+          messagesRequestRef.current === requestId &&
+          threadTransportGenerationRef.current === transportGeneration &&
+          currentThreadIdRef.current === threadId
+        ) {
           setIsMessagesLoading(false);
         }
       }
@@ -410,12 +489,18 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
 
   const refreshThreadMessages = useCallback(
     async (threadId: string) => {
+      const transportGeneration = threadTransportGenerationRef.current;
+      if (currentThreadIdRef.current !== threadId) return;
       const requestId = messagesRequestRef.current;
 
       try {
         const page = await fetchThreadMessagesPage(threadId, { limit: THREAD_MESSAGES_PAGE_SIZE }, getRequestHeaders);
         const { viewMessages, toolResultUpdates } = prepareThreadMessages(page);
-        if (messagesRequestRef.current !== requestId) return;
+        if (
+          messagesRequestRef.current !== requestId ||
+          threadTransportGenerationRef.current !== transportGeneration ||
+          currentThreadIdRef.current !== threadId
+        ) return;
 
         persistedToolUpdatesRef.current = [
           ...persistedToolUpdatesRef.current,
@@ -483,105 +568,49 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     });
   }, []);
 
-  const startThreadActivityRecovery = useCallback(
-    (threadId: string) => {
-      const generation = ++recoveryPollGenerationRef.current;
-      setThreadActivityStatus('running');
-      setIsRecoveringStream(true);
-      setIsStreaming(true);
-
-      void (async () => {
-        let delayMs = 2000;
-        let attempts = 0;
-
-        await refreshThreadMessages(threadId);
-
-        while (recoveryPollGenerationRef.current === generation) {
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
-          if (recoveryPollGenerationRef.current !== generation) return;
-          if (currentThreadIdRef.current !== threadId) return;
-
-          try {
-            const activity = await fetchThreadActivity(threadId, getRequestHeaders);
-            setThreadActivityStatus(activity.status);
-
-            if (activity.status === 'running') {
-              attempts += 1;
-              if (attempts % 3 === 0) {
-                await refreshThreadMessages(threadId);
-              }
-              if (attempts >= 15) {
-                delayMs = 5000;
-              }
-              continue;
-            }
-
-            await refreshThreadMessages(threadId);
-            finalizeStreamingPlaceholders(activity.status);
-            return;
-          } catch (error) {
-            if (isAbortError(error)) return;
-            attempts += 1;
-            if (attempts >= 15) {
-              delayMs = 5000;
-            }
-          }
-        }
-      })();
-    },
-    [finalizeStreamingPlaceholders, getRequestHeaders, refreshThreadMessages]
-  );
-
-  const refreshThreadActivity = useCallback(
-    async (threadId: string) => {
-      try {
-        const activity = await fetchThreadActivity(threadId, getRequestHeaders);
-        setThreadActivityStatus(activity.status);
-
-        if (activity.status === 'running') {
-          startThreadActivityRecovery(threadId);
-          return;
-        }
-
-        setIsRecoveringStream(false);
-        if (activity.status === 'failed') {
-          await refreshThreadMessages(threadId);
-        }
-      } catch (error) {
-        if (isAbortError(error)) return;
-        console.warn('Unable to load Copilotz thread activity', error);
-      }
-    },
-    [getRequestHeaders, refreshThreadMessages, startThreadActivityRecovery]
-  );
+  const resetThreadTransport = useCallback(() => {
+    threadTransportGenerationRef.current += 1;
+    messagesRequestRef.current += 1;
+    if (canonicalRefreshTimerRef.current) {
+      clearTimeout(canonicalRefreshTimerRef.current);
+      canonicalRefreshTimerRef.current = null;
+    }
+    feedAbortControllerRef.current?.abort();
+    feedAbortControllerRef.current = null;
+    activeOperationsRef.current.clear();
+    liveOperationsRef.current.clear();
+    streamOffsetsRef.current.clear();
+    currentFeedCursorRef.current = null;
+    setFeedBootstrap(null);
+    setFeedConnectionStatus('idle');
+    setThreadActivityStatus('idle');
+    setIsRecoveringStream(false);
+    setIsStreaming(false);
+    setIsStopping(false);
+  }, []);
 
   const handleSelectThread = useCallback(
     async (threadId: string) => {
-      recoveryPollGenerationRef.current += 1;
-      setThreadActivityStatus('idle');
-      setIsRecoveringStream(false);
-      setIsStreaming(false);
+      resetThreadTransport();
+      currentThreadIdRef.current = threadId;
       setCurrentThreadId(threadId);
       setMessages([]);
       setMessagePageInfo(createEmptyMessagePageInfo());
       persistedToolUpdatesRef.current = [];
       // Use ref for external map to avoid re-creation
       const extMap = threadExternalIdMapRef.current;
-      setCurrentThreadExternalId(extMap[threadId] ?? null);
+      currentThreadExternalIdRef.current = extMap[threadId] ?? null;
+      setCurrentThreadExternalId(currentThreadExternalIdRef.current);
       await loadThreadMessages(threadId);
-      await refreshThreadActivity(threadId);
     },
-    [loadThreadMessages, refreshThreadActivity]
+    [loadThreadMessages, resetThreadTransport]
   );
 
   const handleCreateThread = useCallback((title?: string) => {
+    resetThreadTransport();
     messagesRequestRef.current += 1;
     setIsMessagesLoading(false);
     setIsLoadingOlderMessages(false);
-    recoveryPollGenerationRef.current += 1;
-    setThreadActivityStatus('idle');
-    setIsRecoveringStream(false);
-    setIsStreaming(false);
     const id = generateId();
     const now = nowTs();
     const newThread: ChatThread = {
@@ -599,12 +628,14 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       [id]: { pendingTitle: title?.trim() || undefined },
     }));
     setThreadExternalIdMap((prev) => ({ ...prev, [id]: id }));
+    currentThreadIdRef.current = id;
+    currentThreadExternalIdRef.current = id;
     setCurrentThreadId(id);
     setCurrentThreadExternalId(id);
     setMessages([]);
     setMessagePageInfo(createEmptyMessagePageInfo());
     persistedToolUpdatesRef.current = [];
-  }, []);
+  }, [resetThreadTransport]);
 
   const handleRenameThread = useCallback(
     async (threadId: string, newTitle: string) => {
@@ -738,12 +769,17 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
 
       // If deleting current thread, switch to another
       if (currentThreadIdRef.current === threadId) {
+        resetThreadTransport();
         const remaining = threadsRef.current.filter((t) => t.id !== threadId);
         if (remaining.length > 0) {
+          currentThreadIdRef.current = remaining[0].id;
+          currentThreadExternalIdRef.current = extMap[remaining[0].id] ?? null;
           setCurrentThreadId(remaining[0].id);
-          setCurrentThreadExternalId(extMap[remaining[0].id] ?? null);
+          setCurrentThreadExternalId(currentThreadExternalIdRef.current);
           await loadThreadMessages(remaining[0].id);
         } else {
+          currentThreadIdRef.current = null;
+          currentThreadExternalIdRef.current = null;
           setCurrentThreadId(null);
           setCurrentThreadExternalId(null);
           setMessages([]);
@@ -764,24 +800,45 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
         }
       }
     },
-    [userId, fetchAndSetThreadsState, loadThreadMessages, getRequestHeaders]
+    [userId, fetchAndSetThreadsState, loadThreadMessages, getRequestHeaders, resetThreadTransport]
   );
 
-  const handleStop = useCallback(() => {
-    stopRequestedRef.current = true;
-    recoveryPollGenerationRef.current += 1;
-    abortControllerRef.current?.abort();
-    abortControllerRef.current = null;
-    setThreadActivityStatus('idle');
-    setIsRecoveringStream(false);
-    setIsStreaming(false);
-    setMessages((prev) => {
-      // Check if any message needs updating before creating new array
-      const hasStreaming = prev.some((msg) => msg.isStreaming);
-      if (!hasStreaming) return prev;
-      return prev.map((msg) => (msg.isStreaming ? closeAssistantMessage(msg) : msg));
-    });
-  }, []);
+  const handleStop = useCallback(async () => {
+    const operationId = [...activeOperationsRef.current.entries()]
+      .reverse()
+      .find(([, status]) => status === 'running')?.[0];
+    if (!operationId || isStopping) return;
+    activeOperationsRef.current.set(operationId, 'stopping');
+    setIsStopping(true);
+    try {
+      const result = await cancelCopilotzOperation(
+        operationId,
+        getRequestHeaders,
+      );
+      if (
+        result.status === 'cancelled' || result.status === 'completed' ||
+        result.status === 'failed'
+      ) {
+        activeOperationsRef.current.delete(operationId);
+        liveOperationsRef.current.delete(operationId);
+        setIsStopping(false);
+        if (activeOperationsRef.current.size === 0) {
+          feedAbortControllerRef.current?.abort();
+          setFeedConnectionStatus('idle');
+          const threadId = currentThreadIdRef.current;
+          if (threadId) await refreshThreadMessages(threadId);
+          finalizeStreamingPlaceholders(
+            result.status === 'failed' ? 'failed' : 'idle',
+          );
+        }
+      }
+      // For an accepted cancellation, the feed owns final settlement.
+    } catch (error) {
+      activeOperationsRef.current.set(operationId, 'running');
+      setIsStopping(false);
+      console.error('Failed to stop Copilotz operation', error);
+    }
+  }, [finalizeStreamingPlaceholders, getRequestHeaders, isStopping, refreshThreadMessages]);
 
   const handleStreamAssetEvent = useCallback((payload: any, assistantMessageId: string) => {
     // Handle ASSET_CREATED event from copilotz
@@ -811,338 +868,423 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     );
   }, []);
 
-  const sendCopilotzMessage = useCallback(
-    async (params: { threadId?: string | null; threadExternalId?: string | null; content: string; attachments?: MediaAttachment[]; metadata?: Record<string, unknown>; threadMetadata?: Record<string, unknown>; toolCalls?: Array<{ name: string; args: Record<string, unknown> }>; userId: string; userName?: string; userMetadata?: Record<string, unknown>; agentName?: string | null; assistantMessageId?: string; assistantSender?: ChatSender; onBeforeStart?: (assistantMessageId: string) => void; preserveActiveRun?: boolean }) => {
-      const initialAssistantMessageId = params.assistantMessageId ?? generateId();
-      let liveRunState = createLiveRunState(initialAssistantMessageId);
-      const liveDraftIds = new Set<string>();
-      const draftIdByToolCallId = new Map<string, string>();
-      const streamOwnerThreadId = currentThreadIdRef.current;
-      const streamOwnerThreadExternalId = params.threadExternalId ?? currentThreadExternalIdRef.current;
-      const streamStillOwnsVisibleThread = () => isSameThreadIdentity(
-        { id: streamOwnerThreadId, externalId: streamOwnerThreadExternalId },
-        { id: currentThreadIdRef.current, externalId: currentThreadExternalIdRef.current },
-      );
-      params.onBeforeStart?.(initialAssistantMessageId);
-
-      let hasStreamProgress = false;
-
-      const dispatchLiveRunAction = (action: LiveRunAction) => {
-        if (!streamStillOwnsVisibleThread()) return;
-        const transition = transitionLiveRun(liveRunState, action, {
-          createId: generateId,
-        });
-        liveRunState = transition.state;
-        if (transition.operations.length > 0) {
-          setMessages((prev) => applyLiveRunOperations(prev, transition.operations));
+  const queueCanonicalRefresh = useCallback((threadId: string) => {
+    if (canonicalRefreshTimerRef.current) {
+      clearTimeout(canonicalRefreshTimerRef.current);
+    }
+    const transportGeneration = threadTransportGenerationRef.current;
+    canonicalRefreshTimerRef.current = setTimeout(() => {
+      canonicalRefreshTimerRef.current = null;
+      if (
+        threadTransportGenerationRef.current !== transportGeneration ||
+        currentThreadIdRef.current !== threadId
+      ) return;
+      void refreshThreadMessages(threadId).then(() => {
+        if (
+          threadTransportGenerationRef.current !== transportGeneration ||
+          currentThreadIdRef.current !== threadId
+        ) return;
+        if (activeOperationsRef.current.size === 0) {
+          finalizeStreamingPlaceholders(
+            threadActivityStatusRef.current === 'failed' ? 'failed' : 'idle',
+          );
         }
-      };
+      });
+    }, 50);
+  }, [finalizeStreamingPlaceholders, refreshThreadMessages]);
 
-      const abortController = new AbortController();
-      if (!params.preserveActiveRun) {
-        abortControllerRef.current?.abort();
-        recoveryPollGenerationRef.current += 1;
-        setIsRecoveringStream(false);
+  const processThreadFeedEvent = useCallback(async (frame: ThreadFeedEvent) => {
+    const event = frame.data as any;
+    const type = frame.type;
+    const operationId = feedOperationId(event);
+    const threadId = typeof event.threadId === 'string' && event.threadId.trim()
+      ? event.threadId.trim()
+      : currentThreadIdRef.current;
+    if (!operationId || !threadId || currentThreadIdRef.current !== threadId) return;
+
+    if (type === 'replay.capacity') {
+      const error = new Error('Thread feed replay capacity was exceeded.');
+      error.name = 'FeedReplayCapacityError';
+      throw error;
+    }
+
+    const terminalStatus = type === 'operation.completed'
+      ? 'idle'
+      : type === 'operation.failed'
+      ? 'failed'
+      : type === 'operation.cancelled'
+      ? 'idle'
+      : null;
+    if (terminalStatus) {
+      // Interceptors may replace presentation, but transport lifecycle remains
+      // authoritative: a handled terminal frame must still retire the operation.
+      applyEventInterceptor(event);
+      activeOperationsRef.current.delete(operationId);
+      const projection = liveOperationsRef.current.get(operationId);
+      if (projection) {
+        for (const draftId of projection.liveDraftIds) {
+          const snapshot = toolCallDraftStore.getSnapshot(draftId);
+          if (!snapshot) continue;
+          toolCallDraftStore.apply({
+            ...snapshot,
+            phase: 'discarded',
+            sequence: snapshot.sequence + 1,
+            delta: '',
+          });
+          const transition = transitionLiveRun(projection.state, {
+            type: 'tool-draft-discard',
+            draftId,
+          }, { createId: () => `${operationId}:message:${projection.messageOrdinal++}` });
+          projection.state = transition.state;
+          if (transition.operations.length) {
+            setMessages((current) => applyLiveRunOperations(current, transition.operations));
+          }
+        }
       }
-      abortControllerRef.current = abortController;
-      stopRequestedRef.current = false;
+      liveOperationsRef.current.delete(operationId);
+      const hasActive = activeOperationsRef.current.size > 0;
+      setIsStreaming(hasActive);
+      setIsStopping([...activeOperationsRef.current.values()].some((status) => status === 'stopping'));
+      setThreadActivityStatus(hasActive ? 'running' : terminalStatus);
+      if (!hasActive) {
+        setFeedConnectionStatus('idle');
+        setIsRecoveringStream(false);
+        feedAbortControllerRef.current?.abort();
+      }
+      queueCanonicalRefresh(threadId);
+      return;
+    }
+
+    activeOperationsRef.current.set(
+      operationId,
+      activeOperationsRef.current.get(operationId) ?? 'running',
+    );
+    setThreadActivityStatus('running');
+    setIsStreaming(true);
+
+    let projection = liveOperationsRef.current.get(operationId);
+    if (!projection) {
+      projection = {
+        state: createLiveRunState(`${operationId}:assistant:0`),
+        assistantSender: resolveAssistantFallbackSender(senderOptionsRef.current),
+        liveDraftIds: new Set(),
+        draftIdByToolCallId: new Map(),
+        accumulated: new Map(),
+        messageOrdinal: 1,
+        hasProgress: false,
+      };
+      liveOperationsRef.current.set(operationId, projection);
+    }
+
+    const payload = getEventPayload(event);
+    const streamId = typeof event.streamId === 'string'
+      ? event.streamId
+      : typeof payload?.streamId === 'string'
+      ? payload.streamId
+      : null;
+    const fromOffset = typeof event.fromOffset === 'number'
+      ? event.fromOffset
+      : typeof payload?.fromOffset === 'number'
+      ? payload.fromOffset
+      : null;
+    const toOffset = typeof event.toOffset === 'number'
+      ? event.toOffset
+      : typeof payload?.toOffset === 'number'
+      ? payload.toOffset
+      : null;
+    if (streamId && fromOffset !== null && toOffset !== null) {
+      const applied = streamOffsetsRef.current.get(
+        feedStreamOffsetKey(operationId, streamId),
+      ) ?? 0;
+      if (toOffset <= applied) return;
+      if (fromOffset !== applied || toOffset < fromOffset) {
+        const error = new Error(`Thread feed stream '${streamId}' has an offset gap.`);
+        error.name = 'FeedOffsetGapError';
+        throw error;
+      }
+    }
+
+    const commitOffset = () => {
+      if (streamId && toOffset !== null) {
+        streamOffsetsRef.current.set(
+          feedStreamOffsetKey(operationId, streamId),
+          toOffset,
+        );
+      }
+    };
+    const intercepted = applyEventInterceptor(event);
+    if (intercepted?.handled) {
+      // The SSE cursor advances after this callback returns. Advance the matching
+      // lane cursor as well so a handled progressive frame cannot create a false
+      // offset gap on the next frame or after reconnect.
+      commitOffset();
+      return;
+    }
+    const dispatch = (action: LiveRunAction) => {
+      const transition = transitionLiveRun(projection!.state, action, {
+        createId: () => `${operationId}:message:${projection!.messageOrdinal++}`,
+      });
+      projection!.state = transition.state;
+      if (transition.operations.length) {
+        setMessages((current) => applyLiveRunOperations(current, transition.operations));
+      }
+    };
+
+    if (type === 'text.delta' || type === 'reasoning.delta') {
+      const isReasoning = type === 'reasoning.delta';
+      const attemptId = getLlmAttemptId(event) ?? `${operationId}:attempt:0`;
+      const chunk = typeof payload?.text === 'string' ? payload.text : '';
+      const laneKey = streamId ?? `${attemptId}:${isReasoning ? 'reasoning' : 'answer'}`;
+      const partial = `${projection.accumulated.get(laneKey) ?? ''}${chunk}`;
+      projection.accumulated.set(laneKey, partial);
+      const rawAgent = payload?.agent ?? event.agent;
+      const incomingSender = rawAgent
+        ? resolveAgentSender(rawAgent, senderOptionsRef.current)
+        : undefined;
+      const sender = selectLiveRunSender(
+        projection.state,
+        attemptId,
+        incomingSender,
+        projection.assistantSender,
+      );
+      dispatch({
+        type: 'token',
+        attemptId,
+        phaseId: typeof payload?.phaseId === 'string'
+          ? payload.phaseId
+          : `${attemptId}:${isReasoning ? 'reasoning' : 'answer'}:0`,
+        partial,
+        isReasoning,
+        sender,
+        at: getEventTimestamp(event),
+      });
+      projection.hasProgress ||= chunk.length > 0;
+      setIsRecoveringStream(false);
+      commitOffset();
+      return;
+    }
+
+    if (type === 'tool_call.delta') {
+      const delta = extractLiveToolCallDelta((payload ?? {}) as Record<string, unknown>);
+      const applied = toolCallDraftStore.apply(delta);
+      if (applied === 'created') {
+        projection.liveDraftIds.add(delta.draftId);
+        dispatch({
+          type: 'tool-draft-start',
+          attemptId: delta.llmAttemptId,
+          draftId: delta.draftId,
+          toolName: delta.toolName,
+          sender: resolveLiveEventSender(event, senderOptionsRef.current),
+          at: getEventTimestamp(event),
+        });
+      } else if (applied === 'completed' && delta.toolCallId) {
+        projection.draftIdByToolCallId.set(delta.toolCallId, delta.draftId);
+        dispatch({ type: 'tool-draft-complete', draftId: delta.draftId, toolCallId: delta.toolCallId });
+        const snapshot = toolCallDraftStore.getSnapshot(delta.draftId);
+        if (!snapshot) throw new Error(`Completed tool draft '${delta.draftId}' disappeared.`);
+        const parsedToolCall = parseCompletedToolCallDraft(snapshot);
+        dispatch({
+          type: 'tool-call',
+          attemptId: delta.llmAttemptId,
+          sender: resolveLiveEventSender(event, senderOptionsRef.current),
+          at: getEventTimestamp(event),
+          toolCall: {
+            id: parsedToolCall.id!,
+            toolId: parsedToolCall.toolId,
+            name: parsedToolCall.name,
+            arguments: parsedToolCall.arguments,
+            status: parsedToolCall.status,
+          },
+        });
+        projection.liveDraftIds.delete(delta.draftId);
+      } else if (applied === 'discarded') {
+        projection.liveDraftIds.delete(delta.draftId);
+        dispatch({ type: 'tool-draft-discard', draftId: delta.draftId });
+      }
+      projection.hasProgress = true;
+      commitOffset();
+      return;
+    }
+
+    if (type === 'tool_execution.created') {
+      const lifecycle = extractToolExecutionLifecycle(event);
+      dispatch({
+        type: 'tool-execution-start',
+        attemptId: projection.state.activeAttemptId ?? projection.state.lastAttemptId,
+        id: lifecycle.id,
+        toolExecutionId: lifecycle.toolExecutionId,
+        name: lifecycle.name,
+        sender: resolveLiveEventSender(event, senderOptionsRef.current),
+        at: getEventTimestamp(event),
+      });
+      projection.hasProgress = true;
+      commitOffset();
+      return;
+    }
+
+    if (type === 'tool_output.delta') {
+      const update = extractToolOutputDelta(event);
+      if (update.channel === 'result' && isRecord(update.delta)) processToolOutput(update.delta);
+      dispatch({ type: 'tool-output', update });
+      projection.hasProgress = true;
+      commitOffset();
+      return;
+    }
+
+    if (
+      type === 'tool_execution.completed' || type === 'tool_execution.failed' ||
+      type === 'tool_execution.cancelled'
+    ) {
+      const lifecycle = extractToolExecutionLifecycle(event);
+      dispatch({
+        type: 'tool-result',
+        update: {
+          id: lifecycle.id,
+          toolExecutionId: lifecycle.toolExecutionId,
+          name: lifecycle.name,
+          status: lifecycle.status,
+          ...(lifecycle.error ? { error: lifecycle.error } : {}),
+          endTime: lifecycle.endTime ?? getEventTimestamp(event),
+        },
+      });
+      commitOffset();
+      return;
+    }
+
+    if (isAgentOutputMessageEvent(event)) {
+      const attemptId = getLlmAttemptId(event) ??
+        projection.state.activeAttemptId ?? projection.state.lastAttemptId;
+      if (attemptId) dispatch({ type: 'attempt-result', attemptId, at: getEventTimestamp(event) });
+      queueCanonicalRefresh(threadId);
+      commitOffset();
+      return;
+    }
+
+    if (type === 'asset.created') {
+      const assetPayload = payload ?? event.payload;
+      if (projection.hasProgress) {
+        handleStreamAssetEvent(assetPayload, getLatestLiveRunMessageId(projection.state));
+      }
+      queueCanonicalRefresh(threadId);
+      commitOffset();
+      return;
+    }
+
+    if (type !== 'operation.accepted' && type !== 'operation.started' && type !== 'message.created') {
+      handleStreamMessageEvent(event);
+    }
+    if (type === 'message.created') queueCanonicalRefresh(threadId);
+    commitOffset();
+  }, [applyEventInterceptor, handleStreamAssetEvent, handleStreamMessageEvent, processToolOutput, queueCanonicalRefresh, toolCallDraftStore]);
+
+  const sendReconnectableCopilotzMessage = useCallback(
+    async (params: { threadId?: string | null; threadExternalId?: string | null; content: string; attachments?: MediaAttachment[]; metadata?: Record<string, unknown>; threadMetadata?: Record<string, unknown>; toolCalls?: Array<{ name: string; args: Record<string, unknown> }>; userId: string; userName?: string; userMetadata?: Record<string, unknown>; agentName?: string | null; assistantMessageId?: string; assistantSender?: ChatSender; onBeforeStart?: (assistantMessageId: string) => void }) => {
+      const transportGeneration = threadTransportGenerationRef.current;
+      const operationId = generateId();
+      const assistantMessageId = params.assistantMessageId ?? `${operationId}:assistant:0`;
+      params.onBeforeStart?.(assistantMessageId);
+      liveOperationsRef.current.set(operationId, {
+        state: createLiveRunState(assistantMessageId),
+        assistantSender: params.assistantSender,
+        liveDraftIds: new Set(),
+        draftIdByToolCallId: new Map(),
+        accumulated: new Map(),
+        messageOrdinal: 1,
+        hasProgress: false,
+      });
+      activeOperationsRef.current.set(operationId, 'running');
       setThreadActivityStatus('running');
       setIsStreaming(true);
+      setIsStopping(false);
 
-      let streamError: unknown = null;
-      const resolveActivityThreadId = async () => {
-        if (params.threadId) return params.threadId;
-
-        const curId = currentThreadIdRef.current;
-        if (curId && threadExternalIdMapRef.current[curId] !== curId) {
-          return curId;
-        }
-
-        if (params.threadExternalId) {
-          return await fetchAndSetThreadsState(params.userId, params.threadExternalId);
-        }
-
-        return null;
-      };
+      const metadataKey = params.threadId ?? params.threadExternalId ?? undefined;
+      const currentThreadMetadataMap = threadMetadataMapRef.current;
+      const messageMetadata = metadataKey
+        ? currentThreadMetadataMap[metadataKey]?.userContext as Record<string, unknown> | undefined
+        : undefined;
+      const threadMetadata = metadataKey ? currentThreadMetadataMap[metadataKey] : undefined;
+      const mergedMetadata = { ...(messageMetadata ?? {}), ...(params.metadata ?? {}) };
+      const contextSeed = userContextSeedRef.current;
+      let activeOperationId = operationId;
 
       try {
-        const normalizedUserMetadata = params.userMetadata ? (JSON.parse(JSON.stringify(params.userMetadata)) as Record<string, unknown>) : undefined;
-
-        const contextSeed = userContextSeedRef.current;
-        const contextMetadata = contextSeed ? (JSON.parse(JSON.stringify(contextSeed)) as Record<string, unknown>) : undefined;
-        const requestContent = params.content && params.content.length > 0 ? params.content : '';
-
-        const metadataKey = params.threadId ?? params.threadExternalId ?? undefined;
-        // Read from ref to avoid dependency on threadMetadataMap
-        const currentThreadMetadataMap = threadMetadataMapRef.current;
-        const messageMetadata = metadataKey ? (currentThreadMetadataMap[metadataKey]?.userContext as Record<string, unknown> | undefined) : undefined;
-        const threadMetadata = metadataKey ? currentThreadMetadataMap[metadataKey] : undefined;
-
-        const mergedMetadata = {
-          ...(messageMetadata ?? {}),
-          ...(params.metadata ?? {}),
-        } as Record<string, unknown>;
-
-        const finalMetadata = Object.keys(mergedMetadata).length > 0 ? mergedMetadata : undefined;
-
-        await runCopilotzStream({
+        const receipt = await startCopilotzRun({
+          operationId,
           threadId: params.threadId ?? undefined,
           threadExternalId: params.threadExternalId ?? undefined,
-          content: requestContent,
+          content: params.content || '',
           user: {
             externalId: params.userId,
             name: params.userName ?? params.userId,
             metadata: {
-              ...(contextMetadata ? contextMetadata : {}),
-              ...(normalizedUserMetadata ?? {}),
+              ...(contextSeed ? JSON.parse(JSON.stringify(contextSeed)) : {}),
+              ...(params.userMetadata ? JSON.parse(JSON.stringify(params.userMetadata)) : {}),
             },
           },
           attachments: params.attachments,
-          metadata: finalMetadata,
+          metadata: Object.keys(mergedMetadata).length ? mergedMetadata : undefined,
           threadMetadata: params.threadMetadata ?? threadMetadata,
           toolCalls: params.toolCalls,
           selectedAgent: params.agentName ?? preferredAgentRef.current ?? null,
           participants: participantsRef.current,
           targetAgent: targetAgentNameRef.current,
           getRequestHeaders,
-          onToken: (token, _isComplete, raw, opts) => {
-            const attemptId = opts?.llmAttemptId ??
-              liveRunState.activeAttemptId ??
-              liveRunState.lastAttemptId ??
-              `stream-attempt:${initialAssistantMessageId}`;
-            const rawAgent = raw?.payload?.agent ?? raw?.agent ?? null;
-            const agent = rawAgent ?? opts?.agent;
-            const incomingSender = agent
-              ? resolveAgentSender(agent, senderOptionsRef.current)
-              : undefined;
-            const sender = selectLiveRunSender(
-              liveRunState,
-              attemptId,
-              incomingSender,
-              params.assistantSender,
-            );
-            const isReasoning = opts?.isReasoning ?? false;
-            const phaseId = opts?.phaseId ??
-              `${attemptId}:${isReasoning ? 'reasoning' : 'answer'}:0`;
-            if (token.length > 0) {
-              hasStreamProgress = true;
-              setIsRecoveringStream(false);
-            }
-            dispatchLiveRunAction({
-              type: 'token',
-              attemptId,
-              phaseId,
-              partial: token,
-              isReasoning,
-              sender,
-              at: getEventTimestamp(raw),
-            });
-          },
-          onMessageEvent: async (event: any) => {
-            if (!streamStillOwnsVisibleThread()) return;
-            const intercepted = applyEventInterceptor(event);
-            if (intercepted?.handled) {
-              return;
-            }
-
-            const type = (event?.type as string) || '';
-            const payload = getEventPayload(event);
-
-            if (type === 'tool_call.delta') {
-              const delta = extractLiveToolCallDelta((payload ?? {}) as Record<string, unknown>);
-              const applied = toolCallDraftStore.apply(delta);
-              if (applied === 'created') {
-                liveDraftIds.add(delta.draftId);
-                dispatchLiveRunAction({
-                  type: 'tool-draft-start',
-                  attemptId: delta.llmAttemptId,
-                  draftId: delta.draftId,
-                  toolName: delta.toolName,
-                  sender: resolveLiveEventSender(event, senderOptionsRef.current),
-                  at: getEventTimestamp(event),
-                });
-                hasStreamProgress = true;
-              } else if (applied === 'completed' && delta.toolCallId) {
-                draftIdByToolCallId.set(delta.toolCallId, delta.draftId);
-                dispatchLiveRunAction({
-                  type: 'tool-draft-complete',
-                  draftId: delta.draftId,
-                  toolCallId: delta.toolCallId,
-                });
-                const snapshot = toolCallDraftStore.getSnapshot(delta.draftId);
-                if (!snapshot) {
-                  throw new Error(`Completed tool draft '${delta.draftId}' disappeared.`);
-                }
-                const parsedToolCall = parseCompletedToolCallDraft(snapshot);
-                dispatchLiveRunAction({
-                  type: 'tool-call',
-                  attemptId: delta.llmAttemptId,
-                  sender: resolveLiveEventSender(event, senderOptionsRef.current),
-                  at: getEventTimestamp(event),
-                  toolCall: {
-                    id: parsedToolCall.id!,
-                    toolId: parsedToolCall.toolId,
-                    name: parsedToolCall.name,
-                    arguments: parsedToolCall.arguments,
-                    status: parsedToolCall.status,
-                  },
-                });
-                liveDraftIds.delete(delta.draftId);
-                hasStreamProgress = true;
-              } else if (applied === 'discarded') {
-                liveDraftIds.delete(delta.draftId);
-                for (const [toolCallId, draftId] of draftIdByToolCallId) {
-                  if (draftId === delta.draftId) {
-                    draftIdByToolCallId.delete(toolCallId);
-                  }
-                }
-                dispatchLiveRunAction({
-                  type: 'tool-draft-discard',
-                  draftId: delta.draftId,
-                });
-              }
-              return;
-            }
-
-            if (type === 'tool_execution.created') {
-              const lifecycle = extractToolExecutionLifecycle(event);
-              dispatchLiveRunAction({
-                type: 'tool-execution-start',
-                attemptId: liveRunState.activeAttemptId ?? liveRunState.lastAttemptId,
-                id: lifecycle.id,
-                toolExecutionId: lifecycle.toolExecutionId,
-                name: lifecycle.name,
-                at: getEventTimestamp(event),
-              });
-              hasStreamProgress = true;
-              return;
-            }
-
-            if (type === 'tool_output.delta') {
-              const update = extractToolOutputDelta(event);
-              if (update.channel === 'result' && isRecord(update.delta)) {
-                processToolOutput(update.delta);
-              }
-              dispatchLiveRunAction({ type: 'tool-output', update });
-              hasStreamProgress = true;
-              return;
-            }
-
-            if (
-              type === 'tool_execution.completed' ||
-              type === 'tool_execution.failed' ||
-              type === 'tool_execution.cancelled'
-            ) {
-              const lifecycle = extractToolExecutionLifecycle(event);
-              dispatchLiveRunAction({
-                type: 'tool-result',
-                update: {
-                  id: lifecycle.id,
-                  toolExecutionId: lifecycle.toolExecutionId,
-                  name: lifecycle.name,
-                  status: lifecycle.status,
-                  ...(lifecycle.error ? { error: lifecycle.error } : {}),
-                  endTime: lifecycle.endTime ?? getEventTimestamp(event),
-                },
-              });
-              return;
-            }
-
-            if (isAgentOutputMessageEvent(event)) {
-              const attemptId = getLlmAttemptId(event) ??
-                liveRunState.activeAttemptId ?? liveRunState.lastAttemptId;
-              if (attemptId) {
-                dispatchLiveRunAction({
-                  type: 'attempt-result',
-                  attemptId,
-                  at: getEventTimestamp(event),
-                });
-              }
-              return;
-            }
-
-            if (type === 'message.created') return;
-
-            // Fallback for unknown events
-            handleStreamMessageEvent(event);
-          },
-          onAssetEvent: async (payload: any) => {
-            if (!streamStillOwnsVisibleThread()) return;
-            const intercepted = applyEventInterceptor({
-              type: 'ASSET_CREATED',
-              payload,
-            });
-            if (intercepted?.handled) {
-              return;
-            }
-
-            if (!hasStreamProgress) return;
-            handleStreamAssetEvent(payload, getLatestLiveRunMessageId(liveRunState));
-          },
-          signal: abortController.signal,
         });
-      } catch (error) {
-        streamError = error;
-      }
-
-      for (const draftId of liveDraftIds) {
-        const snapshot = toolCallDraftStore.getSnapshot(draftId);
-        if (!snapshot) continue;
-        toolCallDraftStore.apply({
-          ...snapshot,
-          phase: 'discarded',
-          sequence: snapshot.sequence + 1,
-          delta: '',
-        });
-        dispatchLiveRunAction({ type: 'tool-draft-discard', draftId });
-      }
-      liveDraftIds.clear();
-
-      const wasStopped = stopRequestedRef.current || abortController.signal.aborted || isAbortError(streamError);
-      let recoveryStarted = false;
-
-      if (!wasStopped && streamStillOwnsVisibleThread()) {
-        try {
-          const activityThreadId = await resolveActivityThreadId();
-          if (activityThreadId) {
-            const activity = await fetchThreadActivity(activityThreadId, getRequestHeaders);
-            setThreadActivityStatus(activity.status);
-            if (activity.status === 'running') {
-              recoveryStarted = true;
-              startThreadActivityRecovery(activityThreadId);
-            } else {
-              setIsRecoveringStream(false);
-              await refreshThreadMessages(activityThreadId);
-            }
-          }
-        } catch (activityError) {
-          if (!streamError) {
-            console.warn('Unable to verify Copilotz thread activity after stream close', activityError);
-          }
+        const remainsSelected = () =>
+          threadTransportGenerationRef.current === transportGeneration && (
+            (params.threadId !== undefined && params.threadId !== null &&
+              currentThreadIdRef.current === params.threadId) ||
+            (params.threadExternalId !== undefined && params.threadExternalId !== null &&
+              currentThreadExternalIdRef.current === params.threadExternalId)
+          );
+        if (!remainsSelected()) {
+          activeOperationsRef.current.delete(operationId);
+          liveOperationsRef.current.delete(operationId);
+          return assistantMessageId;
         }
+        if (receipt.operationId !== operationId) {
+          const projection = liveOperationsRef.current.get(operationId);
+          liveOperationsRef.current.delete(operationId);
+          activeOperationsRef.current.delete(operationId);
+          if (projection) liveOperationsRef.current.set(receipt.operationId, projection);
+          activeOperationsRef.current.set(receipt.operationId, 'running');
+          activeOperationId = receipt.operationId;
+        }
+        const rawThreads = await fetchThreads(params.userId, getRequestHeaders);
+        if (!remainsSelected()) {
+          activeOperationsRef.current.delete(receipt.operationId);
+          liveOperationsRef.current.delete(receipt.operationId);
+          return assistantMessageId;
+        }
+        const persistedThreadId = updateThreadsState(
+          rawThreads,
+          receipt.thread.externalId,
+        ) ?? receipt.thread.id;
+        currentThreadIdRef.current = persistedThreadId;
+        currentThreadExternalIdRef.current = receipt.thread.externalId;
+        setCurrentThreadId(persistedThreadId);
+        setCurrentThreadExternalId(receipt.thread.externalId);
+        setFeedBootstrap({
+          threadId: persistedThreadId,
+          cursor: currentFeedCursorRef.current ?? receipt.replayCursor,
+          generation: ++feedBootstrapGenerationRef.current,
+        });
+        return assistantMessageId;
+      } catch (error) {
+        activeOperationsRef.current.delete(operationId);
+        activeOperationsRef.current.delete(activeOperationId);
+        liveOperationsRef.current.delete(operationId);
+        liveOperationsRef.current.delete(activeOperationId);
+        if (threadTransportGenerationRef.current !== transportGeneration) {
+          return assistantMessageId;
+        }
+        if (
+          activeOperationsRef.current.size === 0
+        ) finalizeStreamingPlaceholders('failed');
+        throw error;
       }
-
-      if (abortControllerRef.current === abortController) {
-        abortControllerRef.current = null;
-      }
-
-      if (!streamStillOwnsVisibleThread()) {
-        return getLatestLiveRunMessageId(liveRunState);
-      }
-
-      if (recoveryStarted) {
-        return getLatestLiveRunMessageId(liveRunState);
-      }
-
-      finalizeStreamingPlaceholders();
-
-      if (streamError) {
-        throw streamError;
-      }
-
-      return getLatestLiveRunMessageId(liveRunState);
     },
-    [applyEventInterceptor, handleStreamMessageEvent, handleStreamAssetEvent, fetchAndSetThreadsState, finalizeStreamingPlaceholders, getRequestHeaders, refreshThreadMessages, startThreadActivityRecovery, toolCallDraftStore]
+    [finalizeStreamingPlaceholders, getRequestHeaders, updateThreadsState],
   );
 
   const handleSendMessage = useCallback(
@@ -1153,11 +1295,6 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       const timestamp = nowTs();
       const curThreadId = currentThreadIdRef.current;
       const curThreadExtId = currentThreadExternalIdRef.current;
-      const sendOwnerThreadId = curThreadId;
-      const preserveActiveRun =
-        threadActivityStatusRef.current === 'running' ||
-        isRecoveringStreamRef.current ||
-        isStreamingRef.current;
 
       const existingThreadId = curThreadId ?? undefined;
       // Use Ref to check without adding dependency
@@ -1178,12 +1315,6 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       }
 
       const conversationKey = threadIdForSend ?? effectiveThreadExternalId!;
-      const sendOwnerThreadExternalId = effectiveThreadExternalId ?? curThreadExtId;
-      const stillShowingSendOwnerThread = () => isSameThreadIdentity(
-        { id: sendOwnerThreadId, externalId: sendOwnerThreadExternalId },
-        { id: currentThreadIdRef.current, externalId: currentThreadExternalIdRef.current },
-      );
-
       // Get pending title for new threads if any
       const currentMetadata = threadMetadataMapRef.current[conversationKey];
       const pendingTitle = currentMetadata?.pendingTitle as string | undefined;
@@ -1251,7 +1382,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       }
 
       try {
-        await sendCopilotzMessage({
+        await sendReconnectableCopilotzMessage({
           threadId: threadIdForSend,
           threadExternalId: effectiveThreadExternalId,
           content,
@@ -1262,25 +1393,10 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
           metadata: userMessage.metadata,
           assistantMessageId: assistantPlaceholder.id,
           assistantSender,
-          preserveActiveRun,
           // Include pending title for new threads
           threadMetadata: pendingTitle ? { name: pendingTitle } : undefined,
         });
 
-        // Wait to ensure the assistant message is persisted before refreshing
-        await new Promise((r) => setTimeout(r, 1000));
-        // Refresh both thread metadata and canonical messages. Streaming keeps
-        // interaction responsive, while this authoritative pass materializes
-        // asset-backed tool attachments without sending their bytes as events.
-        if (stillShowingSendOwnerThread()) {
-          const persistedThreadId = await fetchAndSetThreadsState(
-            userId,
-            effectiveThreadExternalId ?? existingThreadId ?? null,
-          );
-          if (persistedThreadId) {
-            await refreshThreadMessages(persistedThreadId);
-          }
-        }
       } catch (error) {
         if (isAbortError(error)) return;
         console.error('Error sending Copilotz message', error);
@@ -1327,7 +1443,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
         });
       }
     },
-    [userId, fetchAndSetThreadsState, refreshThreadMessages, sendCopilotzMessage, getSpecialStateFromError]
+    [userId, sendReconnectableCopilotzMessage, getSpecialStateFromError]
   );
 
   const bootstrapConversation = useCallback(
@@ -1366,7 +1482,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       setSpecialState(null);
 
       try {
-        await sendCopilotzMessage({
+        await sendReconnectableCopilotzMessage({
           threadExternalId: bootstrapThreadExternalId,
           content: bootstrap.initialMessage || '',
           toolCalls: bootstrap.initialToolCalls,
@@ -1380,12 +1496,6 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
           },
         });
 
-        // Give the backend time to persist tool outputs/messages before refresh
-        await new Promise((r) => setTimeout(r, 1000));
-
-        // Refresh threads list to update metadata
-        // Don't reload messages since we already have them from streaming
-        await fetchAndSetThreadsState(uid, bootstrapThreadExternalId);
       } catch (error) {
         if (isAbortError(error)) return;
         console.error('Error bootstrapping conversation', error);
@@ -1408,28 +1518,182 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
         ]);
       }
     },
-    [fetchAndSetThreadsState, loadThreadMessages, sendCopilotzMessage, bootstrap, defaultThreadName, getSpecialStateFromError]
+    [sendReconnectableCopilotzMessage, bootstrap, defaultThreadName, getSpecialStateFromError]
   );
 
   const reset = useCallback(() => {
+    resetThreadTransport();
     messagesRequestRef.current += 1;
     setThreads([]);
     setThreadMetadataMap({});
     setThreadExternalIdMap({});
     setCurrentThreadId(null);
     setCurrentThreadExternalId(null);
+    currentThreadIdRef.current = null;
+    currentThreadExternalIdRef.current = null;
     setMessages([]);
     setUserContextSeed({});
     setIsMessagesLoading(false);
     setIsLoadingOlderMessages(false);
-    setIsStreaming(false);
-    setThreadActivityStatus('idle');
-    setIsRecoveringStream(false);
     setMessagePageInfo(createEmptyMessagePageInfo());
     persistedToolUpdatesRef.current = [];
     setSpecialState(null);
-    abortControllerRef.current?.abort();
-  }, []);
+  }, [resetThreadTransport]);
+
+  useEffect(() => {
+    if (!feedBootstrap || feedBootstrap.threadId !== currentThreadId) return;
+    if (activeOperationsRef.current.size === 0) {
+      setFeedConnectionStatus('idle');
+      setIsRecoveringStream(false);
+      return;
+    }
+
+    feedAbortControllerRef.current?.abort();
+    const controller = new AbortController();
+    feedAbortControllerRef.current = controller;
+    const threadId = feedBootstrap.threadId;
+    let cursor = feedBootstrap.cursor;
+    let reconnectAttempt = 0;
+    let serverRetry: number | undefined;
+
+    const delay = (milliseconds: number) => new Promise<void>((resolve) => {
+      const timeout = setTimeout(done, milliseconds);
+      const onAbort = () => done();
+      function done() {
+        clearTimeout(timeout);
+        controller.signal.removeEventListener('abort', onAbort);
+        resolve();
+      }
+      controller.signal.addEventListener('abort', onAbort, { once: true });
+    });
+
+    const waitUntilOnline = () => {
+      if (typeof navigator === 'undefined' || navigator.onLine) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        const done = () => {
+          globalThis.removeEventListener?.('online', done);
+          controller.signal.removeEventListener('abort', done);
+          resolve();
+        };
+        globalThis.addEventListener?.('online', done, { once: true });
+        controller.signal.addEventListener('abort', done, { once: true });
+      });
+    };
+
+    const rebuildFromCanonicalHistory = async () => {
+      let attempt = 0;
+      while (!controller.signal.aborted) {
+        try {
+          await loadThreadMessages(threadId, { rethrow: true });
+          return;
+        } catch (error) {
+          if (controller.signal.aborted || isAbortError(error)) return;
+          if (
+            error instanceof CopilotzRequestError &&
+            (error.status === 401 || error.status === 403 || error.status === 404)
+          ) {
+            setFeedConnectionStatus('failed');
+            setIsRecoveringStream(false);
+            return;
+          }
+          if (
+            error instanceof CopilotzRequestError &&
+            (error.status === 409 || error.status === 410)
+          ) {
+            attempt += 1;
+            setFeedConnectionStatus('reconnecting');
+            setIsRecoveringStream(true);
+            await delay(feedRetryDelay(attempt, serverRetry));
+            continue;
+          }
+          console.warn('Copilotz canonical feed recovery failed', error);
+          attempt += 1;
+          setFeedConnectionStatus('reconnecting');
+          setIsRecoveringStream(true);
+          await delay(feedRetryDelay(attempt, serverRetry));
+        }
+      }
+    };
+
+    void (async () => {
+      while (!controller.signal.aborted) {
+        if (activeOperationsRef.current.size === 0) {
+          setFeedConnectionStatus('idle');
+          setIsRecoveringStream(false);
+          return;
+        }
+        await waitUntilOnline();
+        if (controller.signal.aborted) return;
+        setFeedConnectionStatus(reconnectAttempt === 0 ? 'connecting' : 'reconnecting');
+        if (reconnectAttempt > 0) setIsRecoveringStream(true);
+        let sawEvent = false;
+        try {
+          const result = await observeThreadFeed({
+            threadId,
+            operationIds: [...activeOperationsRef.current.keys()],
+            cursor,
+            getRequestHeaders,
+            signal: controller.signal,
+            watchdogMs: 45_000,
+            onOpen: () => setFeedConnectionStatus('connected'),
+            onEvent: async (frame) => {
+              await processThreadFeedEvent(frame);
+              cursor = frame.id;
+              currentFeedCursorRef.current = frame.id;
+              if (frame.retry !== undefined) serverRetry = frame.retry;
+              sawEvent = true;
+              reconnectAttempt = 0;
+              setFeedConnectionStatus('connected');
+              setIsRecoveringStream(false);
+            },
+          });
+          cursor = result.cursor;
+          currentFeedCursorRef.current = result.cursor;
+          if (result.retry !== undefined) serverRetry = result.retry;
+        } catch (error) {
+          if (controller.signal.aborted || isAbortError(error)) return;
+          if (
+            error instanceof CopilotzRequestError &&
+            (error.status === 409 || error.status === 410)
+          ) {
+            currentFeedCursorRef.current = null;
+            await rebuildFromCanonicalHistory();
+            return;
+          }
+          if (
+            error && typeof error === 'object' &&
+            ((error as { name?: unknown }).name === 'FeedOffsetGapError' ||
+              (error as { name?: unknown }).name === 'FeedReplayCapacityError')
+          ) {
+            currentFeedCursorRef.current = null;
+            await rebuildFromCanonicalHistory();
+            return;
+          }
+          if (
+            error instanceof CopilotzRequestError &&
+            (error.status === 401 || error.status === 403 || error.status === 404)
+          ) {
+            setFeedConnectionStatus('failed');
+            setIsRecoveringStream(false);
+            return;
+          }
+          console.warn('Copilotz thread feed disconnected', error);
+        }
+        if (controller.signal.aborted) return;
+        if (!sawEvent) reconnectAttempt += 1;
+        setFeedConnectionStatus('reconnecting');
+        setIsRecoveringStream(true);
+        await delay(feedRetryDelay(reconnectAttempt, serverRetry));
+      }
+    })();
+
+    return () => {
+      controller.abort();
+      if (feedAbortControllerRef.current === controller) {
+        feedAbortControllerRef.current = null;
+      }
+    };
+  }, [currentThreadId, feedBootstrap, getRequestHeaders, loadThreadMessages, processThreadFeedEvent]);
 
   // Initialize when userId changes
   useEffect(() => {
@@ -1446,7 +1710,6 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
         const preferredThreadId = await fetchAndSetThreadsState(userId, urlPreferredThread);
         if (preferredThreadId) {
           await loadThreadMessages(preferredThreadId);
-          await refreshThreadActivity(preferredThreadId);
         } else if (bootstrap) {
           await bootstrapConversation(userId);
         }
@@ -1460,7 +1723,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     // by the lazy initializer in useUrlState). Including it would re-trigger the
     // effect when the thread-sync effect writes back to the URL.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId, fetchAndSetThreadsState, loadThreadMessages, refreshThreadActivity, bootstrapConversation, reset, bootstrap, isUrlSyncEnabled]);
+  }, [userId, fetchAndSetThreadsState, loadThreadMessages, bootstrapConversation, reset, bootstrap, isUrlSyncEnabled]);
 
   // Sync currentThreadExternalId to URL when it changes
   useEffect(() => {
@@ -1485,10 +1748,21 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     }
   }, [currentThreadId, threadMetadataMap]);
 
-  const activityNotice = threadActivityStatus === 'running' && isRecoveringStream
+  const activityNotice = isStopping
     ? {
       tone: 'info' as const,
-      message: 'The agent is still working. Loading updates...',
+      message: 'Stopping the current operation...',
+    }
+    : feedConnectionStatus === 'reconnecting' ||
+      (threadActivityStatus === 'running' && isRecoveringStream)
+    ? {
+      tone: 'info' as const,
+      message: 'Connection interrupted. Reconnecting to live updates...',
+    }
+    : feedConnectionStatus === 'failed'
+    ? {
+      tone: 'error' as const,
+      message: 'Live updates could not be reconnected. Refresh to synchronize this thread.',
     }
     : threadActivityStatus === 'failed'
     ? {
@@ -1505,6 +1779,8 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     threads,
     currentThreadId,
     isStreaming,
+    isStopping,
+    feedConnectionStatus,
     threadActivityStatus,
     isRecoveringStream,
     activityNotice,

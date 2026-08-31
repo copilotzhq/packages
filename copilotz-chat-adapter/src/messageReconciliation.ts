@@ -103,7 +103,7 @@ export const reconcileThreadMessages = (
   const seen = new Set<string>();
   let changed = false;
 
-  const nextMessages = currentMessages.map((message) => {
+  const nextMessages = currentMessages.flatMap((message) => {
     const exactMatch = freshById.get(message.id);
     const correlatedMatch = exactMatch
       ? null
@@ -111,19 +111,26 @@ export const reconcileThreadMessages = (
         .map((key) => freshByCorrelation.get(key))
         .find((candidate): candidate is InternalChatMessage => (
           candidate !== null &&
-          candidate !== undefined &&
-          !seen.has(candidate.id)
+          candidate !== undefined
         ));
     const fresh = exactMatch ?? correlatedMatch;
-    if (!fresh) return message;
+    if (!fresh) return [message];
+
+    // A canonical exact-id message may already have consumed this fresh
+    // correlation before a reconnect-created placeholder is visited. Drop the
+    // placeholder instead of retaining two copies of the same durable attempt.
+    if (seen.has(fresh.id)) {
+      changed = true;
+      return [];
+    }
 
     seen.add(fresh.id);
     if (getMessageSignature(message) === getMessageSignature(fresh)) {
-      return message;
+      return [message];
     }
 
     changed = true;
-    return fresh;
+    return [fresh];
   });
 
   const appended = freshMessages.filter((message) => !seen.has(message.id));

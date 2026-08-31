@@ -49,6 +49,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   toolRenderers,
   toolCallDraftSource,
   isGenerating = false,
+  isStoppingGeneration = false,
   isMessagesLoading = false,
   isLoadingOlderMessages = false,
   hasMoreMessagesBefore = false,
@@ -937,6 +938,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                       placeholder={config.labels.inputPlaceholder}
                       disabled={false}
                       isGenerating={isGenerating}
+                      isStoppingGeneration={isStoppingGeneration}
                       onStopGeneration={callbacks.onStopGeneration}
                       enableFileUpload={config.features.enableFileUpload}
                       enableAudioRecording={

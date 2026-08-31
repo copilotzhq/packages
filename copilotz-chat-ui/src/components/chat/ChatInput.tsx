@@ -44,6 +44,7 @@ interface ChatInputProps {
   placeholder?: string;
   disabled?: boolean;
   isGenerating?: boolean;
+  isStoppingGeneration?: boolean;
   onStopGeneration?: () => void;
   enableFileUpload?: boolean;
   enableAudioRecording?: boolean;
@@ -393,6 +394,7 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
   placeholder = 'Type your message...',
   disabled = false,
   isGenerating = false,
+  isStoppingGeneration = false,
   onStopGeneration,
   enableFileUpload = true,
   enableAudioRecording = true,
@@ -1482,11 +1484,14 @@ export const ChatInput: React.FC<ChatInputProps> = memo(function ChatInput({
                               size="icon"
                               className="h-9 w-9 rounded-full"
                               onClick={onStopGeneration}
+                              disabled={isStoppingGeneration}
                             >
-                              <Square className="h-4 w-4" />
+                              {isStoppingGeneration
+                                ? <Loader2 className="h-4 w-4 animate-spin" />
+                                : <Square className="h-4 w-4" />}
                             </Button>
                           </TooltipTrigger>
-                          <TooltipContent>{config?.labels?.stopGenerationTooltip}</TooltipContent>
+                          <TooltipContent>{isStoppingGeneration ? 'Stopping...' : config?.labels?.stopGenerationTooltip}</TooltipContent>
                         </Tooltip>
                       </>
                     ) : (

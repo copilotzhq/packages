@@ -73,6 +73,9 @@ export type CanonicalMessageHistoryIncluded = {
 export type CanonicalMessagePageInfo = {
   next?: string;
   hasMore: boolean;
+  /** Opaque rebuild cursor; active progressive Bodies replay from offset zero. */
+  replayCursor?: string;
+  activeOperationIds?: string[];
 };
 
 export type CanonicalMessagePage = {
@@ -217,6 +220,22 @@ export const parseCanonicalMessagePage = (value: unknown): CanonicalMessagePage 
             next: optionalString(pageInfo.next, 'message history response.pageInfo.next'),
           }
         : {}),
+      ...(optionalString(pageInfo.replayCursor, 'message history response.pageInfo.replayCursor')
+        ? {
+            replayCursor: optionalString(
+              pageInfo.replayCursor,
+              'message history response.pageInfo.replayCursor',
+            ),
+          }
+        : {}),
+      ...(pageInfo.activeOperationIds === undefined
+        ? {}
+        : {
+            activeOperationIds: expectStringArray(
+              pageInfo.activeOperationIds,
+              'message history response.pageInfo.activeOperationIds',
+            ),
+          }),
     },
   };
 };

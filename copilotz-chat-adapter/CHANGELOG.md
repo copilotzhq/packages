@@ -1,5 +1,18 @@
 # @copilotz/chat-adapter
 
+## 0.64.0
+
+### Minor Changes
+
+- Reconnect active turns through a cursor-based thread feed after refresh,
+  transient network loss, or backend revision changes.
+- Reconcile durable history on expired cursors, deduplicate progressive ranges,
+  and replace activity polling with bounded jittered feed reconnection.
+- Fall back to canonical history with bounded retries when a live replay cursor
+  temporarily exceeds the server's concurrent-stream capacity.
+- Stop durable operations explicitly instead of treating a disconnected HTTP
+  observer as workflow cancellation.
+
 ## 0.60.19
 
 ### Patch Changes

@@ -540,6 +540,7 @@ export interface ChatV2Props {
 
   // State Management
   isGenerating?: boolean;
+  isStoppingGeneration?: boolean;
   isMessagesLoading?: boolean;
   isLoadingOlderMessages?: boolean;
   hasMoreMessagesBefore?: boolean;

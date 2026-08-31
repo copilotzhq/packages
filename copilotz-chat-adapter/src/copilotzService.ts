@@ -7,6 +7,8 @@ import {
 } from "./canonicalHistory.ts";
 // @ts-expect-error Direct Node TypeScript tests require the source extension.
 import { getLlmAttemptId } from "./streamEvents.ts";
+// @ts-expect-error Direct Node TypeScript tests require the source extension.
+import { parseServerSentEventStream } from "./sse.ts";
 
 const rawBaseValue = import.meta.env?.VITE_API_URL;
 const rawBase = typeof rawBaseValue === "string" && rawBaseValue.length > 0
@@ -199,7 +201,7 @@ type StreamCallbacks = {
   signal?: AbortSignal;
 };
 
-type RunOptions = {
+export type RunOptions = {
   threadId?: string;
   threadExternalId?: string;
   content: string;
@@ -220,6 +222,8 @@ type RunOptions = {
   participants?: string[] | null;
   /** Explicit target agent for this message (who should respond). */
   targetAgent?: string | null;
+  /** Stable client-generated operation/idempotency identity. */
+  operationId?: string;
   getRequestHeaders?: RequestHeadersProvider;
 } & StreamCallbacks;
 
@@ -227,6 +231,29 @@ export type CopilotzStreamResult = {
   text: string;
   messages: any[];
   media: Record<string, string> | null;
+};
+
+export type CopilotzRunReceipt = {
+  operationId: string;
+  status: "accepted" | "running";
+  thread: {
+    id: string;
+    externalId: string;
+  };
+  replayCursor: string;
+  acceptedAt: string;
+};
+
+export type ThreadFeedEvent = {
+  id: string;
+  type: string;
+  data: Record<string, unknown>;
+  retry?: number;
+};
+
+export type ThreadFeedResult = {
+  cursor: string | null;
+  retry?: number;
 };
 
 type StreamAttemptAccumulator = {
@@ -503,9 +530,51 @@ const uploadFileAttachment = async (
   return content;
 };
 
-export async function runCopilotzStream(
+const parseRunReceipt = (value: unknown): CopilotzRunReceipt => {
+  const document = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+  const raw = document?.data && typeof document.data === "object" &&
+      !Array.isArray(document.data)
+    ? document.data as Record<string, unknown>
+    : document;
+  const thread = raw?.thread && typeof raw.thread === "object" &&
+      !Array.isArray(raw.thread)
+    ? raw.thread as Record<string, unknown>
+    : null;
+  const operationId = typeof raw?.operationId === "string"
+    ? raw.operationId.trim()
+    : "";
+  const status = raw?.status;
+  const threadId = typeof thread?.id === "string" ? thread.id.trim() : "";
+  const externalId = typeof thread?.externalId === "string"
+    ? thread.externalId.trim()
+    : "";
+  const replayCursor = typeof raw?.replayCursor === "string"
+    ? raw.replayCursor
+    : "";
+  const acceptedAt = typeof raw?.acceptedAt === "string"
+    ? raw.acceptedAt.trim()
+    : "";
+  if (
+    !operationId || (status !== "accepted" && status !== "running") ||
+    !threadId || !externalId || !replayCursor || !acceptedAt
+  ) {
+    throw new TypeError("Copilotz run receipt is invalid.");
+  }
+  return Object.freeze({
+    operationId,
+    status,
+    thread: Object.freeze({ id: threadId, externalId }),
+    replayCursor,
+    acceptedAt,
+  });
+};
+
+async function submitCopilotzRun(
   options: RunOptions,
-): Promise<CopilotzStreamResult> {
+  responseMode: "legacy-stream" | "receipt",
+): Promise<CopilotzStreamResult | CopilotzRunReceipt> {
   const {
     threadId,
     threadExternalId,
@@ -518,6 +587,7 @@ export async function runCopilotzStream(
     selectedAgent,
     participants,
     targetAgent,
+    operationId,
     getRequestHeaders,
     onToken,
     onMessageEvent,
@@ -703,12 +773,17 @@ export async function runCopilotzStream(
     method: "POST",
     headers: await withAuthHeaders({
       "Content-Type": "application/json",
+      Accept: responseMode === "receipt"
+        ? "application/json"
+        : "text/event-stream",
+      ...(responseMode === "receipt" ? { Prefer: "respond-async" } : {}),
+      ...(operationId ? { "Idempotency-Key": operationId } : {}),
     }, getRequestHeaders),
     body: JSON.stringify(payload),
     signal: controller.signal,
   });
 
-  if (!response.ok || !response.body) {
+  if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
     const parsed = parseErrorText(errorText);
     const details = parsed && typeof parsed === "object" ? parsed : undefined;
@@ -730,6 +805,17 @@ export async function runCopilotzStream(
       status: response.status,
       code,
       details,
+    });
+  }
+
+  if (responseMode === "receipt") {
+    return parseRunReceipt(await response.json());
+  }
+
+  if (!response.body) {
+    throw new CopilotzRequestError("Copilotz stream response has no body", {
+      status: response.status,
+      code: "stream_body_missing",
     });
   }
 
@@ -944,6 +1030,244 @@ export async function runCopilotzStream(
   };
 }
 
+/** Legacy one-request streaming transport retained for compatible clients. */
+export async function runCopilotzStream(
+  options: RunOptions,
+): Promise<CopilotzStreamResult> {
+  return await submitCopilotzRun(options, "legacy-stream") as CopilotzStreamResult;
+}
+
+/** Accepts a durable run and returns without coupling its life to the request. */
+export async function startCopilotzRun(
+  options: RunOptions,
+): Promise<CopilotzRunReceipt> {
+  const stableOptions: RunOptions = {
+    ...options,
+    operationId: options.operationId?.trim() || crypto.randomUUID(),
+    attachments: options.attachments?.map((attachment) =>
+      attachment.kind === "file" && !attachment.uploadId
+        ? { ...attachment, uploadId: crypto.randomUUID() }
+        : attachment
+    ),
+  };
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await submitCopilotzRun(
+        stableOptions,
+        "receipt",
+      ) as CopilotzRunReceipt;
+    } catch (error) {
+      const retryable = error instanceof CopilotzRequestError
+        ? error.status === 0 || error.status === 429 || error.status >= 500
+        : error instanceof TypeError;
+      if (!retryable || attempt >= 2 || options.signal?.aborted) throw error;
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(done, 250 * (2 ** attempt));
+        const onAbort = () => {
+          cleanup();
+          reject(options.signal?.reason ?? new DOMException("Aborted", "AbortError"));
+        };
+        function cleanup() {
+          clearTimeout(timeout);
+          options.signal?.removeEventListener("abort", onAbort);
+        }
+        function done() {
+          cleanup();
+          resolve();
+        }
+        options.signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    }
+  }
+}
+
+export type ObserveThreadFeedOptions = {
+  threadId: string;
+  operationIds?: readonly string[];
+  cursor?: string | null;
+  getRequestHeaders?: RequestHeadersProvider;
+  signal?: AbortSignal;
+  watchdogMs?: number;
+  onOpen?: () => void;
+  onEvent: (event: ThreadFeedEvent) => void | Promise<void>;
+};
+
+/** Observes one feed connection. Reconnect policy remains caller-owned. */
+export async function observeThreadFeed(
+  options: ObserveThreadFeedOptions,
+): Promise<ThreadFeedResult> {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(options.signal?.reason);
+  if (options.signal?.aborted) onAbort();
+  else options.signal?.addEventListener("abort", onAbort, { once: true });
+
+  const watchdogMs = options.watchdogMs ?? 45_000;
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  const armWatchdog = () => {
+    if (watchdog) clearTimeout(watchdog);
+    if (!(watchdogMs > 0)) return;
+    watchdog = setTimeout(() => {
+      timedOut = true;
+      controller.abort(new DOMException("Thread feed became silent", "TimeoutError"));
+    }, watchdogMs);
+  };
+
+  let cursor = options.cursor ?? null;
+  let retry: number | undefined;
+  try {
+    armWatchdog();
+    const feedPath = apiUrl(
+      `/v1/threads/${encodeURIComponent(options.threadId)}/feed`,
+    );
+    const feedUrl = new URL(
+      feedPath,
+      typeof window !== "undefined" ? window.location.origin : "http://localhost",
+    );
+    for (const operationId of [...new Set(options.operationIds ?? [])]) {
+      if (operationId.trim()) feedUrl.searchParams.append("operationId", operationId.trim());
+    }
+    const response = await fetch(
+      feedUrl,
+      {
+        method: "GET",
+        cache: "no-store",
+        headers: await withAuthHeaders({
+          Accept: "text/event-stream",
+          ...(cursor ? { "Last-Event-ID": cursor } : {}),
+        }, options.getRequestHeaders),
+        signal: controller.signal,
+      },
+    );
+    if (!response.ok) {
+      const raw = await response.text().catch(() => response.statusText);
+      const parsed = parseErrorText(raw);
+      const envelope = parsed && typeof parsed === "object" &&
+          !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : undefined;
+      const nested = envelope?.error && typeof envelope.error === "object" &&
+          !Array.isArray(envelope.error)
+        ? envelope.error as Record<string, unknown>
+        : envelope;
+      throw new CopilotzRequestError(
+        typeof nested?.message === "string" && nested.message.trim()
+          ? nested.message
+          : raw || response.statusText || "Failed to observe thread feed",
+        {
+          status: response.status,
+          ...(typeof nested?.code === "string" ? { code: nested.code } : {}),
+          ...(parsed !== null ? { details: parsed } : {}),
+        },
+      );
+    }
+    if (!response.body) {
+      throw new CopilotzRequestError("Thread feed response has no body", {
+        status: response.status,
+        code: "feed_body_missing",
+      });
+    }
+    options.onOpen?.();
+    await parseServerSentEventStream(
+      response.body,
+      async (frame) => {
+        if (!frame.id) {
+          throw new TypeError("Thread feed event is missing its reconnect cursor.");
+        }
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(frame.data);
+        } catch {
+          throw new TypeError("Thread feed event data must be valid JSON.");
+        }
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new TypeError("Thread feed event data must be an object.");
+        }
+        const data = parsed as Record<string, unknown>;
+        if (typeof data.type === "string" && data.type !== frame.event) {
+          throw new TypeError("Thread feed event name does not match its payload.");
+        }
+        await options.onEvent(Object.freeze({
+          id: frame.id,
+          type: frame.event,
+          data: Object.freeze(
+            typeof data.type === "string" ? data : { ...data, type: frame.event },
+          ),
+          ...(frame.retry !== undefined ? { retry: frame.retry } : {}),
+        }));
+        // Applying the frame is the commit point for reconnect.
+        cursor = frame.id;
+        if (frame.retry !== undefined) retry = frame.retry;
+      },
+      armWatchdog,
+    );
+    return Object.freeze({ cursor, ...(retry !== undefined ? { retry } : {}) });
+  } catch (error) {
+    if (timedOut) {
+      throw new CopilotzRequestError("Thread feed timed out", {
+        status: 0,
+        code: "feed_timeout",
+      });
+    }
+    throw error;
+  } finally {
+    if (watchdog) clearTimeout(watchdog);
+    options.signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+export type OperationCancellation = {
+  operationId: string;
+  status: "running" | "stopping" | "cancelled" | "completed" | "failed";
+};
+
+export async function cancelCopilotzOperation(
+  operationId: string,
+  getRequestHeaders?: RequestHeadersProvider,
+  signal?: AbortSignal,
+): Promise<OperationCancellation> {
+  const normalized = operationId.trim();
+  if (!normalized) throw new TypeError("operationId is required");
+  const response = await fetch(
+    apiUrl(`/v1/operations/${encodeURIComponent(normalized)}`),
+    {
+      method: "DELETE",
+      headers: await withAuthHeaders({ Accept: "application/json" }, getRequestHeaders),
+      signal,
+    },
+  );
+  if (!response.ok) {
+    const raw = await response.text().catch(() => response.statusText);
+    throw new CopilotzRequestError(
+      raw || response.statusText || "Failed to stop Copilotz operation",
+      { status: response.status, details: parseErrorText(raw) },
+    );
+  }
+  if (response.status === 204) {
+    return Object.freeze({ operationId: normalized, status: "stopping" });
+  }
+  const document = await response.json().catch(() => null) as
+    | Record<string, unknown>
+    | null;
+  const raw = document?.data && typeof document.data === "object" &&
+      !Array.isArray(document.data)
+    ? document.data as Record<string, unknown>
+    : document;
+  const status = raw?.status;
+  if (
+    status !== "running" && status !== "stopping" && status !== "cancelled" &&
+    status !== "completed" && status !== "failed"
+  ) {
+    throw new TypeError("Operation cancellation response is invalid.");
+  }
+  return Object.freeze({
+    operationId: typeof raw?.operationId === "string" && raw.operationId.trim()
+      ? raw.operationId.trim()
+      : normalized,
+    status,
+  });
+}
+
 export async function fetchThreads(
   userId: string,
   getRequestHeaders?: RequestHeadersProvider,
@@ -1149,6 +1473,9 @@ export const copilotzService = {
   apiUrlObject,
   withAuthHeaders,
   fetchAgents,
+  startCopilotzRun,
+  observeThreadFeed,
+  cancelCopilotzOperation,
   runCopilotzStream,
   fetchThreads,
   fetchThreadMessages,

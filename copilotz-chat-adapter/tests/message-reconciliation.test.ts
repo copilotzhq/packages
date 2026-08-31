@@ -80,6 +80,25 @@ test('ambiguous correlations never discard optimistic messages', () => {
   );
 });
 
+test('canonical refresh collapses a replay placeholder already represented by exact id', () => {
+  const persisted = message('persisted-assistant', 'assistant', 'Complete answer', 2, {
+    [LLM_ATTEMPT_ID_METADATA_KEY]: 'attempt-1',
+  });
+  const current = [
+    persisted,
+    message('optimistic-replay', 'assistant', 'Complete answer', 1, {
+      [LLM_ATTEMPT_ID_METADATA_KEY]: 'attempt-1',
+    }),
+  ];
+
+  const reconciled = reconcileThreadMessages(current, [persisted]);
+
+  assert.equal(reconciled.changed, true);
+  assert.deepEqual(reconciled.messages.map((item) => item.id), [
+    'persisted-assistant',
+  ]);
+});
+
 test('a persisted continuation without a live attempt correlation appends on refresh', () => {
   const current = [
     message('optimistic-north', 'assistant', 'North streamed update', 1, {
