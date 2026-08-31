@@ -1,5 +1,12 @@
 # @copilotz/chat-adapter
 
+## 0.64.1
+
+### Patch Changes
+
+- Attach a sole newly accepted operation from its receipt cursor and treat SSE
+  EOF after terminal settlement as a normal feed completion.
+
 ## 0.64.0
 
 ### Minor Changes

@@ -1,5 +1,11 @@
 # @copilotz/chat-ui
 
+## 0.64.1
+
+### Patch Changes
+
+- Synchronize the frontend package suite with Copilotz 0.64.1.
+
 ## 0.64.0
 
 ### Minor Changes

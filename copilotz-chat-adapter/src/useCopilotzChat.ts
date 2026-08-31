@@ -22,6 +22,7 @@ import {
   createToolCallDraftStore,
   type ToolCallDraftStore,
 } from './toolCallDraftStore';
+import { selectAcceptedOperationFeedCursor } from './feedBootstrap';
 
 const nowTs = () => Date.now();
 const generateId = () => (globalThis.crypto?.randomUUID?.() ?? `id-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`) as string;
@@ -949,7 +950,8 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       if (!hasActive) {
         setFeedConnectionStatus('idle');
         setIsRecoveringStream(false);
-        feedAbortControllerRef.current?.abort();
+        // The parser still has to commit this frame's cursor. Let the server
+        // close the completed feed instead of aborting it from this callback.
       }
       queueCanonicalRefresh(threadId);
       return;
@@ -1266,7 +1268,12 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
         setCurrentThreadExternalId(receipt.thread.externalId);
         setFeedBootstrap({
           threadId: persistedThreadId,
-          cursor: currentFeedCursorRef.current ?? receipt.replayCursor,
+          cursor: selectAcceptedOperationFeedCursor({
+            activeOperationIds: activeOperationsRef.current.keys(),
+            acceptedOperationId: receipt.operationId,
+            currentCursor: currentFeedCursorRef.current,
+            receiptCursor: receipt.replayCursor,
+          }),
           generation: ++feedBootstrapGenerationRef.current,
         });
         return assistantMessageId;
@@ -1680,6 +1687,11 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
           console.warn('Copilotz thread feed disconnected', error);
         }
         if (controller.signal.aborted) return;
+        if (activeOperationsRef.current.size === 0) {
+          setFeedConnectionStatus('idle');
+          setIsRecoveringStream(false);
+          return;
+        }
         if (!sawEvent) reconnectAttempt += 1;
         setFeedConnectionStatus('reconnecting');
         setIsRecoveringStream(true);
