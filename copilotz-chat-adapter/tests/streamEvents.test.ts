@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  getAgentFailure,
   getLlmAttemptId,
   getRoutingMessage,
   getVisibleLlmResultAnswer,
@@ -8,38 +9,59 @@ import {
   isTerminalEmptyLlmResultEvent,
 } from '../src/streamEvents.ts';
 
-test('LLM attempt identity is read from event metadata with subject fallback', () => {
-  assert.equal(getLlmAttemptId({
-    metadata: {
-      streamLlmAttemptId: 'attempt-from-stream',
-      llmAttemptId: 'attempt-from-metadata',
-    },
-    subjectType: 'llm_attempt',
-    subjectId: 'attempt-from-subject',
-  }), 'attempt-from-stream');
-
+test('LLM attempt identity uses official stream metadata and validated lifecycle data', () => {
   assert.equal(getLlmAttemptId({
     metadata: { llmAttemptId: 'attempt-from-metadata' },
-    subjectType: 'llm_attempt',
-    subjectId: 'attempt-from-subject',
   }), 'attempt-from-metadata');
 
   assert.equal(getLlmAttemptId({
-    subjectType: 'llm_attempt',
-    subjectId: 'attempt-from-subject',
+    subject: { type: 'llm.call', id: 'attempt-from-subject' },
+    data: { actionId: 'llm.call', actionRunId: 'attempt-from-subject' },
   }), 'attempt-from-subject');
 
-  assert.equal(getLlmAttemptId({ subjectType: 'thread', subjectId: 'thread-1' }), null);
+  assert.equal(getLlmAttemptId({
+    subject: { type: 'llm.call', id: 'attempt-from-subject' },
+    data: { actionId: 'llm.call', actionRunId: 'other-attempt' },
+  }), null);
 });
 
-test('canonical events expose attempt identity from payload, subject, and workflow metadata', () => {
+test('agent failures require matching durable receipt metadata and outcome', () => {
+  const event = {
+    type: 'message.created',
+    metadata: {
+      copilotzWorkflow: {
+        kind: 'agent_failure',
+        llmAttemptId: 'attempt-failed',
+        outcome: 'failed',
+      },
+      copilotzAgentFailure: {
+        schema: 'copilotz.agent-failure',
+        llmAttemptId: 'attempt-failed',
+        source: 'llm.call',
+        status: 'failed',
+      },
+    },
+  };
+  assert.deepEqual(getAgentFailure(event), {
+    llmAttemptId: 'attempt-failed', outcome: 'failed',
+  });
+  assert.equal(getAgentFailure({
+    ...event,
+    metadata: {
+      ...event.metadata,
+      copilotzAgentFailure: {
+        ...event.metadata.copilotzAgentFailure,
+        status: 'cancelled',
+      },
+    },
+  }), null);
+});
+
+test('canonical agent output exposes its explicit workflow attempt identity', () => {
   assert.equal(getLlmAttemptId({
-    type: 'text.delta',
-    payload: { llmAttemptId: 'attempt-from-payload' },
-  }), 'attempt-from-payload');
-  assert.equal(getLlmAttemptId({
-    type: 'llm_attempt.completed',
-    subject: { type: 'llm_attempt', id: 'attempt-from-subject' },
+    type: 'llm.call.completed',
+    subject: { type: 'llm.call', id: 'attempt-from-subject' },
+    data: { actionId: 'llm.call', actionRunId: 'attempt-from-subject' },
   }), 'attempt-from-subject');
   const message = {
     type: 'message.created',

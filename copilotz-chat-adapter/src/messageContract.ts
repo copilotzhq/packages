@@ -251,6 +251,31 @@ const activityItems = (
   content: Map<string, CanonicalResolvedContent>,
   timestamp: number,
 ): AssistantActivityItem[] => {
+  const workflow = workflowMetadata(message.metadata);
+  const attemptId = optionalText(workflow.llmAttemptId);
+  const failureReceipt = isRecord(message.metadata.copilotzAgentFailure)
+    ? message.metadata.copilotzAgentFailure
+    : null;
+  const failure = workflow.kind === 'agent_failure' &&
+      attemptId &&
+      (workflow.outcome === 'failed' || workflow.outcome === 'cancelled') &&
+      failureReceipt?.schema === 'copilotz.agent-failure' &&
+      failureReceipt.source === 'llm.call' &&
+      failureReceipt.llmAttemptId === attemptId &&
+      failureReceipt.status === workflow.outcome
+    ? [{
+      id: `${attemptId}:failed`,
+      kind: 'answering' as const,
+      status: 'failed' as const,
+      startedAt: timestamp,
+      completedAt: timestamp,
+      details: {
+        error: workflow.outcome === 'cancelled'
+          ? 'The response was cancelled.'
+          : 'The response could not be completed.',
+      },
+    }]
+    : [];
   const reasoning = reasoningText(message, content);
   const calls = toolInvocations(message).map((invocation) => {
     const result = resultForCall(invocation.id, message.id, results);
@@ -273,6 +298,7 @@ const activityItems = (
     };
   });
   return [
+    ...failure,
     ...(reasoning
       ? [
           {

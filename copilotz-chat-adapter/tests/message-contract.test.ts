@@ -179,6 +179,62 @@ test('v4 message history restores reasoning, tool calls, and failed results', ()
   assert.equal(mergePersistedToolResults(viewMessages, toolResultUpdates)[1].activity?.items[1].status, 'failed');
 });
 
+test('canonical agent failure is durable, visibly failed, and attempt-correlated', () => {
+  const document = canonicalHistory();
+  document.data.push({
+    id: 'message-agent-failure',
+    namespace,
+    threadId,
+    sender: participant('agent', 'north', 'North'),
+    recipientIds: [],
+    content: [ref('asset-agent-failure', 'text', 'body')],
+    metadata: {
+      copilotzWorkflow: {
+        kind: 'agent_failure',
+        continuation: 'none',
+        llmAttemptId: 'attempt-failed',
+        outcome: 'failed',
+        agentParticipantId: 'participant:north',
+      },
+      copilotzAgentFailure: {
+        schema: 'copilotz.agent-failure',
+        llmAttemptId: 'attempt-failed',
+        source: 'llm.call',
+        status: 'failed',
+      },
+    },
+    createdAt: '2026-08-13T10:00:03.000Z',
+    updatedAt: '2026-08-13T10:00:03.000Z',
+  });
+  document.included.content.push(content(
+    'asset-agent-failure',
+    'text',
+    'body',
+    "I couldn't complete that response. Please try again.",
+  ));
+
+  const { viewMessages } = projectCanonicalMessageHistory(
+    parseCanonicalMessagePage(document),
+  );
+  const failure = viewMessages.at(-1)!;
+
+  assert.equal(failure.id, 'message-agent-failure');
+  assert.equal(
+    failure.content,
+    "I couldn't complete that response. Please try again.",
+  );
+  assert.equal(failure.activity?.items[0].status, 'failed');
+  assert.equal(
+    failure.activity?.items[0].details?.error,
+    'The response could not be completed.',
+  );
+  assert.equal(
+    (failure.metadata?.copilotzWorkflow as Record<string, unknown>)
+      .llmAttemptId,
+    'attempt-failed',
+  );
+});
+
 test('v4 history renders exported tool files as downloadable attachments', () => {
   const history = canonicalHistory();
   const fileRef = ref('asset-export', 'file', 'attachment', 'text/csv', 'report.csv');

@@ -195,7 +195,7 @@ test('tool result received before its call is applied when the call arrives', ()
   assert.equal(messages[0].activity?.items[0].details?.error, 'page crashed');
 });
 
-test('fallback result finalizes the active streamed attempt', () => {
+test('unknown attempt results do not finalize a different streamed attempt', () => {
   let run = createLiveRunState('placeholder');
   let messages = [{
     id: 'placeholder',
@@ -230,12 +230,76 @@ test('fallback result finalizes the active streamed attempt', () => {
     at: 3,
   });
 
-  assert.equal(messages[0].content, 'Recovered answer');
+  assert.equal(messages[0].content, '');
+  assert.equal(messages[0].isStreaming, true);
+  assert.equal(messages[0].isComplete, false);
+  assert.equal(messages[0].activity?.items[0].details?.reasoning, 'Recovered reasoning');
+  assert.equal(run.attemptsById.size, 1);
+});
+
+test('failed attempt preserves partial output and remains correlated for canonical replacement', () => {
+  let run = createLiveRunState('placeholder');
+  let messages = [{
+    id: 'placeholder',
+    role: 'assistant' as const,
+    content: '',
+    timestamp: 0,
+    isStreaming: true,
+    isComplete: false,
+    sender,
+  }];
+  const dispatch = (action: Parameters<typeof transitionLiveRun>[1]) => {
+    const transition = transitionLiveRun(run, action, { createId: () => 'unused' });
+    run = transition.state;
+    messages = applyLiveRunOperations(messages, transition.operations);
+  };
+
+  dispatch({
+    type: 'token',
+    attemptId: 'attempt-1',
+    phaseId: 'attempt-1:answer:0',
+    partial: 'Partial answer',
+    isReasoning: false,
+    sender,
+    at: 1,
+  });
+  dispatch({
+    type: 'attempt-failed',
+    attemptId: 'attempt-1',
+    message: 'The response could not be completed.',
+    at: 2,
+  });
+
+  assert.equal(messages[0].content, 'Partial answer');
   assert.equal(messages[0].isStreaming, false);
   assert.equal(messages[0].isComplete, true);
-  assert.equal(messages[0].activity?.items[0].details?.reasoning, 'Recovered reasoning');
-  assert.equal(run.activeAttemptId, null);
-  assert.equal(run.lastAttemptId, 'primary-attempt');
+  assert.equal(messages[0].activity?.items[0].status, 'failed');
+  assert.equal(messages[0].metadata?.llmAttemptId, 'attempt-1');
+});
+
+test('unknown zero-byte failed attempt does not claim the initial placeholder', () => {
+  const state = createLiveRunState('placeholder');
+  const transition = transitionLiveRun(state, {
+    type: 'attempt-failed',
+    attemptId: 'attempt-1',
+    message: 'The response could not be completed.',
+    at: 2,
+  }, { createId: () => 'unused' });
+  const messages = applyLiveRunOperations([{
+    id: 'placeholder',
+    role: 'assistant',
+    content: '',
+    timestamp: 0,
+    isStreaming: true,
+    isComplete: false,
+    sender,
+  }], transition.operations);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].metadata?.llmAttemptId, undefined);
+  assert.equal(messages[0].isStreaming, true);
+  assert.equal(messages[0].activity, undefined);
+  assert.equal(transition.state.attemptsById.size, 0);
 });
 
 test('replayed token and tool-call events do not duplicate or reopen timeline items', () => {

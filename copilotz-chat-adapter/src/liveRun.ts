@@ -6,6 +6,7 @@ import {
   applyAssistantToolOutput,
   applyAssistantToolResult,
   bindAssistantToolExecution,
+  failAssistantMessage,
   finalizeAssistantMessage,
   reconcileAssistantToolDraft,
   removeAssistantToolDraft,
@@ -25,8 +26,6 @@ type AttemptCursor = {
 export type LiveRunState = {
   initialMessageId: string;
   initialMessageClaimed: boolean;
-  activeAttemptId: string | null;
-  lastAttemptId: string | null;
   attemptsById: Map<string, AttemptCursor>;
   toolMessageByCallId: Map<string, string>;
   toolExecutionByCallId: Map<string, string>;
@@ -58,6 +57,12 @@ export type LiveRunAction =
     type: 'attempt-result';
     attemptId: string;
     answer?: string;
+    at: number;
+  }
+  | {
+    type: 'attempt-failed';
+    attemptId: string;
+    message: string;
     at: number;
   }
   | {
@@ -123,6 +128,12 @@ export type LiveRunOperation =
     type: 'finalize-attempt';
     messageId: string;
     answer?: string;
+    at: number;
+  }
+  | {
+    type: 'fail-attempt';
+    messageId: string;
+    message: string;
     at: number;
   }
   | {
@@ -196,8 +207,6 @@ const copyState = (state: LiveRunState): LiveRunState => ({
 export const createLiveRunState = (initialMessageId: string): LiveRunState => ({
   initialMessageId,
   initialMessageClaimed: false,
-  activeAttemptId: null,
-  lastAttemptId: null,
   attemptsById: new Map(),
   toolMessageByCallId: new Map(),
   toolExecutionByCallId: new Map(),
@@ -231,8 +240,6 @@ const ensureAttempt = (
       ? { ...existing, sender }
       : existing;
     next.attemptsById.set(attemptId, cursor);
-    next.activeAttemptId = attemptId;
-    next.lastAttemptId = attemptId;
     return { state: next, cursor, operations: [] };
   }
 
@@ -242,8 +249,6 @@ const ensureAttempt = (
     : next.initialMessageId;
   const cursor = { messageId, sender };
   next.initialMessageClaimed = true;
-  next.activeAttemptId = attemptId;
-  next.lastAttemptId = attemptId;
   next.attemptsById.set(attemptId, cursor);
   return {
     state: next,
@@ -300,26 +305,32 @@ export const transitionLiveRun = (
   }
 
   if (action.type === 'attempt-result') {
-    const resolvedAttemptId = state.attemptsById.has(action.attemptId)
-      ? action.attemptId
-      : state.activeAttemptId ?? state.lastAttemptId;
-    const cursor = resolvedAttemptId
-      ? state.attemptsById.get(resolvedAttemptId)
-      : undefined;
+    const cursor = state.attemptsById.get(action.attemptId);
     if (!cursor) return { state, operations: [] };
-    const next = copyState(state);
-    if (next.activeAttemptId === resolvedAttemptId) {
-      next.activeAttemptId = null;
-    }
-    next.lastAttemptId = resolvedAttemptId;
     return {
-      state: next,
+      state,
       operations: [{
         type: 'finalize-attempt',
         messageId: cursor.messageId,
         answer: action.answer,
         at: action.at,
       }],
+    };
+  }
+
+  if (action.type === 'attempt-failed') {
+    const cursor = state.attemptsById.get(action.attemptId);
+    if (!cursor) return { state, operations: [] };
+    return {
+      state,
+      operations: [
+        {
+          type: 'fail-attempt',
+          messageId: cursor.messageId,
+          message: action.message,
+          at: action.at,
+        },
+      ],
     };
   }
 
@@ -406,8 +417,7 @@ export const transitionLiveRun = (
     const draftMessageId = draftId
       ? state.draftMessageById.get(draftId)
       : undefined;
-    const attemptId = action.attemptId ?? state.activeAttemptId ?? state.lastAttemptId ??
-      `tool-attempt:${action.toolCall.id}`;
+    const attemptId = action.attemptId ?? `tool-attempt:${action.toolCall.id}`;
     const ensured = draftMessageId
       ? {
         state,
@@ -494,22 +504,7 @@ export const transitionLiveRun = (
         }],
       };
     }
-    const attemptId = action.attemptId ?? state.activeAttemptId ??
-      state.lastAttemptId ?? `tool-attempt:${action.id}`;
-    return transitionLiveRun(next, {
-      type: 'tool-call',
-      attemptId,
-      sender: action.sender,
-      at: action.at,
-      toolCall: {
-        id: action.id,
-        toolExecutionId: action.toolExecutionId,
-        toolId: action.name ?? action.id,
-        name: action.name ?? action.id,
-        arguments: {},
-        status: 'running',
-      },
-    }, options);
+    return { state: next, operations: [] };
   }
 
   if (action.type === 'tool-output') {
@@ -619,6 +614,8 @@ const applyOperation = (
     };
   } else if (operation.type === 'finalize-attempt') {
     updated = finalizeAssistantMessage(current, operation.answer, operation.at);
+  } else if (operation.type === 'fail-attempt') {
+    updated = failAssistantMessage(current, operation.message, operation.at);
   } else if (operation.type === 'append-tool') {
     updated = {
       ...appendAssistantToolCall(current, {
@@ -700,8 +697,5 @@ export const applyLiveRunOperations = (
 ): InternalChatMessage[] => operations.reduce(applyOperation, messages);
 
 export const getLatestLiveRunMessageId = (state: LiveRunState): string => {
-  const attemptId = state.activeAttemptId ?? state.lastAttemptId;
-  return attemptId
-    ? state.attemptsById.get(attemptId)?.messageId ?? state.initialMessageId
-    : state.initialMessageId;
+  return state.initialMessageId;
 };

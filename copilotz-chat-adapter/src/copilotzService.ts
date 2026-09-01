@@ -859,8 +859,6 @@ async function submitCopilotzRun(
   const decoder = new TextDecoder("utf-8");
   let buffer = "";
   let lastCompletedText = "";
-  let lastObservedAttemptId: string | null = null;
-  let fallbackAttemptOrdinal = 0;
   const attempts = new Map<string, StreamAttemptAccumulator>();
   const collectedMessages: any[] = [];
   let collectedMedia: Record<string, string> | null = null;
@@ -903,13 +901,12 @@ async function submitCopilotzRun(
     return attempt;
   };
 
-  const attemptFor = (event: unknown): StreamAttemptAccumulator => {
+  const attemptFor = (event: unknown): StreamAttemptAccumulator | undefined => {
     const eventAttemptId = getLlmAttemptId(event);
-    const attemptId = eventAttemptId ?? lastObservedAttemptId ??
-      `stream-attempt:${fallbackAttemptOrdinal++}`;
-    lastObservedAttemptId = attemptId;
+    if (!eventAttemptId) return undefined;
     const agent = streamAgent(event);
-    const attempt = attempts.get(attemptId) ?? createAttempt(attemptId, agent);
+    const attempt = attempts.get(eventAttemptId) ??
+      createAttempt(eventAttemptId, agent);
     if (agent) attempt.agent = agent;
     return attempt;
   };
@@ -971,6 +968,7 @@ async function submitCopilotzRun(
 
     if (event.type === "text.delta" || event.type === "reasoning.delta") {
       const attempt = attemptFor(event);
+      if (!attempt) return;
       const inner = event.payload;
       const chunk = typeof inner?.text === "string" ? inner.text : "";
       const isReasoning = event.type === "reasoning.delta";
@@ -995,7 +993,7 @@ async function submitCopilotzRun(
       collectedMessages.push(event);
       const workflow = event.metadata?.copilotzWorkflow;
       if (workflow?.kind === "agent_output") {
-        const attemptId = getLlmAttemptId(event) ?? lastObservedAttemptId;
+        const attemptId = getLlmAttemptId(event);
         const attempt = attemptId ? attempts.get(attemptId) : undefined;
         if (attempt?.activePhaseKind && attempt.activePhaseId) {
           const isReasoning = attempt.activePhaseKind === "reasoning";
@@ -1057,10 +1055,7 @@ async function submitCopilotzRun(
   }
 
   return {
-    text: lastCompletedText ||
-      (lastObservedAttemptId
-        ? attempts.get(lastObservedAttemptId)?.text ?? ""
-        : ""),
+    text: lastCompletedText,
     messages: collectedMessages,
     media: collectedMedia,
   };

@@ -5,6 +5,7 @@ import {
   applyAssistantToolOutput,
   applyAssistantToolResult,
   finalizeAssistantMessage,
+  failAssistantMessage,
   updateAssistantMessageToken,
 } from '../src/activity.ts';
 import {
@@ -236,6 +237,35 @@ test('finalizeAssistantMessage removes transient answering activity', () => {
   assert.equal(finalized.isStreaming, false);
   assert.equal(finalized.isComplete, true);
   assert.equal(finalized.activity, undefined);
+});
+
+test('failAssistantMessage preserves partial output and marks active activity failed', () => {
+  const streaming = updateAssistantMessageToken({
+    id: 'm1',
+    role: 'assistant',
+    content: '',
+    timestamp: 1,
+    isStreaming: true,
+    isComplete: false,
+  }, {
+    partial: 'Partial answer',
+    at: 2,
+  });
+
+  const failed = failAssistantMessage(
+    streaming,
+    'The response could not be completed.',
+    3,
+  );
+
+  assert.equal(failed.content, 'Partial answer');
+  assert.equal(failed.isStreaming, false);
+  assert.equal(failed.isComplete, true);
+  assert.equal(failed.activity?.items[0].status, 'failed');
+  assert.equal(
+    failed.activity?.items[0].details?.error,
+    'The response could not be completed.',
+  );
 });
 
 test('streaming placeholder only accepts events from its agent', () => {

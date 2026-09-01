@@ -612,9 +612,9 @@ test('runCopilotzStream resets canonical deltas between durable agent messages',
 
   globalThis.fetch = async () => {
     const body = [
-      sse('text.delta', { type: 'text.delta', payload: { text: 'First answer', llmAttemptId: 'attempt-1' } }),
+      sse('text.delta', { type: 'text.delta', metadata: { llmAttemptId: 'attempt-1' }, payload: { text: 'First answer', llmAttemptId: 'attempt-1' } }),
       sse('message.created', { type: 'message.created', payload: { messageId: 'message-1' }, metadata: { copilotzWorkflow: { kind: 'agent_output', llmAttemptId: 'attempt-1' } } }),
-      sse('text.delta', { type: 'text.delta', payload: { text: 'Second answer', llmAttemptId: 'attempt-2' } }),
+      sse('text.delta', { type: 'text.delta', metadata: { llmAttemptId: 'attempt-2' }, payload: { text: 'Second answer', llmAttemptId: 'attempt-2' } }),
       sse('message.created', { type: 'message.created', payload: { messageId: 'message-2' }, metadata: { copilotzWorkflow: { kind: 'agent_output', llmAttemptId: 'attempt-2' } } }),
     ].join('');
 
@@ -666,8 +666,8 @@ test('runCopilotzStream associates canonical delta phases with their LLM attempt
 
   globalThis.fetch = async () => {
     const body = [
-      sse('reasoning.delta', { type: 'reasoning.delta', payload: { text: 'Think', llmAttemptId: 'attempt-1', agent: { id: 'north', name: 'North' } } }),
-      sse('text.delta', { type: 'text.delta', payload: { text: 'Answer', llmAttemptId: 'attempt-1', agent: { id: 'north', name: 'North' } } }),
+      sse('reasoning.delta', { type: 'reasoning.delta', metadata: { llmAttemptId: 'attempt-1' }, payload: { text: 'Think', llmAttemptId: 'attempt-1', agent: { id: 'north', name: 'North' } } }),
+      sse('text.delta', { type: 'text.delta', metadata: { llmAttemptId: 'attempt-1' }, payload: { text: 'Answer', llmAttemptId: 'attempt-1', agent: { id: 'north', name: 'North' } } }),
       sse('message.created', { type: 'message.created', payload: { messageId: 'message-1' }, metadata: { copilotzWorkflow: { kind: 'agent_output', llmAttemptId: 'attempt-1' } } }),
     ].join('');
 
@@ -737,10 +737,10 @@ test('runCopilotzStream preserves interleaved text independently for parallel ag
 
   globalThis.fetch = async () => {
     const body = [
-      sse('text.delta', { type: 'text.delta', payload: { text: 'East one', llmAttemptId: 'attempt-east', agent: { id: 'east', name: 'East' } } }),
-      sse('text.delta', { type: 'text.delta', payload: { text: 'South one', llmAttemptId: 'attempt-south', agent: { id: 'south', name: 'South' } } }),
-      sse('text.delta', { type: 'text.delta', payload: { text: ' East two', llmAttemptId: 'attempt-east', agent: { id: 'east', name: 'East' } } }),
-      sse('text.delta', { type: 'text.delta', payload: { text: ' South two', llmAttemptId: 'attempt-south', agent: { id: 'south', name: 'South' } } }),
+      sse('text.delta', { type: 'text.delta', metadata: { llmAttemptId: 'attempt-east' }, payload: { text: 'East one', llmAttemptId: 'attempt-east', agent: { id: 'east', name: 'East' } } }),
+      sse('text.delta', { type: 'text.delta', metadata: { llmAttemptId: 'attempt-south' }, payload: { text: 'South one', llmAttemptId: 'attempt-south', agent: { id: 'south', name: 'South' } } }),
+      sse('text.delta', { type: 'text.delta', metadata: { llmAttemptId: 'attempt-east' }, payload: { text: ' East two', llmAttemptId: 'attempt-east', agent: { id: 'east', name: 'East' } } }),
+      sse('text.delta', { type: 'text.delta', metadata: { llmAttemptId: 'attempt-south' }, payload: { text: ' South two', llmAttemptId: 'attempt-south', agent: { id: 'south', name: 'South' } } }),
       sse('message.created', { type: 'message.created', payload: { messageId: 'message-east' }, metadata: { copilotzWorkflow: { kind: 'agent_output', llmAttemptId: 'attempt-east' } } }),
       sse('message.created', { type: 'message.created', payload: { messageId: 'message-south' }, metadata: { copilotzWorkflow: { kind: 'agent_output', llmAttemptId: 'attempt-south' } } }),
     ].join('');

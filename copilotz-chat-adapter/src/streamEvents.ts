@@ -29,32 +29,46 @@ export const getLlmAttemptId = (event: unknown): string | null => {
 
   const metadata = isRecord(event.metadata) ? event.metadata : {};
   const workflow = getWorkflowMetadata(event);
-  const payload = isRecord(event.payload) ? event.payload : {};
-  const nested = [
-    metadata.streamLlmAttemptId,
-    metadata.llmAttemptId,
-    workflow?.llmAttemptId,
-    workflow?.parentLlmAttemptId,
-    payload.llmAttemptId,
-  ].map(text).find(Boolean);
-  if (nested) return nested;
+  const streamAttemptId = text(metadata.llmAttemptId);
+  if (streamAttemptId) return streamAttemptId;
+  if (workflow?.kind === 'agent_output') return text(workflow.llmAttemptId);
 
   if (
     isRecord(event.subject) &&
-    event.subject.type === 'llm_attempt' &&
-    text(event.subject.id)
+    event.subject.type === 'llm.call' &&
+    text(event.subject.id) &&
+    isRecord(event.data) &&
+    event.data.actionId === 'llm.call' &&
+    event.data.actionRunId === event.subject.id
   ) {
     return text(event.subject.id);
   }
 
-  if (
-    event.subjectType === 'llm_attempt' &&
-    text(event.subjectId)
-  ) {
-    return text(event.subjectId);
-  }
-
   return null;
+};
+
+export const getAgentFailure = (
+  event: unknown,
+): Readonly<{ llmAttemptId: string; outcome: 'failed' | 'cancelled' }> | null => {
+  if (!isRecord(event) || event.type !== 'message.created') return null;
+  const workflow = getWorkflowMetadata(event);
+  if (
+    workflow?.kind !== 'agent_failure' ||
+    (workflow.outcome !== 'failed' && workflow.outcome !== 'cancelled')
+  ) return null;
+  const llmAttemptId = text(workflow.llmAttemptId);
+  const metadata = isRecord(event.metadata) ? event.metadata : null;
+  const receipt = metadata && isRecord(metadata.copilotzAgentFailure)
+    ? metadata.copilotzAgentFailure
+    : null;
+  if (
+    !llmAttemptId ||
+    receipt?.schema !== 'copilotz.agent-failure' ||
+    receipt.source !== 'llm.call' ||
+    receipt.llmAttemptId !== llmAttemptId ||
+    receipt.status !== workflow.outcome
+  ) return null;
+  return Object.freeze({ llmAttemptId, outcome: workflow.outcome });
 };
 
 export const isAgentOutputMessageEvent = (event: unknown): boolean => {

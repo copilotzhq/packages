@@ -11,6 +11,7 @@ import { closeAssistantMessage, hasVisibleAssistantOutput, type InternalChatMess
 import { resolveAgentSender, resolveAssistantFallbackSender, resolveLiveEventSender, resolveUserSender, type SenderResolutionOptions } from './senders';
 import { isInternalMessageMetadata, projectCanonicalMessageHistory } from './messageContract';
 import {
+  getAgentFailure,
   getLlmAttemptId,
   getStreamEventPayload,
   isAgentOutputMessageEvent,
@@ -76,10 +77,12 @@ type LiveOperationProjection = {
   state: LiveRunState;
   assistantSender?: ChatSender;
   liveDraftIds: Set<string>;
+  liveDraftIdsByStreamId: Map<string, Set<string>>;
   draftIdByToolCallId: Map<string, string>;
   accumulated: Map<string, string>;
   messageOrdinal: number;
   hasProgress: boolean;
+  semanticFailure: boolean;
 };
 
 const feedOperationId = (event: Record<string, unknown>): string | null => {
@@ -1006,8 +1009,9 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       throw error;
     }
 
+    const terminalProjection = liveOperationsRef.current.get(operationId);
     const terminalStatus = type === 'operation.completed'
-      ? 'idle'
+      ? (terminalProjection?.semanticFailure ? 'failed' : 'idle')
       : type === 'operation.failed'
       ? 'failed'
       : type === 'operation.cancelled'
@@ -1067,10 +1071,12 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
         state: createLiveRunState(`${operationId}:assistant:0`),
         assistantSender: resolveAssistantFallbackSender(senderOptionsRef.current),
         liveDraftIds: new Set(),
+        liveDraftIdsByStreamId: new Map(),
         draftIdByToolCallId: new Map(),
         accumulated: new Map(),
         messageOrdinal: 1,
         hasProgress: false,
+        semanticFailure: false,
       };
       liveOperationsRef.current.set(operationId, projection);
     }
@@ -1112,13 +1118,6 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       }
     };
     const intercepted = applyEventInterceptor(event);
-    if (intercepted?.handled) {
-      // The SSE cursor advances after this callback returns. Advance the matching
-      // lane cursor as well so a handled progressive frame cannot create a false
-      // offset gap on the next frame or after reconnect.
-      commitOffset();
-      return;
-    }
     const dispatch = (action: LiveRunAction) => {
       const transition = transitionLiveRun(projection!.state, action, {
         createId: () => `${operationId}:message:${projection!.messageOrdinal++}`,
@@ -1128,10 +1127,77 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
         setMessages((current) => applyLiveRunOperations(current, transition.operations));
       }
     };
+    const discardDraftIds = (draftIds: Iterable<string>) => {
+      for (const draftId of [...draftIds]) {
+        const snapshot = toolCallDraftStore.getSnapshot(draftId);
+        if (snapshot) {
+          toolCallDraftStore.apply({
+            ...snapshot,
+            phase: 'discarded',
+            sequence: snapshot.sequence + 1,
+            delta: '',
+          });
+        }
+        projection!.liveDraftIds.delete(draftId);
+        for (const ids of projection!.liveDraftIdsByStreamId.values()) {
+          ids.delete(draftId);
+        }
+        dispatch({ type: 'tool-draft-discard', draftId });
+      }
+    };
+    const discardAttemptDrafts = (attemptId: string) => discardDraftIds(
+      [...projection!.liveDraftIds].filter((draftId) => {
+      const snapshot = toolCallDraftStore.getSnapshot(draftId);
+      return snapshot?.llmAttemptId === attemptId;
+    }),
+    );
+
+    if (type === 'stream.error') {
+      // A retained incomplete lane is observational evidence, not the semantic
+      // result of the action. Preserve delivered text, remove only speculative
+      // tool-call drafts, and wait for the durable llm.call lifecycle event.
+      if (streamId) {
+        discardDraftIds(
+          projection.liveDraftIdsByStreamId.get(streamId) ?? [],
+        );
+      }
+      commitOffset();
+      return;
+    }
+
+    const agentFailure = getAgentFailure(event);
+    if (agentFailure) {
+      discardAttemptDrafts(agentFailure.llmAttemptId);
+      dispatch({
+        type: 'attempt-failed',
+        attemptId: agentFailure.llmAttemptId,
+        message: agentFailure.outcome === 'cancelled'
+          ? 'The response was cancelled.'
+          : 'The response could not be completed.',
+        at: getEventTimestamp(event),
+      });
+      projection.semanticFailure = true;
+      setThreadActivityStatus('failed');
+      queueCanonicalRefresh(threadId);
+      commitOffset();
+      return;
+    }
+
+    if (intercepted?.handled) {
+      // The SSE cursor advances after this callback returns. Advance the matching
+      // lane cursor as well so a handled progressive frame cannot create a false
+      // offset gap on the next frame or after reconnect.
+      commitOffset();
+      return;
+    }
 
     if (type === 'text.delta' || type === 'reasoning.delta') {
       const isReasoning = type === 'reasoning.delta';
-      const attemptId = getLlmAttemptId(event) ?? `${operationId}:attempt:0`;
+      const attemptId = getLlmAttemptId(event);
+      if (!attemptId) {
+        commitOffset();
+        return;
+      }
       const chunk = typeof payload?.text === 'string' ? payload.text : '';
       const laneKey = streamId ?? `${attemptId}:${isReasoning ? 'reasoning' : 'answer'}`;
       const partial = `${projection.accumulated.get(laneKey) ?? ''}${chunk}`;
@@ -1168,6 +1234,12 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       const applied = toolCallDraftStore.apply(delta);
       if (applied === 'created') {
         projection.liveDraftIds.add(delta.draftId);
+        if (streamId) {
+          const draftIds = projection.liveDraftIdsByStreamId.get(streamId) ??
+            new Set<string>();
+          draftIds.add(delta.draftId);
+          projection.liveDraftIdsByStreamId.set(streamId, draftIds);
+        }
         dispatch({
           type: 'tool-draft-start',
           attemptId: delta.llmAttemptId,
@@ -1196,8 +1268,14 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
           },
         });
         projection.liveDraftIds.delete(delta.draftId);
+        if (streamId) {
+          projection.liveDraftIdsByStreamId.get(streamId)?.delete(delta.draftId);
+        }
       } else if (applied === 'discarded') {
         projection.liveDraftIds.delete(delta.draftId);
+        if (streamId) {
+          projection.liveDraftIdsByStreamId.get(streamId)?.delete(delta.draftId);
+        }
         dispatch({ type: 'tool-draft-discard', draftId: delta.draftId });
       }
       projection.hasProgress = true;
@@ -1209,7 +1287,6 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       const lifecycle = extractToolExecutionLifecycle(event);
       dispatch({
         type: 'tool-execution-start',
-        attemptId: projection.state.activeAttemptId ?? projection.state.lastAttemptId,
         id: lifecycle.id,
         toolExecutionId: lifecycle.toolExecutionId,
         name: lifecycle.name,
@@ -1251,8 +1328,7 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
     }
 
     if (isAgentOutputMessageEvent(event)) {
-      const attemptId = getLlmAttemptId(event) ??
-        projection.state.activeAttemptId ?? projection.state.lastAttemptId;
+      const attemptId = getLlmAttemptId(event);
       if (attemptId) dispatch({ type: 'attempt-result', attemptId, at: getEventTimestamp(event) });
       queueCanonicalRefresh(threadId);
       commitOffset();
@@ -1286,10 +1362,12 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
         state: createLiveRunState(assistantMessageId),
         assistantSender: params.assistantSender,
         liveDraftIds: new Set(),
+        liveDraftIdsByStreamId: new Map(),
         draftIdByToolCallId: new Map(),
         accumulated: new Map(),
         messageOrdinal: 1,
         hasProgress: false,
+        semanticFailure: false,
       });
       activeOperationsRef.current.set(operationId, 'running');
       setThreadActivityStatus('running');

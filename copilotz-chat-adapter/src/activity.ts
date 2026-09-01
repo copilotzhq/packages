@@ -388,6 +388,42 @@ export const finalizeAssistantMessage = (
   return setItems(completed, getItems(completed).filter((item) => item.kind !== 'answering'));
 };
 
+export const failAssistantMessage = (
+  message: InternalChatMessage,
+  error: string,
+  completedAt = Date.now(),
+): InternalChatMessage => {
+  if (message.role !== 'assistant') return message;
+  const failed = getItems(message).map((item) => (
+    item.status === 'active'
+      ? {
+        ...item,
+        status: 'failed' as const,
+        completedAt,
+        details: { ...(item.details ?? {}), error },
+      }
+      : item
+  ));
+  const items = failed.some((item) => item.status === 'failed')
+    ? failed
+    : [
+      ...failed,
+      {
+        id: `${message.id}:failed`,
+        kind: 'answering' as const,
+        status: 'failed' as const,
+        startedAt: completedAt,
+        completedAt,
+        details: { error },
+      },
+    ];
+  return setItems({
+    ...message,
+    isStreaming: false,
+    isComplete: true,
+  }, items);
+};
+
 export const closeAssistantMessage = (
   message: InternalChatMessage,
   completedAt = Date.now(),

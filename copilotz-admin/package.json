@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/admin",
-  "version": "0.64.2",
+  "version": "0.65.0",
   "description": "Copilotz admin dashboard components",
   "type": "module",
   "main": "./dist/index.cjs",

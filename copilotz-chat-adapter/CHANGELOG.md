@@ -1,5 +1,14 @@
 # @copilotz/chat-adapter
 
+## 0.65.0
+
+### Minor Changes
+
+- Correlate streamed output, results, and failures only with their exact canonical
+  LLM-attempt identity, preventing cross-attempt lifecycle updates.
+- Treat verified canonical agent-failure receipts as the terminal lifecycle
+  outcome, preserving delivered output while discarding speculative tool drafts.
+
 ## 0.64.2
 
 ### Patch Changes
