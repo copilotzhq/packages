@@ -1,5 +1,11 @@
 # @copilotz/chat-voice-moonshine
 
+## 0.65.1
+
+### Patch Changes
+
+- Synchronize the frontend package suite with Copilotz tool-result handling.
+
 ## 0.65.0
 
 ### Minor Changes

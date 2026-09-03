@@ -16,7 +16,7 @@ import {
   getStreamEventPayload,
   isAgentOutputMessageEvent,
 } from './streamEvents';
-import { canAttachToStreamingAssistant, extractLiveToolCallDelta, extractToolExecutionLifecycle, extractToolOutputDelta, mergePersistedToolResults, matchesToolResultUpdate, parseCompletedToolCallDraft, prependUniqueMessages, type ToolResultUpdate } from './toolActivity';
+import { canAttachToStreamingAssistant, extractCanonicalToolResult, extractLiveToolCallDelta, extractToolOutputDelta, mergePersistedToolResults, matchesToolResultUpdate, parseCompletedToolCallDraft, prependUniqueMessages, type ToolResultUpdate } from './toolActivity';
 import { CLIENT_MESSAGE_ID_METADATA_KEY, reconcileThreadMessages } from './messageReconciliation';
 import { applyLiveRunOperations, createLiveRunState, getLatestLiveRunMessageId, selectLiveRunSender, transitionLiveRun, type LiveRunAction, type LiveRunState } from './liveRun';
 import {
@@ -1283,21 +1283,6 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       return;
     }
 
-    if (type === 'tool_execution.created') {
-      const lifecycle = extractToolExecutionLifecycle(event);
-      dispatch({
-        type: 'tool-execution-start',
-        id: lifecycle.id,
-        toolExecutionId: lifecycle.toolExecutionId,
-        name: lifecycle.name,
-        sender: resolveLiveEventSender(event, senderOptionsRef.current),
-        at: getEventTimestamp(event),
-      });
-      projection.hasProgress = true;
-      commitOffset();
-      return;
-    }
-
     if (type === 'tool_output.delta') {
       const update = extractToolOutputDelta(event);
       if (update.channel === 'result' && isRecord(update.delta)) processToolOutput(update.delta);
@@ -1307,22 +1292,13 @@ export function useCopilotz({ userId, userName, userAvatar, assistantName, agent
       return;
     }
 
-    if (
-      type === 'tool_execution.completed' || type === 'tool_execution.failed' ||
-      type === 'tool_execution.cancelled'
-    ) {
-      const lifecycle = extractToolExecutionLifecycle(event);
+    const canonicalToolResult = extractCanonicalToolResult(event);
+    if (canonicalToolResult) {
       dispatch({
         type: 'tool-result',
-        update: {
-          id: lifecycle.id,
-          toolExecutionId: lifecycle.toolExecutionId,
-          name: lifecycle.name,
-          status: lifecycle.status,
-          ...(lifecycle.error ? { error: lifecycle.error } : {}),
-          endTime: lifecycle.endTime ?? getEventTimestamp(event),
-        },
+        update: canonicalToolResult,
       });
+      queueCanonicalRefresh(threadId);
       commitOffset();
       return;
     }

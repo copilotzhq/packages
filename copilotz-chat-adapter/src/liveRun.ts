@@ -5,7 +5,6 @@ import {
   appendAssistantToolDraft,
   applyAssistantToolOutput,
   applyAssistantToolResult,
-  bindAssistantToolExecution,
   failAssistantMessage,
   finalizeAssistantMessage,
   reconcileAssistantToolDraft,
@@ -28,8 +27,6 @@ export type LiveRunState = {
   initialMessageClaimed: boolean;
   attemptsById: Map<string, AttemptCursor>;
   toolMessageByCallId: Map<string, string>;
-  toolExecutionByCallId: Map<string, string>;
-  toolCallByExecutionId: Map<string, string>;
   settledToolCallIds: Set<string>;
   pendingToolResultsByCallId: Map<string, ToolResultUpdate>;
   pendingToolOutputsByCallId: Map<string, AssistantToolOutputUpdate[]>;
@@ -69,15 +66,6 @@ export type LiveRunAction =
     type: 'tool-call';
     attemptId?: string | null;
     toolCall: ToolCall;
-    sender?: ChatSender;
-    at: number;
-  }
-  | {
-    type: 'tool-execution-start';
-    attemptId?: string | null;
-    id: string;
-    toolExecutionId: string;
-    name?: string;
     sender?: ChatSender;
     at: number;
   }
@@ -170,13 +158,6 @@ export type LiveRunOperation =
     update: ToolResultUpdate;
   }
   | {
-    type: 'bind-tool-execution';
-    messageId: string;
-    id: string;
-    toolExecutionId: string;
-    name?: string;
-  }
-  | {
     type: 'apply-tool-output';
     messageId: string;
     update: AssistantToolOutputUpdate;
@@ -190,8 +171,6 @@ const copyState = (state: LiveRunState): LiveRunState => ({
   ...state,
   attemptsById: new Map(state.attemptsById),
   toolMessageByCallId: new Map(state.toolMessageByCallId),
-  toolExecutionByCallId: new Map(state.toolExecutionByCallId),
-  toolCallByExecutionId: new Map(state.toolCallByExecutionId),
   settledToolCallIds: new Set(state.settledToolCallIds),
   pendingToolResultsByCallId: new Map(state.pendingToolResultsByCallId),
   pendingToolOutputsByCallId: new Map(
@@ -209,8 +188,6 @@ export const createLiveRunState = (initialMessageId: string): LiveRunState => ({
   initialMessageClaimed: false,
   attemptsById: new Map(),
   toolMessageByCallId: new Map(),
-  toolExecutionByCallId: new Map(),
-  toolCallByExecutionId: new Map(),
   settledToolCallIds: new Set(),
   pendingToolResultsByCallId: new Map(),
   pendingToolOutputsByCallId: new Map(),
@@ -396,18 +373,12 @@ export const transitionLiveRun = (
     }
     const existingMessageId = state.toolMessageByCallId.get(action.toolCall.id);
     if (existingMessageId) {
-      const toolExecutionId = state.toolExecutionByCallId.get(
-        action.toolCall.id,
-      );
       return {
         state,
         operations: [{
           type: 'append-tool',
           messageId: existingMessageId,
-          toolCall: {
-            ...action.toolCall,
-            ...(toolExecutionId ? { toolExecutionId } : {}),
-          },
+          toolCall: action.toolCall,
           sender: action.sender,
           at: action.at,
         }],
@@ -435,10 +406,6 @@ export const transitionLiveRun = (
         options,
       );
     const next = copyState(ensured.state);
-    const knownExecutionId = next.toolExecutionByCallId.get(action.toolCall.id);
-    const toolCall = knownExecutionId
-      ? { ...action.toolCall, toolExecutionId: knownExecutionId }
-      : action.toolCall;
     next.toolMessageByCallId.set(action.toolCall.id, ensured.cursor.messageId);
     if (draftId) {
       next.draftMessageById.delete(draftId);
@@ -462,14 +429,14 @@ export const transitionLiveRun = (
             type: 'reconcile-tool-draft' as const,
             messageId: ensured.cursor.messageId,
             draftId,
-            toolCall,
+            toolCall: action.toolCall,
             sender: action.sender ?? ensured.cursor.sender,
             at: action.at,
           }
           : {
             type: 'append-tool' as const,
             messageId: ensured.cursor.messageId,
-            toolCall,
+            toolCall: action.toolCall,
             sender: action.sender ?? ensured.cursor.sender,
             at: action.at,
           },
@@ -487,29 +454,8 @@ export const transitionLiveRun = (
     };
   }
 
-  if (action.type === 'tool-execution-start') {
-    const next = copyState(state);
-    next.toolExecutionByCallId.set(action.id, action.toolExecutionId);
-    next.toolCallByExecutionId.set(action.toolExecutionId, action.id);
-    const messageId = next.toolMessageByCallId.get(action.id);
-    if (messageId) {
-      return {
-        state: next,
-        operations: [{
-          type: 'bind-tool-execution',
-          messageId,
-          id: action.id,
-          toolExecutionId: action.toolExecutionId,
-          ...(action.name ? { name: action.name } : {}),
-        }],
-      };
-    }
-    return { state: next, operations: [] };
-  }
-
   if (action.type === 'tool-output') {
-    const callId = action.update.id ||
-      state.toolCallByExecutionId.get(action.update.toolExecutionId);
+    const callId = action.update.id;
     if (!callId || state.settledToolCallIds.has(callId)) {
       return { state, operations: [] };
     }
@@ -647,12 +593,6 @@ const applyOperation = (
     };
   } else if (operation.type === 'remove-tool-draft') {
     updated = removeAssistantToolDraft(current, operation.draftId);
-  } else if (operation.type === 'bind-tool-execution') {
-    updated = bindAssistantToolExecution(current, {
-      id: operation.id,
-      toolExecutionId: operation.toolExecutionId,
-      ...(operation.name ? { name: operation.name } : {}),
-    });
   } else if (operation.type === 'apply-tool-output') {
     updated = applyAssistantToolOutput(current, operation.update);
   } else {

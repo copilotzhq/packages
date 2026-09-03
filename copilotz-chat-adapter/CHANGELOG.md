@@ -1,5 +1,13 @@
 # @copilotz/chat-adapter
 
+## 0.65.1
+
+### Patch Changes
+
+- Settle live Tool activities immediately from canonical `tool_result` Message
+  events while retaining canonical history refresh for result hydration.
+- Remove the unused synthetic `tool_execution.*` lifecycle path.
+
 ## 0.65.0
 
 ### Minor Changes

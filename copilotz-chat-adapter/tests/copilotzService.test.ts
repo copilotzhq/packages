@@ -882,15 +882,10 @@ test('runCopilotzStream awaits and surfaces asynchronous event callback failures
   globalThis.fetch = async () => new Response(
     new ReadableStream({
       start(controller) {
-        controller.enqueue(encoder.encode(sse('tool_execution.failed', {
-          type: 'tool_execution.failed',
-          payload: {
-            toolCallId: 'tool-1',
-            toolExecutionId: 'execution-1',
-            toolId: 'browser',
-            status: 'failed',
-            safeError: { message: 'page crashed' },
-          },
+        controller.enqueue(encoder.encode(sse('message.created', {
+          type: 'message.created',
+          createdAt: '2026-09-02T12:34:56.000Z',
+          metadata: { copilotzWorkflow: { kind: 'tool_result', sourceMessageId: 'source-1' }, toolInvocation: { id: 'tool-1', tool: { id: 'browser' } }, toolStatus: 'failed' },
         })));
         controller.close();
       },

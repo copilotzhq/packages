@@ -342,34 +342,6 @@ export const applyAssistantToolOutput = (
   }, next);
 };
 
-export const bindAssistantToolExecution = (
-  message: InternalChatMessage,
-  input: {
-    id: string;
-    toolExecutionId: string;
-    name?: string;
-    status?: ToolCall['status'];
-  },
-): InternalChatMessage => {
-  if (message.role !== 'assistant') return message;
-  const item = getItems(message).find((candidate) => (
-    candidate.kind === 'tool' && candidate.id === input.id
-  ));
-  if (!item) return message;
-  const currentToolCall = item.details?.toolCall;
-  if (
-    currentToolCall?.toolExecutionId === input.toolExecutionId &&
-    currentToolCall.status === (input.status ?? 'running') &&
-    (!input.name || currentToolCall.name === input.name)
-  ) return message;
-  return applyAssistantToolResult(message, {
-    id: input.id,
-    toolExecutionId: input.toolExecutionId,
-    name: input.name ?? item.toolName ?? input.id,
-    status: input.status ?? 'running',
-  });
-};
-
 export const finalizeAssistantMessage = (
   message: InternalChatMessage,
   finalAnswer?: string,

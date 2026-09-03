@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  extractCanonicalToolResult,
   extractLiveToolCallDelta,
-  extractToolExecutionLifecycle,
   extractToolOutputDelta,
   parseCompletedToolCallDraft,
 } from '../src/toolActivity.ts';
@@ -133,7 +133,7 @@ test('completed canonical draft rejects malformed or renamed calls', () => {
   }), /name changed/);
 });
 
-test('canonical tool output and lifecycle parsers preserve execution identity', () => {
+test('canonical tool output parser preserves execution identity', () => {
   assert.deepEqual(extractToolOutputDelta({
     type: 'tool_output.delta',
     sequence: 4,
@@ -158,23 +158,17 @@ test('canonical tool output and lifecycle parsers preserve execution identity', 
     sequence: 4,
   });
 
-  assert.deepEqual(extractToolExecutionLifecycle({
-    type: 'tool_execution.failed',
-    payload: {
-      toolExecutionId: 'execution-1',
-      toolCallId: 'call-1',
-      toolId: 'terminal',
-      toolName: 'Run a one-shot script',
-      status: 'failed',
-      safeError: { message: 'command failed' },
-    },
-  }, () => 123), {
-    id: 'call-1',
-    toolExecutionId: 'execution-1',
-    name: 'terminal',
-    status: 'failed',
-    error: 'command failed',
-    terminal: true,
-    endTime: 123,
+});
+
+test('canonical tool-result parser maps terminal states and rejects non-tools', () => {
+  const result = (toolStatus: string) => ({
+    type: 'message.created', createdAt: '2026-09-02T12:34:56.000Z',
+    metadata: { copilotzWorkflow: { kind: 'tool_result', sourceMessageId: 'source-1' }, toolInvocation: { id: 'call-1', tool: { id: 'terminal', name: 'Terminal' } }, toolStatus },
   });
+  for (const [toolStatus, status] of [['completed', 'completed'], ['failed', 'failed'], ['cancelled', 'failed']]) {
+    assert.deepEqual(extractCanonicalToolResult(result(toolStatus)), { id: 'call-1', sourceMessageId: 'source-1', name: 'Terminal', status, endTime: Date.parse('2026-09-02T12:34:56.000Z') });
+  }
+  assert.equal(extractCanonicalToolResult({ type: 'message.created', metadata: { copilotzWorkflow: { kind: 'agent_output' } } }), null);
+  assert.throws(() => extractCanonicalToolResult({ ...result('completed'), metadata: { copilotzWorkflow: { kind: 'tool_result' } } }), /toolInvocation/);
+  assert.throws(() => extractCanonicalToolResult(result('running')), /must be completed/);
 });

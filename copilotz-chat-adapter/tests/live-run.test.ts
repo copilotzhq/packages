@@ -7,6 +7,7 @@ import {
   selectLiveRunSender,
   transitionLiveRun,
 } from '../src/liveRun.ts';
+import { extractCanonicalToolResult } from '../src/toolActivity.ts';
 
 const sender: ChatSender = {
   type: 'agent',
@@ -193,6 +194,22 @@ test('tool result received before its call is applied when the call arrives', ()
 
   assert.equal(messages[0].activity?.items[0].status, 'failed');
   assert.equal(messages[0].activity?.items[0].details?.error, 'page crashed');
+});
+
+test('durable tool-result event settles before its tool call is replayed', () => {
+  let run = createLiveRunState('placeholder');
+  let messages = [{ id: 'placeholder', role: 'assistant' as const, content: '', timestamp: 0, isStreaming: true, isComplete: false, sender }];
+  const dispatch = (action: Parameters<typeof transitionLiveRun>[1]) => {
+    const transition = transitionLiveRun(run, action, { createId: () => 'unused' });
+    run = transition.state;
+    messages = applyLiveRunOperations(messages, transition.operations);
+  };
+  const update = extractCanonicalToolResult({ type: 'message.created', createdAt: '2026-09-02T12:34:56.000Z', metadata: { copilotzWorkflow: { kind: 'tool_result', sourceMessageId: 'source-1' }, toolInvocation: { id: 'tool-1', tool: { id: 'browser' } }, toolStatus: 'completed' } });
+  assert.ok(update);
+  dispatch({ type: 'attempt-start', attemptId: 'attempt-1', sender, at: 1 });
+  dispatch({ type: 'tool-result', update });
+  dispatch({ type: 'tool-call', attemptId: 'attempt-1', sender, at: 2, toolCall: { id: 'tool-1', name: 'browser', arguments: {}, status: 'running' } });
+  assert.equal(messages[0].activity?.items[0].status, 'complete');
 });
 
 test('unknown attempt results do not finalize a different streamed attempt', () => {
@@ -505,13 +522,6 @@ test('tool output is visible before lifecycle settlement and survives it', () =>
       arguments: { stdin: 'pwd' },
       status: 'running',
     },
-  });
-  dispatch({
-    type: 'tool-execution-start',
-    id: 'call-1',
-    toolExecutionId: 'execution-1',
-    name: 'Terminal',
-    at: 3,
   });
   dispatch({
     type: 'tool-output',

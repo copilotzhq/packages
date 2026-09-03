@@ -60,16 +60,6 @@ export type ParsedToolOutputDelta = {
   mediaType?: string;
 };
 
-export type ParsedToolExecutionLifecycle = {
-  id: string;
-  toolExecutionId: string;
-  name?: string;
-  status: ToolCallStatus;
-  error?: string;
-  terminal: boolean;
-  endTime?: number;
-};
-
 const fail = (message: string): never => {
   throw new ContractViolation(message);
 };
@@ -299,37 +289,40 @@ export const extractToolOutputDelta = (
   };
 };
 
-export const extractToolExecutionLifecycle = (
+export const extractCanonicalToolResult = (
   event: Record<string, unknown>,
-  now: () => number = () => Date.now(),
-): ParsedToolExecutionLifecycle => {
-  const type = expectString(event.type, 'tool execution event.type');
-  const value = expectRecord(event.payload, `${type} payload`);
-  const status = expectToolStatus(value.status, `${type} payload.status`);
-  const terminal = type === 'tool_execution.completed' ||
-    type === 'tool_execution.failed' ||
-    type === 'tool_execution.cancelled';
-  if (type !== 'tool_execution.created' && !terminal) {
-    return fail(`unsupported tool execution lifecycle '${type}'`);
+): ToolResultUpdate | null => {
+  if (event.type !== 'message.created' || !isRecord(event.metadata)) return null;
+  const metadata = event.metadata;
+  if (!isRecord(metadata.copilotzWorkflow) || metadata.copilotzWorkflow.kind !== 'tool_result') return null;
+  const workflow = metadata.copilotzWorkflow;
+
+  const invocation = expectRecord(metadata.toolInvocation, 'tool-result metadata.toolInvocation');
+  const tool = expectRecord(invocation.tool, 'tool-result metadata.toolInvocation.tool');
+  const createdAt = expectString(event.createdAt, 'tool-result event.createdAt');
+  const endTime = new Date(createdAt).getTime();
+  if (!Number.isFinite(endTime)) return fail('tool-result event.createdAt must be an ISO timestamp');
+  const action = metadata.copilotzToolAction === undefined
+    ? undefined
+    : expectRecord(metadata.copilotzToolAction, 'tool-result metadata.copilotzToolAction');
+  const planResult = metadata.copilotzToolPlanResult === undefined
+    ? undefined
+    : expectRecord(metadata.copilotzToolPlanResult, 'tool-result metadata.copilotzToolPlanResult');
+  const sourceAction = planResult?.sourceAction === undefined
+    ? undefined
+    : expectRecord(planResult.sourceAction, 'tool-result metadata.copilotzToolPlanResult.sourceAction');
+  const toolExecutionId = action?.actionRunId ?? sourceAction?.actionRunId;
+  const status = expectToolStatus(metadata.toolStatus, 'tool-result metadata.toolStatus');
+  if (status === 'pending' || status === 'running') {
+    return fail('tool-result metadata.toolStatus must be completed, failed, or cancelled');
   }
-  const safeError = value.safeError === undefined
-    ? undefined
-    : expectRecord(value.safeError, `${type} payload.safeError`);
-  const error = safeError === undefined
-    ? undefined
-    : formatToolError(safeError.message ?? safeError);
-  const name = expectString(value.toolId, `${type} payload.toolId`);
   return {
-    id: expectString(value.toolCallId, `${type} payload.toolCallId`),
-    toolExecutionId: expectString(
-      value.toolExecutionId,
-      `${type} payload.toolExecutionId`,
-    ),
-    name,
+    id: expectString(invocation.id, 'tool-result metadata.toolInvocation.id'),
+    sourceMessageId: expectString(workflow.sourceMessageId, 'tool-result metadata.copilotzWorkflow.sourceMessageId'),
+    ...(toolExecutionId === undefined ? {} : { toolExecutionId: expectString(toolExecutionId, 'tool-result actionRunId') }),
+    name: expectToolName(tool, 'tool-result metadata.toolInvocation.tool.id'),
     status,
-    ...(error ? { error } : {}),
-    terminal,
-    ...(terminal ? { endTime: now() } : {}),
+    endTime,
   };
 };
 
