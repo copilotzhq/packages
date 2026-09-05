@@ -1,5 +1,11 @@
 # @copilotz/chat-adapter
 
+## 0.66.2 — 2026-09-05
+
+Preserve the selected participant team separately from each message recipient.
+This restores delegated and nested asks when one agent is selected, and enrolls
+missing teammates on existing threads. Requires Copilotz and chat-ui 0.66.2.
+
 ## 0.66.0 — 2026-09-05
 
 Replace HTTP/SSE orchestration with the canonical Copilotz browser client and a React-independent controller. Preserve awaited checkpoints, durable Stop, history reconciliation, tool identities and attachments. Requires Copilotz and chat-ui 0.66.0.

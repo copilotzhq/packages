@@ -331,6 +331,7 @@ export function createChatController(
           content: content as Parameters<
             CoreClient['threads']['send']
           >[0]['content'],
+          participantIds: options.participants ?? undefined,
           recipientIds
         },
         { idempotencyKey, signal: submission.controller.signal }

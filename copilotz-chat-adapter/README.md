@@ -1,4 +1,4 @@
-# @copilotz/chat-adapter 0.66.0
+# @copilotz/chat-adapter 0.66.2
 
 The Copilotz chat integration uses the library's canonical `/api` facade and
 browser client. `CopilotzChat` remains the main component; `@copilotz/chat-ui`
@@ -57,7 +57,7 @@ live exclusively in the shared library client, whose awaited frame callback
 commits progress only after successful application. There is no SSE parser,
 versioned endpoint fallback or internal HTTP client in this package.
 
-This release must be deployed with Copilotz 0.66.0 and synchronized frontend
+This release must be deployed with Copilotz 0.66.2 and synchronized frontend
 packages. It intentionally provides no transport compatibility with older servers.
 
 ## npm installation
@@ -70,4 +70,8 @@ the consuming application's `.npmrc` before installing this package:
 ```
 
 The adapter pins that client's npm alias and its UI peer to the synchronized
-0.66.0 release. No server or model-provider modules enter the browser bundle.
+0.66.2 release. No server or model-provider modules enter the browser bundle.
+
+`participantIds` selects the agent team; `targetAgentId` selects who receives the
+next message. The controller sends both selections to Core, so a selected agent
+can ask its authorized teammates without broadcasting the initial message.
