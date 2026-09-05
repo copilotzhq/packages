@@ -1,5 +1,9 @@
 # @copilotz/admin
 
+## 0.66.0 — Unreleased
+
+Synchronize the 0.66.0 release and correct event-table selection callback typing.
+
 ## 0.65.1
 
 ### Patch Changes

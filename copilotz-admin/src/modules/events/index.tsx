@@ -176,7 +176,7 @@ function EventsPage({ context }: { context: AdminRuntimeContext }) {
           <ResourceTable
             rows={events}
             getRowKey={(row) => row.id}
-            onRowClick={setSelectedEvent}
+            onRowClick={(event: AdminQueueEvent) => setSelectedEvent(event)}
             empty={
               <EmptyState
                 title="No matching events"

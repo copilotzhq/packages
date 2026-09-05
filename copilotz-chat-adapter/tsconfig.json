@@ -17,7 +17,10 @@
       "@copilotz/chat-ui": [
         "../copilotz-chat-ui/src/index.ts"
       ]
-    }
+    },
+    "allowImportingTsExtensions": true
   },
-  "include": ["src"]
+  "include": [
+    "src"
+  ]
 }

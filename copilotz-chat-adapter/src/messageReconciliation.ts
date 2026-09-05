@@ -12,28 +12,29 @@ const stringifyForCompare = (value: unknown): string => {
   }
 };
 
-const getMessageSignature = (message: InternalChatMessage): string => JSON.stringify({
-  id: message.id,
-  role: message.role,
-  content: message.content ?? '',
-  isStreaming: message.isStreaming === true,
-  isComplete: message.isComplete === true,
-  attachments: stringifyForCompare(message.attachments),
-  activity: stringifyForCompare(message.activity),
-  metadata: stringifyForCompare(message.metadata),
-  sender: message.sender
-    ? {
-      id: message.sender.id,
-      type: message.sender.type,
-      name: message.sender.name,
-      agentId: message.sender.agentId,
-    }
-    : null,
-});
+const getMessageSignature = (message: InternalChatMessage): string =>
+  JSON.stringify({
+    id: message.id,
+    role: message.role,
+    content: message.content ?? '',
+    isStreaming: message.isStreaming === true,
+    isComplete: message.isComplete === true,
+    attachments: stringifyForCompare(message.attachments),
+    activity: stringifyForCompare(message.activity),
+    metadata: stringifyForCompare(message.metadata),
+    sender: message.sender
+      ? {
+          id: message.sender.id,
+          type: message.sender.type,
+          name: message.sender.name,
+          agentId: message.sender.agentId
+        }
+      : null
+  });
 
 const getMetadataString = (
   message: InternalChatMessage,
-  key: string,
+  key: string
 ): string | null => {
   const value = message.metadata?.[key];
   return typeof value === 'string' && value.trim().length > 0
@@ -41,11 +42,12 @@ const getMetadataString = (
     : null;
 };
 
-const getCanonicalLlmAttemptId = (
-  message: InternalChatMessage,
+export const getCanonicalLlmAttemptId = (
+  message: InternalChatMessage
 ): string | null => {
   const workflow = message.metadata?.copilotzWorkflow;
-  if (!workflow || typeof workflow !== 'object' || Array.isArray(workflow)) return null;
+  if (!workflow || typeof workflow !== 'object' || Array.isArray(workflow))
+    return null;
   const value = (workflow as Record<string, unknown>).llmAttemptId;
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 };
@@ -53,25 +55,22 @@ const getCanonicalLlmAttemptId = (
 const getCorrelationKeys = (message: InternalChatMessage): string[] => {
   const clientMessageId = getMetadataString(
     message,
-    CLIENT_MESSAGE_ID_METADATA_KEY,
+    CLIENT_MESSAGE_ID_METADATA_KEY
   );
-  const llmAttemptId = getCanonicalLlmAttemptId(message) ?? getMetadataString(
-    message,
-    LLM_ATTEMPT_ID_METADATA_KEY,
-  );
+  const llmAttemptId =
+    getCanonicalLlmAttemptId(message) ??
+    getMetadataString(message, LLM_ATTEMPT_ID_METADATA_KEY);
 
   return [
     ...(clientMessageId
       ? [`client-message:${message.role}:${clientMessageId}`]
       : []),
-    ...(llmAttemptId
-      ? [`llm-attempt:${message.role}:${llmAttemptId}`]
-      : []),
+    ...(llmAttemptId ? [`llm-attempt:${message.role}:${llmAttemptId}`] : [])
   ];
 };
 
 const indexUniqueFreshCorrelations = (
-  freshMessages: InternalChatMessage[],
+  freshMessages: InternalChatMessage[]
 ): Map<string, InternalChatMessage | null> => {
   const messagesByCorrelation = new Map<string, InternalChatMessage | null>();
 
@@ -79,7 +78,7 @@ const indexUniqueFreshCorrelations = (
     for (const key of getCorrelationKeys(message)) {
       messagesByCorrelation.set(
         key,
-        messagesByCorrelation.has(key) ? null : message,
+        messagesByCorrelation.has(key) ? null : message
       );
     }
   }
@@ -89,7 +88,7 @@ const indexUniqueFreshCorrelations = (
 
 export const reconcileThreadMessages = (
   currentMessages: InternalChatMessage[],
-  freshMessages: InternalChatMessage[],
+  freshMessages: InternalChatMessage[]
 ): { messages: InternalChatMessage[]; changed: boolean } => {
   if (freshMessages.length === 0) {
     return { messages: currentMessages, changed: false };
@@ -98,7 +97,9 @@ export const reconcileThreadMessages = (
     return { messages: freshMessages, changed: true };
   }
 
-  const freshById = new Map(freshMessages.map((message) => [message.id, message]));
+  const freshById = new Map(
+    freshMessages.map((message) => [message.id, message])
+  );
   const freshByCorrelation = indexUniqueFreshCorrelations(freshMessages);
   const seen = new Set<string>();
   let changed = false;
@@ -108,11 +109,11 @@ export const reconcileThreadMessages = (
     const correlatedMatch = exactMatch
       ? null
       : getCorrelationKeys(message)
-        .map((key) => freshByCorrelation.get(key))
-        .find((candidate): candidate is InternalChatMessage => (
-          candidate !== null &&
-          candidate !== undefined
-        ));
+          .map((key) => freshByCorrelation.get(key))
+          .find(
+            (candidate): candidate is InternalChatMessage =>
+              candidate !== null && candidate !== undefined
+          );
     const fresh = exactMatch ?? correlatedMatch;
     if (!fresh) return [message];
 

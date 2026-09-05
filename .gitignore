@@ -9,3 +9,6 @@ npm-debug.log*
 .npmrc
 .npmrc
 .env
+
+# The root registry-only config is part of the public dependency contract.
+!/.npmrc

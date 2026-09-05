@@ -1,54 +1,22 @@
 export { CopilotzChat } from './CopilotzChat';
-export { useCopilotz } from './useCopilotzChat';
-export {
-  CopilotzRequestError,
-  apiUrl,
-  apiUrlObject,
-  cancelCopilotzOperation,
-  deleteThread,
-  fetchAgents,
-  fetchThreadMessages,
-  fetchThreadMessagesPage,
-  fetchThreads,
-  observeThreadFeed,
-  runCopilotzStream,
-  startCopilotzRun,
-  withAuthHeaders,
-  updateThread,
-} from './copilotzService';
+export { useCopilotzChat } from './useCopilotzChat';
+export { createChatController } from './controller';
 export type {
-  CopilotzRunReceipt,
-  ObserveThreadFeedOptions,
-  OperationCancellation,
   RequestHeadersProvider,
-  RunOptions,
-  ThreadFeedEvent,
-  ThreadFeedResult,
-} from './copilotzService';
-export {
-  parseServerSentEventStream,
-  ServerSentEventParser,
-} from './sse';
-export type { ServerSentEvent } from './sse';
-export { parseCanonicalMessagePage } from './canonicalHistory';
-export { getAssetDataUrl } from './assetsService';
+  UseCopilotzChatOptions
+} from './useCopilotzChat';
 export type {
-  CanonicalAssetRecord,
-  CanonicalContentRef,
-  CanonicalMessage,
-  CanonicalMessageHistoryIncluded,
-  CanonicalMessagePage,
-  CanonicalMessagePageInfo,
-  CanonicalParticipant,
-  CanonicalResolvedContent,
-} from './canonicalHistory';
+  ChatController,
+  ChatSnapshot,
+  ControllerOptions
+} from './controller';
 export type {
   EventInterceptor,
   EventInterceptorResult,
   RenderSpecialState,
   RunErrorInterceptor,
   SpecialChatState,
-  SpecialStateControls,
+  SpecialStateControls
 } from './specialState';
 export type {
   AgentOption,
@@ -74,5 +42,5 @@ export type {
   ToolCallDraftSource,
   ToolRendererMap,
   ToolRendererProps,
-  ToolRendererStatus,
+  ToolRendererStatus
 } from '@copilotz/chat-ui';

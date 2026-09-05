@@ -73,6 +73,10 @@ function checkVersions(version, workspacePackages, workspacePackageNames) {
   const lockPath = path.join(root, "package-lock.json");
   const lock = readJson(lockPath);
 
+  if (lock.version !== version) {
+    problems.push(`package-lock.json version is ${lock.version ?? "missing"}, expected ${version}`);
+  }
+
   if (lock.packages?.[""]?.version !== version) {
     problems.push(`package-lock.json root version is ${lock.packages?.[""]?.version ?? "missing"}, expected ${version}`);
   }
@@ -121,6 +125,7 @@ function syncVersions(version, workspacePackages, workspacePackageNames) {
 
   const lockPath = path.join(root, "package-lock.json");
   const lock = readJson(lockPath);
+  lock.version = version;
   lock.packages ??= {};
   lock.packages[""] ??= {};
   lock.packages[""].version = version;

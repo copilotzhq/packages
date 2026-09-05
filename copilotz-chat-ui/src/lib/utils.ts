@@ -1,12 +1,15 @@
-import { clsx, type ClassValue } from "clsx"
-import { twMerge } from "tailwind-merge"
-import type { ChatConfig, MediaAttachmentKind } from "../types/chatTypes"
+import { clsx, type ClassValue } from 'clsx';
+import { twMerge } from 'tailwind-merge';
+import type { ChatConfig } from '../types/chatTypes';
 
 export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs))
+  return twMerge(clsx(inputs));
 }
 
-export const formatDate = (timestamp: number, labels?: ChatConfig['labels']) => {
+export const formatDate = (
+  timestamp: number,
+  labels?: ChatConfig['labels']
+) => {
   const date = new Date(timestamp);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
@@ -21,7 +24,7 @@ export const formatDate = (timestamp: number, labels?: ChatConfig['labels']) => 
   } else {
     return date.toLocaleDateString('en-US', {
       day: '2-digit',
-      month: 'short',
+      month: 'short'
     });
   }
 };
@@ -41,30 +44,18 @@ export const createObjectUrlFromDataUrl = (dataUrl: string): string | null => {
       bytes[i] = binary.charCodeAt(i);
     }
 
-    const blob = new Blob([bytes], { type: mimeType || 'application/octet-stream' });
+    const blob = new Blob([bytes], {
+      type: mimeType || 'application/octet-stream'
+    });
     return URL.createObjectURL(blob);
   } catch {
     return null;
   }
 };
 
-export const getAttachmentKindFromMimeType = (
-  mimeType?: string | null,
-): MediaAttachmentKind => {
-  const normalized = (mimeType || '').toLowerCase();
-  if (normalized.startsWith('image/')) return 'image';
-  if (normalized.startsWith('audio/')) return 'audio';
-  if (normalized.startsWith('video/')) return 'video';
-  return 'file';
-};
-
-export const getMimeTypeFromDataUrl = (dataUrl: string): string | null => {
-  const match = dataUrl.match(/^data:([^;,]+)[;,]/);
-  return match?.[1] || null;
-};
-
 export const formatFileSize = (bytes?: number): string => {
-  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0) return '';
+  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes < 0)
+    return '';
   if (bytes < 1024) return `${bytes} B`;
 
   const units = ['KB', 'MB', 'GB', 'TB'];
@@ -76,5 +67,12 @@ export const formatFileSize = (bytes?: number): string => {
     unitIndex += 1;
   }
 
-  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${
+    units[unitIndex]
+  }`;
 };
+
+export {
+  getAttachmentKindFromMimeType,
+  getMimeTypeFromDataUrl
+} from '../model';

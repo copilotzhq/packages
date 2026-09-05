@@ -38,5 +38,20 @@ jobs:
       - name: Build packages
         run: npm run build
 
+      - name: Test built packages and browser controller
+        run: |
+          node --test copilotz-admin/test/*.test.mjs
+          node --test copilotz-chat-ui/tests/**/*.test.js
+          node --test --experimental-strip-types copilotz-chat-ui/tests/**/*.test.ts
+          npm -w copilotz-chat-adapter test
+
       - name: Publish unpublished package versions
         run: npm run publish:workspaces
+
+      - name: Set up Deno for released-artifact validation
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.2
+
+      - name: Validate released facade, client and controller
+        run: deno test --config contracts/deno.json --allow-all contracts/http-round-trip.test.ts

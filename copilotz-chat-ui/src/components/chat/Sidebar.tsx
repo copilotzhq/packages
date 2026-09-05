@@ -516,7 +516,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const threadGroups = useMemo((): ThreadGroup[] => {
     if (tagsEnabled && groupBy === "tag") {
-      const groups = allTags
+      const groups: ThreadGroup[] = allTags
         .map((tag) => {
           const tagMatches = tagMatchesSearch(tag);
           return {

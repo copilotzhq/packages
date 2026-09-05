@@ -1,5 +1,9 @@
 # @copilotz/chat-ui
 
+## 0.66.0 — Unreleased
+
+Expose browser-safe MIME helpers through ./model so the controller can reuse them without importing React. The CopilotzChat component contract and backend-agnostic UI remain available.
+
 ## 0.65.1
 
 ### Patch Changes

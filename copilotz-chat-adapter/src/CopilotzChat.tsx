@@ -1,10 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChatUI, ChatUserContextProvider } from '@copilotz/chat-ui';
-import type { AgentOption, ChatCallbacks, ChatConfig, ChatUserContext, ChatUserMenuSection, MemoryItem, ToolRendererMap } from '@copilotz/chat-ui';
+import type {
+  AgentOption,
+  ChatCallbacks,
+  ChatConfig,
+  ChatUserContext,
+  ChatUserMenuSection,
+  MemoryItem,
+  ToolRendererMap
+} from '@copilotz/chat-ui';
 import { User } from 'lucide-react';
-import { useCopilotz } from './useCopilotzChat';
-import type { EventInterceptor, RenderSpecialState, RunErrorInterceptor } from './specialState';
-import type { RequestHeadersProvider } from './copilotzService';
+import { useCopilotzChat } from './useCopilotzChat';
+import type {
+  EventInterceptor,
+  RenderSpecialState,
+  RunErrorInterceptor
+} from './specialState';
+import type { RequestHeadersProvider } from './useCopilotzChat';
 
 export interface CopilotzChatProps {
   userId: string;
@@ -14,7 +26,6 @@ export interface CopilotzChatProps {
   initialContext?: ChatUserContext;
   bootstrap?: {
     initialMessage?: string;
-    initialToolCalls?: Array<{ name: string; args: Record<string, unknown> }>;
   };
   config?: ChatConfig;
   callbacks?: Partial<ChatCallbacks>;
@@ -26,7 +37,10 @@ export interface CopilotzChatProps {
    * - A render function receiving panel props: `(props: { onClose, isMobile }) => ReactNode`
    * Toggle visibility via the header button.
    */
-  customComponent?: React.ReactNode | ((context: ChatUserContext) => React.ReactNode) | ((props: { onClose: () => void; isMobile: boolean }) => React.ReactNode);
+  customComponent?:
+    | React.ReactNode
+    | ((context: ChatUserContext) => React.ReactNode)
+    | ((props: { onClose: () => void; isMobile: boolean }) => React.ReactNode);
   onToolOutput?: (output: Record<string, unknown>) => void;
   /**
    * Fired whenever the adapter’s selected thread id changes (initial load,
@@ -60,6 +74,7 @@ export interface CopilotzChatProps {
   /** Multi-agent: ID of the agent this message is directed at */
   targetAgentId?: string | null;
   onTargetAgentChange?: (agentId: string | null) => void;
+  baseUrl?: string;
   getRequestHeaders?: RequestHeadersProvider;
   className?: string;
   eventInterceptor?: EventInterceptor;
@@ -69,15 +84,52 @@ export interface CopilotzChatProps {
   toolRenderers?: ToolRendererMap;
 }
 
-export const CopilotzChat: React.FC<CopilotzChatProps> = ({ userId, userName, userAvatar, userEmail, initialContext, bootstrap, config: userConfig, callbacks: userCallbacks, customComponent, onToolOutput, onCurrentThreadIdChange, onLogout, onViewProfile, onAddMemory, onUpdateMemory, onDeleteMemory, userMenuSections, userMenuAdditionalItems, suggestions, agentOptions = [], selectedAgentId = null, onSelectAgent, participantIds, onParticipantsChange, targetAgentId = null, onTargetAgentChange, getRequestHeaders, className, eventInterceptor, runErrorInterceptor, renderSpecialState, toolRenderers }) => {
-  const selectedAgent = agentOptions.find((agent) => agent.id === selectedAgentId) || null;
+export const CopilotzChat: React.FC<CopilotzChatProps> = ({
+  userId,
+  userName,
+  userAvatar,
+  userEmail,
+  initialContext,
+  bootstrap,
+  config: userConfig,
+  callbacks: userCallbacks,
+  customComponent,
+  onToolOutput,
+  onCurrentThreadIdChange,
+  onLogout,
+  onViewProfile,
+  onAddMemory,
+  onUpdateMemory,
+  onDeleteMemory,
+  userMenuSections,
+  userMenuAdditionalItems,
+  suggestions,
+  agentOptions = [],
+  selectedAgentId = null,
+  onSelectAgent,
+  participantIds,
+  onParticipantsChange,
+  targetAgentId = null,
+  onTargetAgentChange,
+  baseUrl,
+  getRequestHeaders,
+  className,
+  eventInterceptor,
+  runErrorInterceptor,
+  renderSpecialState,
+  toolRenderers
+}) => {
+  const selectedAgent =
+    agentOptions.find((agent) => agent.id === selectedAgentId) || null;
 
   // Keep backend routing identities stable. Display names are for UI only;
   // thread participants and targets must use agent IDs so server-side history
   // lookup can match the target agent.
   const participantAgentIds = useMemo(() => {
     if (!participantIds || participantIds.length === 0) return null;
-    return participantIds.filter((id) => typeof id === 'string' && id.length > 0);
+    return participantIds.filter(
+      (id) => typeof id === 'string' && id.length > 0
+    );
   }, [participantIds]);
 
   const selectedAgentRunId = selectedAgent?.id ?? selectedAgentId ?? null;
@@ -87,7 +139,32 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({ userId, userName, us
     return targetAgentId;
   }, [targetAgentId]);
 
-  const { messages, isMessagesLoading, isLoadingOlderMessages, messagePageInfo, threads, currentThreadId, isStreaming, isStopping, isRecoveringStream, activityNotice, toolCallDraftSource, specialState, clearSpecialState, userContextSeed, sendMessage, createThread, selectThread, renameThread, archiveThread, updateThreadTags, editMessage, deleteThread, stopGeneration, loadOlderMessages } = useCopilotz({
+  const {
+    messages,
+    isMessagesLoading,
+    isLoadingOlderMessages,
+    messagePageInfo,
+    threads,
+    currentThreadId,
+    isStreaming,
+    isStopping,
+    isRecoveringStream,
+    activityNotice,
+    toolCallDraftSource,
+    specialState,
+    clearSpecialState,
+    userContextSeed,
+    sendMessage,
+    createThread,
+    selectThread,
+    renameThread,
+    archiveThread,
+    updateThreadTags,
+    editMessage,
+    deleteThread,
+    stopGeneration,
+    loadOlderMessages
+  } = useCopilotzChat({
     userId,
     userName,
     userAvatar,
@@ -100,9 +177,10 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({ userId, userName, us
     preferredAgentName: selectedAgentRunId,
     participants: participantAgentIds,
     targetAgentName: targetAgentRunId,
+    baseUrl,
     getRequestHeaders,
     eventInterceptor,
-    runErrorInterceptor,
+    runErrorInterceptor
   });
 
   useEffect(() => {
@@ -110,7 +188,19 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({ userId, userName, us
   }, [currentThreadId, onCurrentThreadIdChange]);
 
   const chatCallbacks: ChatCallbacks = useMemo(() => {
-    const { onSendMessage: _1, onStopGeneration: _2, onCreateThread: _3, onSelectThread: _4, onRenameThread: _5, onArchiveThread: _6, onDeleteThread: _7, onUpdateThreadTags: _8, onCopyMessage: _9, onEditMessage: _10, ...restUserCallbacks } = userCallbacks || {};
+    const {
+      onSendMessage: _1,
+      onStopGeneration: _2,
+      onCreateThread: _3,
+      onSelectThread: _4,
+      onRenameThread: _5,
+      onArchiveThread: _6,
+      onDeleteThread: _7,
+      onUpdateThreadTags: _8,
+      onCopyMessage: _9,
+      onEditMessage: _10,
+      ...restUserCallbacks
+    } = userCallbacks || {};
 
     return {
       ...restUserCallbacks,
@@ -154,9 +244,22 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({ userId, userName, us
         userCallbacks?.onEditMessage?.(messageId, content);
       },
       onLogout,
-      onViewProfile,
+      onViewProfile
     };
-  }, [sendMessage, stopGeneration, createThread, selectThread, renameThread, archiveThread, updateThreadTags, editMessage, deleteThread, userCallbacks, onLogout, onViewProfile]);
+  }, [
+    sendMessage,
+    stopGeneration,
+    createThread,
+    selectThread,
+    renameThread,
+    archiveThread,
+    updateThreadTags,
+    editMessage,
+    deleteThread,
+    userCallbacks,
+    onLogout,
+    onViewProfile
+  ]);
 
   const mergedConfig: ChatConfig = useMemo(() => {
     const base = userConfig || {};
@@ -168,8 +271,8 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({ userId, userName, us
       customComponent: {
         ...base.customComponent,
         component: customComponent,
-        icon: base.customComponent?.icon || <User className="h-6 w-6" />,
-      },
+        icon: base.customComponent?.icon || <User className="h-6 w-6" />
+      }
     };
   }, [userConfig, customComponent]);
 
@@ -181,7 +284,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({ userId, userName, us
       id: userId,
       name: effectiveUserName,
       email: userEmail,
-      avatar: effectiveUserAvatar,
+      avatar: effectiveUserAvatar
     }),
     [userId, effectiveUserName, userEmail, effectiveUserAvatar]
   );
@@ -190,12 +293,56 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({ userId, userName, us
     () => ({
       name: userConfig?.branding?.title,
       avatar: userConfig?.branding?.avatar,
-      description: userConfig?.branding?.subtitle,
+      description: userConfig?.branding?.subtitle
     }),
-    [userConfig?.branding?.title, userConfig?.branding?.avatar, userConfig?.branding?.subtitle]
+    [
+      userConfig?.branding?.title,
+      userConfig?.branding?.avatar,
+      userConfig?.branding?.subtitle
+    ]
   );
 
-  const specialStateContent = specialState ? renderSpecialState?.(specialState, { clear: clearSpecialState }) : null;
+  const specialStateContent = specialState
+    ? renderSpecialState?.(specialState, { clear: clearSpecialState })
+    : null;
 
-  return <ChatUserContextProvider initial={userContextSeed}>{specialStateContent ?? <ChatUI messages={messages} isMessagesLoading={isMessagesLoading} isLoadingOlderMessages={isLoadingOlderMessages} hasMoreMessagesBefore={messagePageInfo.hasMore} activityNotice={activityNotice} isBackgroundRefreshingMessages={isRecoveringStream} onLoadOlderMessages={loadOlderMessages} threads={threads} currentThreadId={currentThreadId} config={mergedConfig} callbacks={chatCallbacks} isGenerating={isStreaming} isStoppingGeneration={isStopping} suggestions={suggestions} agentOptions={agentOptions} selectedAgentId={selectedAgentId} onSelectAgent={onSelectAgent} participantIds={participantIds} onParticipantsChange={onParticipantsChange} targetAgentId={targetAgentId} onTargetAgentChange={onTargetAgentChange} user={userProp} assistant={assistantProp} onAddMemory={onAddMemory} onUpdateMemory={onUpdateMemory} onDeleteMemory={onDeleteMemory} userMenuSections={userMenuSections} userMenuAdditionalItems={userMenuAdditionalItems} toolRenderers={toolRenderers} toolCallDraftSource={toolCallDraftSource} className={className} />}</ChatUserContextProvider>;
+  return (
+    <ChatUserContextProvider initial={userContextSeed}>
+      {specialStateContent ?? (
+        <ChatUI
+          messages={messages}
+          isMessagesLoading={isMessagesLoading}
+          isLoadingOlderMessages={isLoadingOlderMessages}
+          hasMoreMessagesBefore={messagePageInfo.hasMore}
+          activityNotice={activityNotice}
+          isBackgroundRefreshingMessages={isRecoveringStream}
+          onLoadOlderMessages={loadOlderMessages}
+          threads={threads}
+          currentThreadId={currentThreadId}
+          config={mergedConfig}
+          callbacks={chatCallbacks}
+          isGenerating={isStreaming}
+          isStoppingGeneration={isStopping}
+          suggestions={suggestions}
+          agentOptions={agentOptions}
+          selectedAgentId={selectedAgentId}
+          onSelectAgent={onSelectAgent}
+          participantIds={participantIds}
+          onParticipantsChange={onParticipantsChange}
+          targetAgentId={targetAgentId}
+          onTargetAgentChange={onTargetAgentChange}
+          user={userProp}
+          assistant={assistantProp}
+          onAddMemory={onAddMemory}
+          onUpdateMemory={onUpdateMemory}
+          onDeleteMemory={onDeleteMemory}
+          userMenuSections={userMenuSections}
+          userMenuAdditionalItems={userMenuAdditionalItems}
+          toolRenderers={toolRenderers}
+          toolCallDraftSource={toolCallDraftSource}
+          className={className}
+        />
+      )}
+    </ChatUserContextProvider>
+  );
 };
