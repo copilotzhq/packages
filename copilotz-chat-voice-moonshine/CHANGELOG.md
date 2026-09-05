@@ -1,6 +1,6 @@
 # @copilotz/chat-voice-moonshine
 
-## 0.66.0 — Unreleased
+## 0.66.0 — 2026-09-05
 
 Synchronize peer dependencies with chat-ui 0.66.0.
 

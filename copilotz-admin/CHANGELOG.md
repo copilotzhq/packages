@@ -1,6 +1,6 @@
 # @copilotz/admin
 
-## 0.66.0 — Unreleased
+## 0.66.0 — 2026-09-05
 
 Synchronize the 0.66.0 release and correct event-table selection callback typing.
 
