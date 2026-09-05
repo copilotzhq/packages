@@ -26,5 +26,14 @@
       "dom.iterable"
     ]
   },
-  "lock": false
+  "lock": false,
+  "minimumDependencyAge": {
+    "age": "P1D",
+    "exclude": [
+      "jsr:@copilotz/copilotz",
+      "npm:@jsr/copilotz__copilotz",
+      "npm:@copilotz/chat-ui",
+      "npm:@copilotz/chat-adapter"
+    ]
+  }
 }
