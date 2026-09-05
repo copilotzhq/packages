@@ -1,23 +1,23 @@
 {
   "imports": {
-    "@copilotz/copilotz": "jsr:@copilotz/copilotz@0.66.2",
-    "@copilotz/chat-ui": "npm:@copilotz/chat-ui@0.66.2",
-    "@copilotz/chat-ui/model": "npm:@copilotz/chat-ui@0.66.2/model",
+    "@copilotz/copilotz": "jsr:@copilotz/copilotz@0.66.3",
+    "@copilotz/chat-ui": "npm:@copilotz/chat-ui@0.66.3",
+    "@copilotz/chat-ui/model": "npm:@copilotz/chat-ui@0.66.3/model",
     "@std/assert": "jsr:@std/assert@1",
-    "@copilotz/copilotz/persistence": "jsr:@copilotz/copilotz@0.66.2/persistence",
-    "@copilotz/copilotz/plugins": "jsr:@copilotz/copilotz@0.66.2/plugins",
-    "@copilotz/copilotz/server": "jsr:@copilotz/copilotz@0.66.2/server",
-    "@copilotz/copilotz/core": "jsr:@copilotz/copilotz@0.66.2/core",
-    "@copilotz/copilotz/core/server": "jsr:@copilotz/copilotz@0.66.2/core/server",
-    "@copilotz/copilotz/core/client": "jsr:@copilotz/copilotz@0.66.2/core/client",
-    "@copilotz/copilotz/client": "jsr:@copilotz/copilotz@0.66.2/client",
-    "@copilotz/copilotz/content": "jsr:@copilotz/copilotz@0.66.2/content",
-    "@copilotz/copilotz/llm": "jsr:@copilotz/copilotz@0.66.2/llm",
+    "@copilotz/copilotz/persistence": "jsr:@copilotz/copilotz@0.66.3/persistence",
+    "@copilotz/copilotz/plugins": "jsr:@copilotz/copilotz@0.66.3/plugins",
+    "@copilotz/copilotz/server": "jsr:@copilotz/copilotz@0.66.3/server",
+    "@copilotz/copilotz/core": "jsr:@copilotz/copilotz@0.66.3/core",
+    "@copilotz/copilotz/core/server": "jsr:@copilotz/copilotz@0.66.3/core/server",
+    "@copilotz/copilotz/core/client": "jsr:@copilotz/copilotz@0.66.3/core/client",
+    "@copilotz/copilotz/client": "jsr:@copilotz/copilotz@0.66.3/client",
+    "@copilotz/copilotz/content": "jsr:@copilotz/copilotz@0.66.3/content",
+    "@copilotz/copilotz/llm": "jsr:@copilotz/copilotz@0.66.3/llm",
     "react": "npm:@types/react@19.1.10",
     "react-markdown": "npm:react-markdown@9.1.0",
-    "@copilotz/chat-adapter/controller": "npm:@copilotz/chat-adapter@0.66.2/controller",
-    "@copilotz/copilotz/actions": "jsr:@copilotz/copilotz@0.66.2/actions",
-    "@copilotz/copilotz/tools": "jsr:@copilotz/copilotz@0.66.2/tools"
+    "@copilotz/chat-adapter/controller": "npm:@copilotz/chat-adapter@0.66.3/controller",
+    "@copilotz/copilotz/actions": "jsr:@copilotz/copilotz@0.66.3/actions",
+    "@copilotz/copilotz/tools": "jsr:@copilotz/copilotz@0.66.3/tools"
   },
   "compilerOptions": {
     "lib": [
