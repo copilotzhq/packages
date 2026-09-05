@@ -35,6 +35,9 @@ jobs:
       - name: Check package versions
         run: npm run check:versions
 
+      - name: Test release orchestration
+        run: node --test scripts/publish-workspaces.test.mjs
+
       - name: Build packages
         run: npm run build
 
@@ -48,10 +51,13 @@ jobs:
       - name: Publish unpublished package versions
         run: npm run publish:workspaces
 
+      - name: Wait for all released versions in the npm registry
+        run: node scripts/publish-workspaces.mjs --wait
+
       - name: Set up Deno for released-artifact validation
         uses: denoland/setup-deno@v2
         with:
           deno-version: v2.9.2
 
       - name: Validate released facade, client and controller
-        run: deno test --config contracts/deno.json --allow-all contracts
+        run: deno test --reload=npm:@copilotz/chat-ui,npm:@copilotz/chat-adapter --config contracts/deno.json --allow-all contracts
