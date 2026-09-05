@@ -10,11 +10,18 @@ not published.
 controller against that Fetch handler. It covers creation, follow-up, reload,
 attachments, editing and stable reconciliation across reload.
 
-After publishing the coordinated dependencies:
+After publishing all coordinated workspace versions, wait for npm's install
+metadata to expose them and refresh Deno's cached package metadata:
 
 ```sh
-deno test --config contracts/deno.json --allow-all contracts
+node scripts/publish-workspaces.mjs --wait
+deno test --reload=npm:@copilotz/chat-ui,npm:@copilotz/chat-adapter --config contracts/deno.json --allow-all contracts
 ```
+
+These are the same readiness and contract commands used by the release workflow.
+Readiness failures identify missing registry versions; contract failures are not
+retried. Workspace packages must already exist and have their trusted publisher
+configured before subsequent versions can be published automatically.
 
 For prepublication validation, pass an explicit external Deno import map
 pointing to the clean Copilotz checkout and the built UI declarations. Keep
