@@ -1,13 +1,13 @@
 import { createCopilotz } from "@copilotz/copilotz";
 import { openManagedOminipgDatabase } from "@copilotz/copilotz/persistence";
-import { definePlugin } from "@copilotz/copilotz/plugins";
+import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
 import { createServerPlugin } from "@copilotz/copilotz/server";
 import { createCoreServerPlugin } from "@copilotz/copilotz/core/server";
 import { corePlugin } from "@copilotz/copilotz/core";
 import type { LlmAdapter } from "@copilotz/copilotz/llm";
 
 /** Minimal public Gateway/Worker composition used by the contract and browser flow. */
-export async function createHttpFixture() {
+export async function createHttpFixture(modelPlugin?: CopilotzPlugin) {
   const database = await openManagedOminipgDatabase({ url: ":memory:" });
   const adapter: LlmAdapter = {
     call() {
@@ -44,7 +44,7 @@ export async function createHttpFixture() {
     plugins: [
       corePlugin,
       createCoreServerPlugin(),
-      definePlugin({
+      modelPlugin ?? definePlugin({
         id: "test.model",
         version: "1",
         resources: {
@@ -79,7 +79,7 @@ export async function createHttpFixture() {
   };
   const transport = {
     type: "in-process" as const,
-    config: { topic: "browser-acceptance" },
+    config: { topic: `browser-acceptance.${crypto.randomUUID()}` },
   };
   const application = await createCopilotz({
     ...shared,

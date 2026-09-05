@@ -54,4 +54,4 @@ jobs:
           deno-version: v2.9.2
 
       - name: Validate released facade, client and controller
-        run: deno test --config contracts/deno.json --allow-all contracts/http-round-trip.test.ts
+        run: deno test --config contracts/deno.json --allow-all contracts

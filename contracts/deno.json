@@ -15,7 +15,9 @@
     "@copilotz/copilotz/llm": "jsr:@copilotz/copilotz@0.66.0/llm",
     "react": "npm:@types/react@19.1.10",
     "react-markdown": "npm:react-markdown@9.1.0",
-    "@copilotz/chat-adapter/controller": "npm:@copilotz/chat-adapter@0.66.0/controller"
+    "@copilotz/chat-adapter/controller": "npm:@copilotz/chat-adapter@0.66.0/controller",
+    "@copilotz/copilotz/actions": "jsr:@copilotz/copilotz@0.66.0/actions",
+    "@copilotz/copilotz/tools": "jsr:@copilotz/copilotz@0.66.0/tools"
   },
   "compilerOptions": {
     "lib": [
