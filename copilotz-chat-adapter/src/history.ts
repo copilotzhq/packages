@@ -33,18 +33,27 @@ export function createHistoryReader(core: CoreClient) {
         Parameters<typeof projectCanonicalMessageHistory>[1]
       > & { signal?: AbortSignal }
     ) {
-      const refs = page.data.flatMap((message) => [
-        ...message.content,
-        ...(Array.isArray(message.metadata.llmReasoning)
-          ? (message.metadata.llmReasoning as ConversationMessage['content'])
-          : [])
-      ]);
+      const refs = page.data.flatMap((message) =>
+        [
+          ...message.content,
+          ...(Array.isArray(message.metadata.llmReasoning)
+            ? (message.metadata.llmReasoning as ConversationMessage['content'])
+            : [])
+        ].map((ref) => ({ ref, message }))
+      );
       const content = await Promise.all(
-        refs.map((ref) => {
-          let pending = assets.get(ref.assetId);
+        refs.map(({ ref, message }) => {
+          const key = JSON.stringify([
+            message.threadId,
+            message.id,
+            ref.assetId
+          ]);
+          let pending = assets.get(key);
           if (!pending) {
-            pending = core.assets
-              .get(ref.assetId, { signal: options.signal })
+            pending = core.messages
+              .asset(message.threadId, message.id, ref.assetId, {
+                signal: options.signal
+              })
               .then(async (response) => {
                 const bytes = new Uint8Array(await response.arrayBuffer());
                 return {
@@ -56,10 +65,9 @@ export function createHistoryReader(core: CoreClient) {
                   base64: encodeBase64(bytes)
                 };
               });
-            assets.set(ref.assetId, pending);
+            assets.set(key, pending);
             void pending.catch(() => {
-              if (assets.get(ref.assetId) === pending)
-                assets.delete(ref.assetId);
+              if (assets.get(key) === pending) assets.delete(key);
             });
           }
           return pending.then((value) => ({ ...value, ref }));

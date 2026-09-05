@@ -13,7 +13,7 @@ const deferred = <T>() => {
 };
 const page = (checkpoint = 'boundary') => ({
   data: [],
-  pageInfo: { hasMore: false, checkpoint },
+  pageInfo: { hasMore: false, checkpoint }
 });
 function fixture() {
   const observations: Array<{
@@ -32,32 +32,35 @@ function fixture() {
         observations.push({ id, options });
         await new Promise<void>((resolve) =>
           options.signal?.addEventListener('abort', () => resolve(), {
-            once: true,
+            once: true
           })
         );
       },
       send: async () => ({ operationId: 'send-operation' }),
       update: async () => ({ operationId: 'update-operation' }),
-      delete: async () => ({ operationId: 'delete-operation' }),
+      delete: async () => ({ operationId: 'delete-operation' })
     },
     operations: {
       result: async () => ({ threadId: 'new-thread' }),
       cancel: async (id: string) => {
         cancellations.push(id);
-      },
+      }
     },
-    messages: { edit: async () => ({ operationId: 'edit-operation' }) },
+    messages: {
+      edit: async () => ({ operationId: 'edit-operation' }),
+      asset: async () => new Response('asset')
+    },
     assets: {
       upload: async () => ({ data: { content: { assetId: 'uploaded' } } }),
-      get: async () => new Response('asset'),
-    },
+      get: async () => new Response('asset')
+    }
   };
   return {
     core,
     observations,
     cancellations,
     controller: () =>
-      createChatController(core as unknown as CoreClient, { userId: 'owner' }),
+      createChatController(core as unknown as CoreClient, { userId: 'owner' })
   };
 }
 
@@ -71,7 +74,10 @@ test('navigation during the initial thread list cannot restore the old URL threa
   listing.resolve(page());
   await starting;
   assert.equal(c.getSnapshot().currentThreadId, 'selected');
-  assert.deepEqual(f.observations.map(value => value.id), ['selected']);
+  assert.deepEqual(
+    f.observations.map((value) => value.id),
+    ['selected']
+  );
   c.dispose();
 });
 
@@ -159,7 +165,7 @@ test('failed frame application rejects before checkpoint commit and a disposed c
   const frame = {
     kind: 'output' as const,
     checkpoint: 'next',
-    output: { type: 'message.created' },
+    output: { type: 'message.created' }
   };
   f.core.threads.messages = async () => {
     throw new Error('history unavailable');
@@ -205,5 +211,35 @@ test('resetting to a new thread clears a pending history spinner', async () => {
   await opening;
   assert.equal(c.getSnapshot().currentThreadId, null);
   assert.equal(c.getSnapshot().isMessagesLoading, false);
+  c.dispose();
+});
+
+test('a forbidden observation stops the spinner without retrying or losing cancellation identity', async () => {
+  const f = fixture();
+  const observing = deferred<void>();
+  const settling = deferred<{ threadId: string }>();
+  let attempts = 0;
+  f.core.threads.observe = async (id, options) => {
+    attempts++;
+    f.observations.push({ id, options });
+    await observing.promise;
+  };
+  f.core.operations.result = () => settling.promise;
+  const c = f.controller();
+  await c.openThread('a');
+  const sending = c.send('hello');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(c.getSnapshot().isStreaming, true);
+  observing.reject(Object.assign(new Error('Forbidden'), { status: 403 }));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(c.getSnapshot().isStreaming, false);
+  assert.match(String(c.getSnapshot().error), /Forbidden/);
+  settling.resolve({ threadId: 'a' });
+  await sending;
+  assert.equal(c.getSnapshot().isStreaming, false);
+  assert.equal(attempts, 1);
+  assert.deepEqual(f.cancellations, []);
+  await c.stop();
+  assert.deepEqual(f.cancellations, ['send-operation']);
   c.dispose();
 });

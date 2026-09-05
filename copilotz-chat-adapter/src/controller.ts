@@ -227,7 +227,11 @@ export function createChatController(
         ) {
           publish({ isRecoveringStream: true });
           await openThread(id, true);
-        } else report(error);
+        } else {
+          observation?.abort();
+          publish({ isStreaming: false });
+          report(error);
+        }
       });
   };
   const openThread = async (id: string, recovered = false) => {
@@ -370,7 +374,8 @@ export function createChatController(
       submissions.delete(submission);
       if (generation === epoch)
         publish({
-          isStreaming: projection.operations.size > 0,
+          isStreaming:
+            !observation?.signal.aborted && projection.operations.size > 0,
           isStopping: false
         });
     }

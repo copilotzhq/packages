@@ -75,3 +75,9 @@ The adapter pins that client's npm alias and its UI peer to the synchronized
 `participantIds` selects the agent team; `targetAgentId` selects who receives the
 next message. The controller sends both selections to Core, so a selected agent
 can ask its authorized teammates without broadcasting the initial message.
+
+Conversation content is fetched through its owning message with
+`core.messages.asset(threadId, messageId, assetId)`. The history cache includes
+thread and message identity, so cached bytes cannot bypass another message's
+authorization. A terminal observation error clears the streaming indicator while
+preserving operation identities for explicit cancellation.
