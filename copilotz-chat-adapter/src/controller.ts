@@ -198,7 +198,11 @@ export function createChatController(
       for (const draft of next.drafts) toolCallDraftSource.apply(draft);
       publish({
         messages: projection.messages,
-        isStreaming: projection.operations.size > 0,
+        isStreaming:
+          projection.operations.size > 0 ||
+          [...submissions].some((submission) =>
+            submission.generation === epoch && !submission.stopRequested
+          ),
         ...(intercepted && intercepted.specialState !== undefined
           ? { specialState: intercepted.specialState }
           : {})
@@ -375,7 +379,11 @@ export function createChatController(
       if (generation === epoch)
         publish({
           isStreaming:
-            !observation?.signal.aborted && projection.operations.size > 0,
+            !observation?.signal.aborted &&
+            (projection.operations.size > 0 ||
+              [...submissions].some((pending) =>
+                pending.generation === epoch && !pending.stopRequested
+              )),
           isStopping: false
         });
     }

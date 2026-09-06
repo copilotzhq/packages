@@ -18,6 +18,8 @@ import {
 } from "../../types/chatTypes";
 import { defaultChatConfig, mergeConfig } from "../../config/chatConfig";
 import { Message } from "./Message";
+import { ResizablePanel } from "./ResizablePanel";
+import { withPendingAssistant } from "../../lib/pendingAssistant";
 import { Sidebar } from "./Sidebar";
 import { ChatHeader } from "./ChatHeader";
 import { ChatInput } from "./ChatInput";
@@ -171,8 +173,23 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   const [isCustomMounted, setIsCustomMounted] = useState(false);
   const [isCustomVisible, setIsCustomVisible] = useState(false);
   const groupedMessages = useMemo(
-    () => groupMessagesForRender(messages),
-    [messages]
+    () => {
+      const agent = agentOptions.find(
+        (option) => option.id === (targetAgentId ?? selectedAgentId)
+      );
+      const sender = agent ? {
+        type: "agent" as const,
+        id: agent.id,
+        agentId: agent.id,
+        name: agent.name,
+        avatarUrl: agent.avatarUrl,
+        color: agent.color,
+      } : undefined;
+      return groupMessagesForRender(withPendingAssistant(
+        messages, isGenerating && !isStoppingGeneration, sender
+      ));
+    },
+    [messages, isGenerating, isStoppingGeneration, agentOptions, targetAgentId, selectedAgentId]
   );
 
   // Virtualizer — only renders messages visible in the viewport + overscan buffer
@@ -699,8 +716,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
 
   const isMultiAgentMode = config.agentSelector?.mode === "multi";
   const customPanelWidth = config.customComponent?.panelWidth ?? 320;
-  const customPanelMinWidth = Math.min(customPanelWidth, 320);
-  const customPanelResponsiveWidth = `clamp(${customPanelMinWidth}px, 30vw, ${customPanelWidth}px)`;
+
 
   // Stable props object for Message components — prevents unnecessary re-renders
   // when the virtualizer re-evaluates which items to show
@@ -969,24 +985,11 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                   </div>
                 </div>
 
-                {/* Right sidebar custom component for desktop */}
-                {config?.customComponent?.component && !isMobile && (
-                  <div
-                    className="h-full shrink-0 transition-all duration-300 ease-in-out overflow-hidden"
-                    style={{
-                      width: state.showSidebar
-                        ? customPanelResponsiveWidth
-                        : 0,
-                    }}
-                  >
-                    {state.showSidebar && (
-                      <div
-                        className="h-full overflow-hidden border-l bg-background animate-in slide-in-from-right-4 duration-300"
-                      >
-                        {renderCustomComponent()}
-                      </div>
-                    )}
-                  </div>
+                {config.customComponent?.component && !isMobile && state.showSidebar && (
+                  <ResizablePanel initialWidth={customPanelWidth}
+                    storageKey={config.customComponent.panelWidthStorageKey}>
+                    {renderCustomComponent()}
+                  </ResizablePanel>
                 )}
               </div>
             </div>

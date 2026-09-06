@@ -256,3 +256,20 @@ test('a zero-byte failed attempt never closes or replaces another active attempt
   assert.equal(p.state.messages[0].isStreaming, true);
   assert.equal(p.state.messages[0].content, 'working');
 });
+
+
+test('fallback replaces provisional reasoning without mixing candidates on replay', () => {
+  const p = projector();
+  p.apply(descriptor('old', 'run', { role: 'reasoning', metadata: { sourceActionRunId: 'run', providerAttemptIndex: 0, lane: 'reasoning' } }));
+  p.apply(chunk('old', 'discarded reasoning'));
+  p.apply(end('old', 19, true));
+  p.apply(descriptor('new', 'run', { metadata: { sourceActionRunId: 'run', providerAttemptIndex: 1 } }));
+  p.apply(chunk('new', 'Recovered'));
+  assert.equal(p.state.messages.length, 1);
+  assert.equal(p.state.messages[0].content, 'Recovered');
+  assert.equal(JSON.stringify(p.state.messages).includes('discarded reasoning'), false);
+  p.apply(end('old', 19, true));
+  assert.equal(p.state.messages[0].isStreaming, true);
+  p.apply(end('new', 9));
+  assert.equal(p.state.messages[0].isStreaming, false);
+});

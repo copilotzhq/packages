@@ -24,6 +24,7 @@ type ToolOrigin = {
 type Lane = {
   operationId: string;
   attemptId: string;
+  candidateIndex: number;
   role: string;
   mediaType: string;
   sender?: ChatSender;
@@ -159,6 +160,9 @@ export function projectFrame(
         state.lanes.set(id, {
           operationId,
           attemptId,
+          candidateIndex: typeof metadata.providerAttemptIndex === 'number'
+            ? metadata.providerAttemptIndex
+            : 0,
           role: string(metadata.lane) || string(output.role),
           mediaType: string(output.mediaType),
           sender,
@@ -194,6 +198,14 @@ export function projectFrame(
   const lane = { ...current };
   state.lanes.set(frame.streamId, lane);
   const messageId = `live:${lane.operationId}:${lane.attemptId}`;
+  // Keep one logical response, replacing only provisional output when its next
+  // model candidate appears. Retained stream lanes keep their own replay offsets.
+  const candidate = state.messages.find((message) => message.id === messageId)
+    ?.metadata?.providerAttemptIndex;
+  if (typeof candidate === 'number' && candidate > lane.candidateIndex)
+    return { state, drafts, refresh };
+  if (typeof candidate === 'number' && candidate < lane.candidateIndex)
+    state.messages = state.messages.filter((message) => message.id !== messageId);
   const ensureMessage = () => {
     if (
       !state.messages.some(
@@ -214,7 +226,8 @@ export function projectFrame(
           sender: lane.sender,
           metadata: {
             operationId: lane.operationId,
-            llmAttemptId: lane.attemptId
+            llmAttemptId: lane.attemptId,
+            providerAttemptIndex: lane.candidateIndex
           }
         }
       ];
@@ -354,7 +367,10 @@ export function projectFrame(
       );
     if (
       [...state.lanes.values()]
-        .filter((value) => value.attemptId === lane.attemptId)
+        .filter((value) =>
+          value.attemptId === lane.attemptId &&
+          value.candidateIndex === lane.candidateIndex
+        )
         .every((value) => value.ended)
     ) {
       updateMessage((message) => closeAssistantMessage(message, at));

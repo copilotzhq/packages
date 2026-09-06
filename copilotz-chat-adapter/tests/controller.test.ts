@@ -243,3 +243,24 @@ test('a forbidden observation stops the spinner without retrying or losing cance
   assert.deepEqual(f.cancellations, ['send-operation']);
   c.dispose();
 });
+
+test('pending submission stays active while an older observed operation settles', async () => {
+  const f = fixture();
+  const receipt = deferred<{ operationId: string }>();
+  const submitted = deferred<void>();
+  f.core.threads.send = () => { submitted.resolve(); return receipt.promise; };
+  const c = f.controller();
+  await c.openThread('a');
+  const sending = c.send('hello');
+  await submitted.promise;
+  assert.equal(c.getSnapshot().isStreaming, true);
+  await f.observations[0].options.onFrame({
+    kind: 'output', checkpoint: 'older-finished',
+    output: { type: 'operation.completed', operationId: 'older' }
+  });
+  assert.equal(c.getSnapshot().isStreaming, true);
+  receipt.reject(new Error('submission failed'));
+  await sending;
+  assert.equal(c.getSnapshot().isStreaming, false);
+  c.dispose();
+});

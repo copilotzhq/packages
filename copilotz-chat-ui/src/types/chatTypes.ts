@@ -415,6 +415,8 @@ export interface ChatConfig {
       | ((props: { onClose: () => void; isMobile: boolean }) => ReactNode);
     /** Desktop panel width in pixels (default: 320) */
     panelWidth?: number;
+    /** Optional localStorage key for the user’s desktop panel width. */
+    panelWidthStorageKey?: string;
   };
   /** Additional actions to render in the header */
   headerActions?: ReactNode;
