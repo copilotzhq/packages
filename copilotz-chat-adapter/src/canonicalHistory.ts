@@ -5,7 +5,7 @@ export type CanonicalContentRef = ConversationMessage['content'][number];
 export type CanonicalResolvedContent = {
   ref: CanonicalContentRef;
   asset: { mediaType: string; byteLength: number };
-  base64: string;
+  value: unknown;
 };
 export type CanonicalMessagePageInfo = Page<ConversationMessage>['pageInfo'];
 export type CanonicalMessagePage = Page<ConversationMessage> & {

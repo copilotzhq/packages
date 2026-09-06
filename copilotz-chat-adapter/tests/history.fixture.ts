@@ -45,7 +45,7 @@ const content = (
     createdAt: time,
     readyAt: time,
   },
-  base64: encoded(value),
+  value: kind === 'file' ? new TextEncoder().encode(String(value)) : value,
 });
 
 const canonicalHistory = () => ({

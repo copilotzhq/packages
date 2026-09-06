@@ -14,7 +14,7 @@ import {
   type ParsedToolCallDelta
 } from './toolActivity.ts';
 import { projectAgentInvocation } from './agentInvocation.ts';
-import { encodeBase64 } from './history.ts';
+import { encodeBase64 } from './messageContract.ts';
 import { getAttachmentKindFromMimeType } from '@copilotz/chat-ui/model';
 
 type ToolOrigin = {

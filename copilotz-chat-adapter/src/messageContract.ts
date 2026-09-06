@@ -72,23 +72,24 @@ const canonicalTimestamp = (
   return Number.isFinite(timestamp) ? timestamp : fallback();
 };
 
-const dataUrl = (content: CanonicalResolvedContent): string =>
-  `data:${content.asset.mediaType};base64,${content.base64}`;
-
-const decodeUtf8 = (base64: string): string => {
-  const binary = atob(base64);
-  const bytes = Uint8Array.from(binary, (value) => value.charCodeAt(0));
-  return new TextDecoder().decode(bytes);
-};
-
-const decodeContent = (content: CanonicalResolvedContent): unknown => {
-  const text = decodeUtf8(content.base64);
-  if (content.ref.kind !== 'json') return text;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
+export function encodeBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
   }
+  return btoa(binary);
+}
+
+const dataUrl = (content: CanonicalResolvedContent): string => {
+  const bytes =
+    content.value instanceof Uint8Array
+      ? content.value
+      : new TextEncoder().encode(
+          content.ref.kind === 'json'
+            ? JSON.stringify(content.value)
+            : String(content.value)
+        );
+  return `data:${content.asset.mediaType};base64,${encodeBase64(bytes)}`;
 };
 
 const contentMap = (
@@ -107,7 +108,7 @@ const contentValue = (
   content: Map<string, CanonicalResolvedContent>
 ): unknown => {
   const value = resolved(ref, content);
-  return value ? decodeContent(value) : undefined;
+  return value?.value;
 };
 
 const bodyText = (

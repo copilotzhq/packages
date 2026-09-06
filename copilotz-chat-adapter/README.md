@@ -74,14 +74,19 @@ the consuming application's `.npmrc` before installing this package:
 ```
 
 The adapter pins that client's npm alias and its UI peer to the synchronized
-0.66.4 release. No server or model-provider modules enter the browser bundle.
+release versions. No server or model-provider modules enter the browser bundle.
 
 `participantIds` selects the agent team; `targetAgentId` selects who receives the
 next message. The controller sends both selections to Core, so a selected agent
 can ask its authorized teammates without broadcasting the initial message.
 
-Conversation content is fetched through its owning message with
-`core.messages.asset(threadId, messageId, assetId)`. The history cache includes
-thread and message identity, so cached bytes cannot bypass another message's
-authorization. A terminal observation error clears the streaming indicator while
-preserving operation identities for explicit cancellation.
+Core history returns authorized content with reference metadata and resolved values.
+The browser client decodes binary values through the shared content codec, and the
+adapter projects those values without per-Asset HTTP requests or a byte cache.
+Status-only tool bodies are excluded before content resolution. The explicit
+message Asset endpoint remains available for downloads.
+
+History checkpoints still coordinate retained stream prefixes and live observation;
+resolved history does not replace stream ordering or terminal outcomes. A terminal
+observation error clears the streaming indicator while preserving operation
+identities for explicit cancellation.

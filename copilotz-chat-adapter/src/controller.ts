@@ -100,7 +100,7 @@ export function createChatController(
     return next;
   };
   const listeners = new Set<() => void>();
-  const history = createHistoryReader(core);
+  const history = createHistoryReader();
   const reportedTools = new Set<string>();
   const toolCallDraftSource = createToolCallDraftStore();
   const publish = (patch: Partial<ChatSnapshot>) => {

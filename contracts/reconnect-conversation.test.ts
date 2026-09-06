@@ -80,6 +80,7 @@ Deno.test("refresh restores one current snapshot, retries interrupted prefixes, 
   const client = createCopilotzClient({
     baseUrl: "https://test/api",
     fetch: (async (u, i) => {
+      assert(!String(u).includes("/assets/"), "History must not fetch individual Assets");
       const response = await app.fetch(new Request(u, i));
       if (!String(u).endsWith("/observe")) return response;
       observations++;

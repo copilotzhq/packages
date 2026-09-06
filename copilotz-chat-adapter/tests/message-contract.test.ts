@@ -174,9 +174,9 @@ test('projection accepts an empty immutable content body', () => {
   const history = canonicalHistory();
   history.included.content.push({
     ...content('asset-empty', 'text', 'attachment', ''),
-    base64: '',
+    value: '',
   });
-  assert.equal(history.included.content.at(-1)?.base64, '');
+  assert.equal(history.included.content.at(-1)?.value, '');
 });
 
 test('stored history binds reused provider call IDs to their source message', () => {

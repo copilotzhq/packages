@@ -1,9 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type {
-  CoreClient,
-  ConversationMessage
-} from '@copilotz/copilotz/core/client';
+import type { ConversationMessage } from '@copilotz/copilotz/core/client';
 import { createHistoryReader } from '../src/history.ts';
 const message = {
   id: 'message',
@@ -24,59 +21,46 @@ const message = {
   createdAt: '2026-09-04T00:00:00Z',
   updatedAt: '2026-09-04T00:00:00Z'
 } as ConversationMessage;
-test('history resolves raw retained Assets once and propagates authorization failures', async () => {
-  let reads = 0;
-  let fail = false;
-  const signal = new AbortController().signal;
-  const history = createHistoryReader({
-    messages: {
-      asset: async (
-        threadId: string,
-        messageId: string,
-        id: string,
-        options: { signal: AbortSignal }
-      ) => {
-        assert.equal(threadId, 'thread');
-        assert.equal(messageId, 'message');
-        assert.equal(id, 'asset');
-        assert.equal(options.signal, signal);
-        reads++;
-        if (fail) throw new Error('asset forbidden');
-        return new Response('Hello 🌎', {
-          headers: { 'content-type': 'text/plain' }
-        });
-      }
-    }
-  } as unknown as CoreClient);
-  const page = { data: [message], pageInfo: { hasMore: false } };
-  const projected = await history.project(page, { signal });
+test('history projects resolved values without network access', async () => {
+  const history = createHistoryReader();
+  const page = {
+    data: [
+      { ...message, content: [{ ...message.content[0], value: 'Hello 🌎' }] }
+    ],
+    pageInfo: { hasMore: false }
+  };
+  const projected = await history.project(page, {});
   assert.equal(projected.viewMessages[0].content, 'Hello 🌎');
-  await history.project(page, { signal });
-  assert.equal(reads, 1);
-  history.clear();
-  fail = true;
-  await assert.rejects(history.project(page, { signal }), /forbidden/);
-  fail = false;
-  await history.project(page, { signal });
-  assert.equal(reads, 3);
+  const abort = new AbortController();
+  abort.abort();
+  await assert.rejects(
+    history.project(page, { signal: abort.signal }),
+    /abort/i
+  );
 });
 
 import { canonicalHistory } from './history.fixture.ts';
 import { mergePersistedToolResults } from '../src/toolActivity.ts';
 test('paginated history remembers a tool result until its source plan is loaded', async () => {
   const fixture = canonicalHistory();
-  const history = createHistoryReader({
-    messages: {
-      asset: async (_threadId: string, _messageId: string, id: string) => {
-        const value = fixture.included.content.find(
-          (value) => value.ref.assetId === id
-        )!;
-        return new Response(Buffer.from(value.base64, 'base64'), {
-          headers: { 'content-type': value.asset.mediaType }
-        });
-      }
-    }
-  } as unknown as CoreClient);
+  const history = createHistoryReader();
+  for (const message of fixture.data) {
+    if (Array.isArray(message.metadata.llmReasoning))
+      message.metadata.llmReasoning = message.metadata.llmReasoning.map(
+        (ref) => ({
+          ...ref,
+          value: fixture.included.content.find(
+            (entry) => entry.ref.assetId === ref.assetId
+          )!.value
+        })
+      );
+    message.content = message.content.map((ref) => ({
+      ...ref,
+      value: fixture.included.content.find(
+        (entry) => entry.ref.assetId === ref.assetId
+      )!.value
+    }));
+  }
   const newest = await history.project(
     {
       data: [fixture.data[2] as ConversationMessage],
@@ -108,26 +92,10 @@ test('paginated history remembers a tool result until its source plan is loaded'
   assert.equal(clean.toolResultUpdates.length, 0);
 });
 
-test('cached bytes cannot authorize the same Asset through a different message or thread', async () => {
-  const reads: string[][] = [];
-  const history = createHistoryReader({
-    messages: {
-      asset: async (threadId: string, messageId: string, assetId: string) => {
-        reads.push([threadId, messageId, assetId]);
-        if (threadId !== 'thread' || messageId !== 'message')
-          throw new Error('Forbidden');
-        return new Response('Authorized');
-      }
-    }
-  } as unknown as CoreClient);
-  const project = (record: ConversationMessage) =>
-    history.project({ data: [record], pageInfo: { hasMore: false } }, {});
-  await project(message);
-  await assert.rejects(project({ ...message, id: 'private' }), /Forbidden/);
-  await assert.rejects(project({ ...message, threadId: 'other' }), /Forbidden/);
-  assert.deepEqual(reads, [
-    ['thread', 'message', 'asset'],
-    ['thread', 'private', 'asset'],
-    ['other', 'message', 'asset']
-  ]);
+test('unresolved history fails explicitly instead of fetching assets', async () => {
+  const history = createHistoryReader();
+  await assert.rejects(
+    history.project({ data: [message], pageInfo: { hasMore: false } }, {}),
+    /requires resolved content/
+  );
 });

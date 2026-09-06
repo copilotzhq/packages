@@ -1,76 +1,47 @@
 import type {
-  ConversationMessage,
-  CoreClient,
+  ResolvedConversationMessage,
   Page
 } from '@copilotz/copilotz/core/client';
 import type { CanonicalResolvedContent } from './canonicalHistory.ts';
 import type { ToolResultUpdate } from './toolActivity.ts';
 import { projectCanonicalMessageHistory } from './messageContract.ts';
 
-export function encodeBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let offset = 0; offset < bytes.length; offset += 8192) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
-  }
-  return btoa(binary);
-}
-
-/** Resolves canonical Asset references once; projection remains a pure function. */
-export function createHistoryReader(core: CoreClient) {
-  const assets = new Map<
-    string,
-    Promise<Omit<CanonicalResolvedContent, 'ref'>>
-  >();
+/** Projects values prepared by Core; history performs no Asset requests. */
+export function createHistoryReader() {
   const results = new Map<string, ToolResultUpdate>();
   return {
     clear() {
-      assets.clear();
       results.clear();
     },
     async project(
-      page: Page<ConversationMessage>,
+      page: Page<ResolvedConversationMessage>,
       options: NonNullable<
         Parameters<typeof projectCanonicalMessageHistory>[1]
       > & { signal?: AbortSignal }
     ) {
-      const refs = page.data.flatMap((message) =>
+      const content = page.data.flatMap((message) =>
         [
           ...message.content,
           ...(Array.isArray(message.metadata.llmReasoning)
-            ? (message.metadata.llmReasoning as ConversationMessage['content'])
+            ? message.metadata.llmReasoning
             : [])
-        ].map((ref) => ({ ref, message }))
-      );
-      const content = await Promise.all(
-        refs.map(({ ref, message }) => {
-          const key = JSON.stringify([
-            message.threadId,
-            message.id,
-            ref.assetId
-          ]);
-          let pending = assets.get(key);
-          if (!pending) {
-            pending = core.messages
-              .asset(message.threadId, message.id, ref.assetId, {
-                signal: options.signal
-              })
-              .then(async (response) => {
-                const bytes = new Uint8Array(await response.arrayBuffer());
-                return {
-                  asset: {
-                    mediaType:
-                      response.headers.get('content-type') ?? ref.mediaType,
-                    byteLength: bytes.length
-                  },
-                  base64: encodeBase64(bytes)
-                };
-              });
-            assets.set(key, pending);
-            void pending.catch(() => {
-              if (assets.get(key) === pending) assets.delete(key);
-            });
-          }
-          return pending.then((value) => ({ ...value, ref }));
+        ].map((entry) => {
+          if (!Object.hasOwn(entry, 'value'))
+            throw new TypeError('History requires resolved content.');
+          const { value, ...ref } = entry;
+          return {
+            ref,
+            value,
+            asset: {
+              mediaType: ref.mediaType,
+              byteLength:
+                value instanceof Uint8Array
+                  ? value.byteLength
+                  : new TextEncoder().encode(
+                      typeof value === 'string' ? value : JSON.stringify(value)
+                    ).length
+            }
+          } as CanonicalResolvedContent;
         })
       );
       options.signal?.throwIfAborted();
