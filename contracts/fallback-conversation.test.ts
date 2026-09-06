@@ -87,7 +87,9 @@ Deno.test("reasoning failure recovers through the real facade and controller wit
     participants: ["support"],
   });
   let sawReasoning = false;
+  let sawFailure = false;
   controller.subscribe(() => {
+    sawFailure ||= controller.getSnapshot().messages.some(message => message.activity?.items.some(item => item.status === "failed"));
     if (
       JSON.stringify(controller.getSnapshot().messages).includes(
         "discarded candidate",
@@ -112,6 +114,7 @@ Deno.test("reasoning failure recovers through the real facade and controller wit
     }
     assert(sawReasoning);
     assertEquals(backupCalls, 1);
+    assertEquals(sawFailure, false);
     const messages = controller.getSnapshot().messages;
     assertEquals(
       messages.filter((message) => message.role === "assistant").length,

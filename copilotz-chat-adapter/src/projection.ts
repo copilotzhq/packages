@@ -36,6 +36,7 @@ type Lane = {
   pending: Uint8Array;
   text: string;
   ended: boolean;
+  failed?: boolean;
 };
 export type ChatProjection = {
   messages: ChatMessage[];
@@ -50,7 +51,9 @@ export const emptyProjection = (): ChatProjection => ({
   tools: new Map()
 });
 const object = (value: unknown): Record<string, unknown> =>
-  value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  value && typeof value === 'object'
+    ? (value as Record<string, unknown>)
+    : {};
 const string = (value: unknown): string =>
   typeof value === 'string' ? value : '';
 
@@ -58,7 +61,11 @@ function prefix(
   bytes: Uint8Array,
   final = false
 ): { text: string; pending: Uint8Array } {
-  for (let tail = 0; tail <= (final ? 0 : Math.min(3, bytes.length)); tail++) {
+  for (
+    let tail = 0;
+    tail <= (final ? 0 : Math.min(3, bytes.length));
+    tail++
+  ) {
     try {
       const text = new TextDecoder('utf-8', { fatal: true }).decode(
         bytes.subarray(0, bytes.length - tail)
@@ -160,9 +167,10 @@ export function projectFrame(
         state.lanes.set(id, {
           operationId,
           attemptId,
-          candidateIndex: typeof metadata.providerAttemptIndex === 'number'
-            ? metadata.providerAttemptIndex
-            : 0,
+          candidateIndex:
+            typeof metadata.providerAttemptIndex === 'number'
+              ? metadata.providerAttemptIndex
+              : 0,
           role: string(metadata.lane) || string(output.role),
           mediaType: string(output.mediaType),
           sender,
@@ -175,6 +183,24 @@ export function projectFrame(
           text: '',
           ended: false
         });
+    }
+    // Candidate stream failures are recoverable until their owning Action settles.
+    if (
+      output.type === 'llm.call.failed' ||
+      output.type === 'llm.call.cancelled'
+    ) {
+      const run = string(data.actionRunId);
+      state.messages = state.messages.map((message) =>
+        run &&
+        (getCanonicalLlmAttemptId(message) ??
+          message.metadata?.llmAttemptId) === run
+          ? failAssistantMessage(
+              message,
+              'The response could not be completed.',
+              at
+            )
+          : message
+      );
     }
     if (/^operation\.(completed|failed|cancelled)$/.test(output.type)) {
       state.operations.delete(operationId);
@@ -205,7 +231,9 @@ export function projectFrame(
   if (typeof candidate === 'number' && candidate > lane.candidateIndex)
     return { state, drafts, refresh };
   if (typeof candidate === 'number' && candidate < lane.candidateIndex)
-    state.messages = state.messages.filter((message) => message.id !== messageId);
+    state.messages = state.messages.filter(
+      (message) => message.id !== messageId
+    );
   const ensureMessage = () => {
     if (
       !state.messages.some(
@@ -245,7 +273,10 @@ export function projectFrame(
       throw new Error('Stream replay has an unapplied byte gap.');
     const bytes = frame.bytes.subarray(lane.offset - frame.offset);
     lane.offset = frame.offset + frame.bytes.length;
-    if (lane.mediaType.startsWith('text/') || lane.mediaType.includes('json')) {
+    if (
+      lane.mediaType.startsWith('text/') ||
+      lane.mediaType.includes('json')
+    ) {
       const joined = new Uint8Array(lane.pending.length + bytes.length);
       joined.set(lane.pending);
       joined.set(bytes, lane.pending.length);
@@ -308,6 +339,7 @@ export function projectFrame(
     }
   } else {
     lane.ended = true;
+    lane.failed = frame.kind === 'stream-error';
     if (lane.binary.length) {
       const bytes = new Uint8Array(lane.offset);
       let offset = 0;
@@ -357,7 +389,11 @@ export function projectFrame(
       throw new Error(
         'Tool draft stream ended with an incomplete NDJSON record.'
       );
-    if (frame.kind === 'stream-error')
+    const recoverableCandidate =
+      lane.role === 'reasoning' ||
+      lane.role === 'tool-call-drafts' ||
+      lane.role === 'tool-calls';
+    if (frame.kind === 'stream-error' && !recoverableCandidate)
       updateMessage((message) =>
         failAssistantMessage(
           message,
@@ -366,12 +402,23 @@ export function projectFrame(
         )
       );
     if (
+      !(frame.kind === 'stream-error' && recoverableCandidate) &&
       [...state.lanes.values()]
-        .filter((value) =>
-          value.attemptId === lane.attemptId &&
-          value.candidateIndex === lane.candidateIndex
+        .filter(
+          (value) =>
+            value.attemptId === lane.attemptId &&
+            value.candidateIndex === lane.candidateIndex
         )
-        .every((value) => value.ended)
+        .every(
+          (value) =>
+            value.ended &&
+            !(
+              value.failed &&
+              ['reasoning', 'tool-call-drafts', 'tool-calls'].includes(
+                value.role
+              )
+            )
+        )
     ) {
       updateMessage((message) => closeAssistantMessage(message, at));
     }

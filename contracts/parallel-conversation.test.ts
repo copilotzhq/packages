@@ -13,6 +13,9 @@ import { createChatController } from "@copilotz/chat-adapter/controller";
 import { createHttpFixture } from "./http-fixture.ts";
 
 Deno.test("parallel Agents, nested asks and pipelines retain exact identities through the facade and chat projection", async () => {
+  let releaseContinuation!: () => void;
+  const continuation = new Promise<void>(resolve => releaseContinuation = resolve);
+  let sawLiveCompletion = false;
   const executions: string[] = [];
   const calls = new Map<string, number>();
   const mark = defineAction({
@@ -88,7 +91,7 @@ Deno.test("parallel Agents, nested asks and pipelines retain exact identities th
         finishReason: toolCalls.length ? "tool_calls" : "stop",
       };
       return {
-        result: Promise.resolve(result),
+        result: agent === "b" && count > 1 ? continuation.then(() => result) : Promise.resolve(result),
         frames: new ReadableStream({
           async start(controller) {
             for (const byte of new TextEncoder().encode(answer)) {
@@ -134,6 +137,13 @@ Deno.test("parallel Agents, nested asks and pipelines retain exact identities th
     userId: "person",
     participants: ["a", "b", "c"],
   });
+  controller.subscribe(() => {
+    const state = controller.getSnapshot();
+    if (state.isStreaming && state.messages.some(message => message.activity?.items.some(item => item.kind === "tool" && item.status === "complete"))) {
+      sawLiveCompletion = true;
+      releaseContinuation();
+    }
+  });
   try {
     await controller.start();
     await controller.send("Run both pipelines and a nested ask.");
@@ -163,6 +173,7 @@ Deno.test("parallel Agents, nested asks and pipelines retain exact identities th
       }
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
+    assertEquals(sawLiveCompletion, true);
     assertEquals(executions.sort(), [
       "mark:a",
       "mark:b",
@@ -190,6 +201,7 @@ Deno.test("parallel Agents, nested asks and pipelines retain exact identities th
       ids,
     );
   } finally {
+    releaseContinuation();
     controller.dispose();
     await app.close();
   }

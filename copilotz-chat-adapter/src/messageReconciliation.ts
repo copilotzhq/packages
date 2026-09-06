@@ -138,6 +138,9 @@ export const reconcileThreadMessages = (
   if (appended.length > 0) {
     changed = true;
     nextMessages.push(...appended);
+  }
+  // Replacing a live placeholder can change its timestamp even without additions.
+  if (changed) {
     nextMessages.sort((a, b) => {
       const timestampDelta = (a.timestamp ?? 0) - (b.timestamp ?? 0);
       return timestampDelta !== 0 ? timestampDelta : a.id.localeCompare(b.id);
