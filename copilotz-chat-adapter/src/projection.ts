@@ -13,6 +13,7 @@ import {
   extractLiveToolCallDelta,
   type ParsedToolCallDelta
 } from './toolActivity.ts';
+import { projectAgentInvocation } from './agentInvocation.ts';
 import { encodeBase64 } from './history.ts';
 import { getAttachmentKindFromMimeType } from '@copilotz/chat-ui/model';
 
@@ -132,6 +133,13 @@ export function projectFrame(
         ? object(output.metadata).sourceAction
         : output.data
     );
+    state.messages = projectAgentInvocation(
+      state.messages,
+      output.type,
+      operationId,
+      data,
+      at
+    );
     const origin = object(object(data.metadata).copilotzToolAction);
     if (
       typeof data.actionRunId === 'string' &&
@@ -162,6 +170,12 @@ export function projectFrame(
               name: string(agent.name) || agent.id
             }
           : undefined;
+      if (sender)
+        state.messages = state.messages.map((message) =>
+          message.metadata?.llmAttemptId === attemptId
+            ? { ...message, sender }
+            : message
+        );
       const id = string(output.streamId);
       if (!state.lanes.has(id))
         state.lanes.set(id, {

@@ -185,3 +185,100 @@ Deno.test("refresh restores one current snapshot, retries interrupted prefixes, 
     await app.close();
   }
 });
+
+Deno.test("an agent prepares before its first byte and settles independently of its operation", async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => release = resolve);
+  const app = await createHttpFixture(definePlugin({
+    id: "test.preparation",
+    version: "1",
+    resources: {
+      agents: {
+        support: {
+          id: "support",
+          name: "Support",
+          role: "assistant",
+          instructions: "Reply",
+          models: { generate: ["test"] },
+        },
+      },
+      models: { test: { adapter: "test", model: "test" } },
+    },
+    adapters: {
+      llm: {
+        test: {
+          call() {
+            return {
+              frames: new ReadableStream({
+                async start(c) {
+                  await held;
+                  c.enqueue({
+                    lane: "content",
+                    mediaType: "text/plain",
+                    bytes: new TextEncoder().encode("Hello"),
+                  });
+                  c.close();
+                },
+              }),
+              result: held.then(() => ({
+                content: "Hello",
+                toolCalls: [],
+                attempts: [{ status: "completed" as const }],
+              })),
+            };
+          },
+        },
+      },
+    },
+  }));
+  const core = createCoreClient(
+    createCopilotzClient({
+      baseUrl: "https://test/api",
+      fetch: ((u, i) => app.fetch(new Request(u, i))) as typeof fetch,
+    }),
+  );
+  const controller = createChatController(core, {
+    userId: "person",
+    participants: ["support"],
+  });
+  try {
+    const sending = controller.send("Hello");
+    for (let i = 0;; i++) {
+      const s = controller.getSnapshot();
+      if (s.error) throw s.error;
+      if (
+        s.messages.some((m) =>
+          m.sender?.agentId === "support" &&
+          m.activity?.items.some((a) =>
+            a.kind === "answering" && a.status === "active"
+          )
+        )
+      ) break;
+      if (i > 500) {
+        throw new Error("Preparation did not arrive before first byte");
+      }
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    release();
+    await sending;
+    for (let i = 0;; i++) {
+      const s = controller.getSnapshot();
+      if (s.error) throw s.error;
+      if (
+        !s.isStreaming &&
+        s.messages.some((m) => m.content === "Hello" && m.role === "assistant")
+      ) break;
+      if (i > 500) throw new Error("Response did not settle");
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    assert(
+      !controller.getSnapshot().messages.some((m) =>
+        m.activity?.items.some((a) => a.status === "active")
+      ),
+    );
+  } finally {
+    release();
+    controller.dispose();
+    await app.close();
+  }
+});

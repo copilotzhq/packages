@@ -19,7 +19,6 @@ import {
 import { defaultChatConfig, mergeConfig } from "../../config/chatConfig";
 import { Message } from "./Message";
 import { ResizablePanel } from "./ResizablePanel";
-import { withPendingAssistant } from "../../lib/pendingAssistant";
 import { Sidebar } from "./Sidebar";
 import { ChatHeader } from "./ChatHeader";
 import { ChatInput } from "./ChatInput";
@@ -173,23 +172,8 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   const [isCustomMounted, setIsCustomMounted] = useState(false);
   const [isCustomVisible, setIsCustomVisible] = useState(false);
   const groupedMessages = useMemo(
-    () => {
-      const agent = agentOptions.find(
-        (option) => option.id === (targetAgentId ?? selectedAgentId)
-      );
-      const sender = agent ? {
-        type: "agent" as const,
-        id: agent.id,
-        agentId: agent.id,
-        name: agent.name,
-        avatarUrl: agent.avatarUrl,
-        color: agent.color,
-      } : undefined;
-      return groupMessagesForRender(withPendingAssistant(
-        messages, isGenerating && !isStoppingGeneration, sender
-      ));
-    },
-    [messages, isGenerating, isStoppingGeneration, agentOptions, targetAgentId, selectedAgentId]
+    () => groupMessagesForRender(messages),
+    [messages]
   );
 
   // Virtualizer — only renders messages visible in the viewport + overscan buffer
