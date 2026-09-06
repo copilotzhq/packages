@@ -248,19 +248,110 @@ test('pending submission stays active while an older observed operation settles'
   const f = fixture();
   const receipt = deferred<{ operationId: string }>();
   const submitted = deferred<void>();
-  f.core.threads.send = () => { submitted.resolve(); return receipt.promise; };
+  f.core.threads.send = () => {
+    submitted.resolve();
+    return receipt.promise;
+  };
   const c = f.controller();
   await c.openThread('a');
   const sending = c.send('hello');
   await submitted.promise;
   assert.equal(c.getSnapshot().isStreaming, true);
   await f.observations[0].options.onFrame({
-    kind: 'output', checkpoint: 'older-finished',
+    kind: 'output',
+    checkpoint: 'older-finished',
     output: { type: 'operation.completed', operationId: 'older' }
   });
   assert.equal(c.getSnapshot().isStreaming, true);
   receipt.reject(new Error('submission failed'));
   await sending;
   assert.equal(c.getSnapshot().isStreaming, false);
+  c.dispose();
+});
+
+test('older-page boundary survives live refreshes and advances until history is exhausted', async () => {
+  const f = fixture();
+  const requested: Array<string | undefined> = [];
+  f.core.threads.messages = async (
+    _id: string,
+    query?: { after?: string }
+  ) => {
+    requested.push(query?.after);
+    return {
+      data: [],
+      pageInfo: {
+        hasMore: query?.after !== 'second',
+        next: query?.after === 'first' ? 'second' : 'first',
+        checkpoint: 'boundary'
+      }
+    };
+  };
+  const c = f.controller();
+  await c.openThread('a');
+  assert.equal(c.getSnapshot().messagePageInfo.hasMore, true);
+  await c.loadOlderMessages();
+  assert.equal(c.getSnapshot().messagePageInfo.hasMore, true);
+  assert.equal(c.getSnapshot().messagePageInfo.next, 'second');
+  await f.observations[0].options.onFrame({
+    kind: 'output',
+    checkpoint: 'live',
+    output: { type: 'message.created' }
+  });
+  assert.equal(c.getSnapshot().messagePageInfo.next, 'second');
+  await c.loadOlderMessages();
+  assert.equal(c.getSnapshot().messagePageInfo.hasMore, false);
+  assert.deepEqual(requested, [undefined, 'first', undefined, 'second']);
+  c.dispose();
+});
+
+test('loading older history cannot reveal an unfinished restoration prefix', async () => {
+  const f = fixture();
+  f.core.threads.messages = async () => ({
+    ...page(),
+    pageInfo: { hasMore: true, next: 'older', checkpoint: 'boundary' }
+  });
+  const c = f.controller();
+  await c.openThread('a');
+  const apply = f.observations[0].options.onFrame;
+  await apply({
+    kind: 'output',
+    checkpoint: 'c',
+    output: {
+      type: 'observation.bootstrap',
+      streams: [{ streamId: 'live', offset: 6, terminal: false }]
+    }
+  });
+  await apply({
+    kind: 'output',
+    checkpoint: 'c',
+    output: {
+      type: 'stream.output',
+      streamId: 'live',
+      operationId: 'op',
+      mediaType: 'text/plain',
+      role: 'content',
+      metadata: { sourceActionRunId: 'run' }
+    }
+  });
+  await apply({
+    kind: 'stream-chunk',
+    checkpoint: 'c',
+    streamId: 'live',
+    offset: 0,
+    bytes: new TextEncoder().encode('abc')
+  });
+  await c.loadOlderMessages();
+  assert.deepEqual(c.getSnapshot().messages, []);
+  await apply({
+    kind: 'stream-chunk',
+    checkpoint: 'c',
+    streamId: 'live',
+    offset: 3,
+    bytes: new TextEncoder().encode('def')
+  });
+  assert.deepEqual(
+    c.getSnapshot().messages.map((message) => message.content),
+    ['abcdef']
+  );
   c.dispose();
 });

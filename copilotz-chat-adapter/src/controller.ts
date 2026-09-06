@@ -1,3 +1,4 @@
+import { createObservationBootstrap } from './observationBootstrap.ts';
 import type { CoreClient } from '@copilotz/copilotz/core/client';
 import type { ObservationFrame } from '@copilotz/copilotz/client';
 import type {
@@ -135,7 +136,8 @@ export function createChatController(
     projectHistoryMessages(
       current,
       mergePersistedToolResults(
-        reconcileThreadMessages(current.messages, result.viewMessages).messages,
+        reconcileThreadMessages(current.messages, result.viewMessages)
+          .messages,
         result.toolResultUpdates
       )
     );
@@ -159,6 +161,7 @@ export function createChatController(
       }))
     });
   };
+  const bootstrap = createObservationBootstrap();
   const apply = (frame: ObservationFrame, generation: number) =>
     serialize(async () => {
       if (disposed || generation !== epoch)
@@ -168,7 +171,21 @@ export function createChatController(
           ? options.eventInterceptor?.(frame.output)
           : undefined;
       const next = projectFrame(projection, frame, Date.now());
-      if (next.refresh && snapshot.currentThreadId) {
+      const restored = bootstrap.apply(
+        frame,
+        next.state,
+        snapshot.messages.map((message) => message.id)
+      );
+      next.state = restored.state;
+      if (restored.pending) {
+        projection = next.state;
+        for (const draft of next.drafts) toolCallDraftSource.apply(draft);
+        checkpoint = frame.checkpoint;
+        if (!snapshot.isRecoveringStream)
+          publish({ isRecoveringStream: true, isStreaming: true });
+        return;
+      }
+      if ((next.refresh || restored.completed) && snapshot.currentThreadId) {
         const result = await projectHistory(
           await core.threads.messages(
             snapshot.currentThreadId,
@@ -198,10 +215,12 @@ export function createChatController(
       for (const draft of next.drafts) toolCallDraftSource.apply(draft);
       publish({
         messages: projection.messages,
+        isRecoveringStream: false,
         isStreaming:
           projection.operations.size > 0 ||
-          [...submissions].some((submission) =>
-            submission.generation === epoch && !submission.stopRequested
+          [...submissions].some(
+            (submission) =>
+              submission.generation === epoch && !submission.stopRequested
           ),
         ...(intercepted && intercepted.specialState !== undefined
           ? { specialState: intercepted.specialState }
@@ -247,6 +266,7 @@ export function createChatController(
     await serialize(() => {
       projection = emptyProjection();
     });
+    bootstrap.clear();
     history.clear();
     toolCallDraftSource.clear();
     publish({
@@ -351,7 +371,10 @@ export function createChatController(
       });
       if (submission.stopRequested)
         await core.operations.cancel(receipt.operationId);
-      const result = (await settle(receipt, submission.controller.signal)) as {
+      const result = (await settle(
+        receipt,
+        submission.controller.signal
+      )) as {
         threadId: string;
       };
       if (title)
@@ -381,8 +404,9 @@ export function createChatController(
           isStreaming:
             !observation?.signal.aborted &&
             (projection.operations.size > 0 ||
-              [...submissions].some((pending) =>
-                pending.generation === epoch && !pending.stopRequested
+              [...submissions].some(
+                (pending) =>
+                  pending.generation === epoch && !pending.stopRequested
               )),
           isStopping: false
         });
@@ -537,7 +561,12 @@ export function createChatController(
           if (generation === epoch && !disposed) {
             projection = mergeHistory(projection, result);
             publish({
-              messages: projection.messages,
+              messages: bootstrap.isPending()
+                ? mergeHistory(
+                    { ...projection, messages: snapshot.messages },
+                    result
+                  ).messages
+                : projection.messages,
               messagePageInfo: page.pageInfo
             });
           }
@@ -558,6 +587,7 @@ export function createChatController(
       historyAbort.abort();
       observation?.abort();
       for (const submission of submissions) submission.controller.abort();
+      bootstrap.clear();
       history.clear();
       listeners.clear();
       toolCallDraftSource.clear();
