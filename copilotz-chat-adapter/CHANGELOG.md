@@ -1,5 +1,10 @@
 # @copilotz/chat-adapter
 
+## 0.67.1 — 2026-09-06
+
+Synchronize with Copilotz 0.67.1, which fixes concurrent adoption of identical
+content in parallel Agent questions. The browser transport contract is unchanged.
+
 ## 0.67.0 — 2026-09-06
 
 Consume authorized, resolved Core history directly without per-Asset requests or
