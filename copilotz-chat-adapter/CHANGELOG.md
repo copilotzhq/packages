@@ -1,5 +1,10 @@
 # @copilotz/chat-adapter
 
+## 0.67.2 — 2026-09-06
+
+Synchronize with Copilotz 0.67.2, which fixes automatic Responses routing and
+reasoning effort forwarding for GPT-6 Astra.
+
 ## 0.67.1 — 2026-09-06
 
 Synchronize with Copilotz 0.67.1, which fixes concurrent adoption of identical

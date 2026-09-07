@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/chat-voice-vad",
-  "version": "0.67.1",
+  "version": "0.67.2",
   "description": "Optional VAD-powered voice provider for Copilotz chat voice compose",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -23,7 +23,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@copilotz/chat-ui": "0.67.1",
+    "@copilotz/chat-ui": "0.67.2",
     "@ricky0123/vad-web": "^0.0.30",
     "onnxruntime-web": "^1.24.3"
   },
