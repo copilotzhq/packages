@@ -4,18 +4,18 @@ import { projectCanonicalMessageHistory } from '../src/messageContract.ts';
 import {
   extractLiveToolCall,
   extractLiveToolResultUpdate,
-  mergePersistedToolResults,
+  mergePersistedToolResults
 } from '../src/toolActivity.ts';
 
 import {
+  canonicalHistory,
+  content,
   encoded,
   namespace,
-  threadId,
-  time,
   participant,
   ref,
-  content,
-  canonicalHistory,
+  threadId,
+  time
 } from './history.fixture.ts';
 
 test('stored message history restores reasoning, tool calls, and failed results', () => {
@@ -25,9 +25,9 @@ test('stored message history restores reasoning, tool calls, and failed results'
     page,
     {
       senderOptions: {
-        agents: [{ id: 'north', name: 'North', color: '#3b82f6' }],
+        agents: [{ id: 'north', name: 'North', color: '#3b82f6' }]
       },
-      onToolOutput: (value) => output.push(value),
+      onToolOutput: (value) => output.push(value)
     }
   );
 
@@ -52,7 +52,7 @@ test('stored message history restores reasoning, tool calls, and failed results'
   );
   assert.deepEqual(viewMessages[1].activity?.items[1].details?.result, {
     ok: false,
-    error: 'Sandbox unavailable.',
+    error: 'Sandbox unavailable.'
   });
   assert.equal(
     viewMessages[1].activity?.items[1].details?.error,
@@ -66,7 +66,7 @@ test('stored message history restores reasoning, tool calls, and failed results'
     status: 'failed',
     result: { ok: false, error: 'Sandbox unavailable.' },
     error: 'Sandbox unavailable.',
-    endTime: new Date('2026-08-13T10:00:02.000Z').getTime(),
+    endTime: new Date('2026-08-13T10:00:02.000Z').getTime()
   });
   assert.deepEqual(output, [{ ok: false, error: 'Sandbox unavailable.' }]);
   assert.equal(
@@ -91,17 +91,17 @@ test('canonical agent failure is durable, visibly failed, and attempt-correlated
         continuation: 'none',
         llmAttemptId: 'attempt-failed',
         outcome: 'failed',
-        agentParticipantId: 'participant:north',
+        agentParticipantId: 'participant:north'
       },
       copilotzAgentFailure: {
         schema: 'copilotz.agent-failure',
         llmAttemptId: 'attempt-failed',
         source: 'llm.call',
-        status: 'failed',
-      },
+        status: 'failed'
+      }
     },
     createdAt: '2026-08-13T10:00:03.000Z',
-    updatedAt: '2026-08-13T10:00:03.000Z',
+    updatedAt: '2026-08-13T10:00:03.000Z'
   });
   document.included.content.push(
     content(
@@ -165,8 +165,8 @@ test('stored history renders exported tool files as downloadable attachments', (
       dataUrl: `data:text/csv;base64,${encoded('name,value\nalpha,1\n')}`,
       mimeType: 'text/csv',
       fileName: 'report.csv',
-      size: 19,
-    },
+      size: 19
+    }
   ]);
 });
 
@@ -174,7 +174,7 @@ test('projection accepts an empty immutable content body', () => {
   const history = canonicalHistory();
   history.included.content.push({
     ...content('asset-empty', 'text', 'attachment', ''),
-    value: '',
+    value: ''
   });
   assert.equal(history.included.content.at(-1)?.value, '');
 });
@@ -190,21 +190,21 @@ test('stored history binds reused provider call IDs to their source message', ()
       toolStatus: 'completed',
       copilotzWorkflow: {
         kind: 'tool_result',
-        sourceMessageId: 'another-agent-message',
+        sourceMessageId: 'another-agent-message'
       },
       copilotzToolAction: {
         schema: 'copilotz.core.tool-action.v1',
         planMessageId: 'another-agent-message',
-        actionRunId: 'execution-newer',
-      },
+        actionRunId: 'execution-newer'
+      }
     },
     createdAt: '2026-08-13T10:00:03.000Z',
-    updatedAt: '2026-08-13T10:00:03.000Z',
+    updatedAt: '2026-08-13T10:00:03.000Z'
   });
   history.included.content.push(
     content('asset-result-newer', 'json', 'tool.projected_output', {
       ok: true,
-      wrong: true,
+      wrong: true
     })
   );
 
@@ -215,7 +215,7 @@ test('stored history binds reused provider call IDs to their source message', ()
   assert.equal(tool?.details?.toolCall?.toolExecutionId, 'execution-1');
   assert.deepEqual(tool?.details?.result, {
     ok: false,
-    error: 'Sandbox unavailable.',
+    error: 'Sandbox unavailable.'
   });
 });
 
@@ -225,13 +225,13 @@ test('v4 Ask metadata restores the mention and suppresses its duplicate question
     {
       id: 'call-1',
       action: 'ask',
-      input: { target: 'east', message: 'Review this plan.' },
-    },
+      input: { target: 'east', message: 'Review this plan.' }
+    }
   ];
   history.data[2].metadata.toolInvocation = {
     id: 'call-1',
     tool: { id: 'ask', name: 'Ask Agent' },
-    args: JSON.stringify({ target: 'east', message: 'Review this plan.' }),
+    args: JSON.stringify({ target: 'east', message: 'Review this plan.' })
   };
   const copilotzAsk = {
     schema: 'copilotz.ask.v1',
@@ -246,7 +246,7 @@ test('v4 Ask metadata restores the mention and suppresses its duplicate question
     askedParticipantId: 'participant:east',
     askedAgentId: 'east',
     askedAgentName: 'East',
-    depth: 1,
+    depth: 1
   };
   history.data.push({
     id: 'message-question',
@@ -257,7 +257,7 @@ test('v4 Ask metadata restores the mention and suppresses its duplicate question
     content: [ref('asset-question', 'text', 'body')],
     metadata: { copilotzAsk },
     createdAt: '2026-08-13T10:00:01.500Z',
-    updatedAt: '2026-08-13T10:00:01.500Z',
+    updatedAt: '2026-08-13T10:00:01.500Z'
   });
   history.included.content.push(
     content('asset-question', 'text', 'body', 'Review this plan.')
@@ -274,7 +274,7 @@ test('v4 Ask metadata restores the mention and suppresses its duplicate question
   assert.equal(ask?.toolName, 'Ask Agent');
   assert.deepEqual(ask?.details?.toolCall?.arguments, {
     target: 'east',
-    message: 'Review this plan.',
+    message: 'Review this plan.'
   });
 
   history.data = history.data.filter(
@@ -293,15 +293,15 @@ test('live tool events retain the same call identity as stored history', () => {
       toolCall: {
         id: 'call-1',
         args: { command: 'pwd' },
-        tool: { id: 'terminal' },
-      },
+        tool: { id: 'terminal' }
+      }
     }),
     {
       id: 'call-1',
       toolId: 'terminal',
       name: 'terminal',
       arguments: { command: 'pwd' },
-      status: 'running',
+      status: 'running'
     }
   );
   assert.deepEqual(
@@ -310,7 +310,7 @@ test('live tool events retain the same call identity as stored history', () => {
         toolCallId: 'call-1',
         tool: { id: 'terminal', name: 'Terminal' },
         projectedOutput: { ok: true },
-        status: 'completed',
+        status: 'completed'
       },
       () => 123
     ),
@@ -319,7 +319,41 @@ test('live tool events retain the same call identity as stored history', () => {
       name: 'Terminal',
       status: 'completed',
       result: { ok: true },
-      endTime: 123,
+      endTime: 123
     }
   );
+});
+
+test('authorized custom-role tool results preserve all text and JSON values', () => {
+  const history = canonicalHistory();
+  const tool = history.data.find((message) => message.id === 'message-tool')!;
+  tool.metadata.toolStatus = 'completed';
+  tool.content = [
+    ref('custom-text', 'text', 'body'),
+    ref('custom-json', 'json', 'summary'),
+    ref('custom-false', 'json', 'value'),
+    ref('custom-null', 'json', 'value')
+  ];
+  history.included.content.push(
+    content('custom-text', 'text', 'body', 'Read completed'),
+    content('custom-json', 'json', 'summary', { count: 0 }),
+    content('custom-false', 'json', 'value', false),
+    content('custom-null', 'json', 'value', null)
+  );
+  const result = projectCanonicalMessageHistory(history);
+  const expected = ['Read completed', { count: 0 }, false, null];
+  assert.deepEqual(result.toolResultUpdates[0].result, expected);
+  assert.deepEqual(
+    result.viewMessages
+      .find((message) => message.id === 'message-agent')
+      ?.activity?.items.find((item) => item.kind === 'tool')?.details?.result,
+    expected
+  );
+});
+
+test('redacted tool results do not resolve unrelated included content', () => {
+  const history = canonicalHistory();
+  history.data.find((message) => message.id === 'message-tool')!.content = [];
+  const { toolResultUpdates } = projectCanonicalMessageHistory(history);
+  assert.equal(toolResultUpdates[0].result, undefined);
 });

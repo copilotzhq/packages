@@ -131,8 +131,9 @@ const attachments = (
     if (
       ref.role !== 'attachment' &&
       !['image', 'audio', 'video', 'file'].includes(ref.kind)
-    )
+    ) {
       return [];
+    }
     const value = resolved(ref, content);
     if (!value) return [];
     const mimeType = ref.mediaType || value.asset.mediaType;
@@ -185,8 +186,9 @@ const toolInvocations = (
       typeof entry.id !== 'string' ||
       typeof entry.action !== 'string' ||
       !isRecord(entry.input)
-    )
+    ) {
       return [];
+    }
     return [
       {
         id: entry.id,
@@ -200,18 +202,35 @@ const toolInvocations = (
 const toolResultOutput = (
   result: DurableToolResult,
   content: Map<string, CanonicalResolvedContent>
-): unknown =>
-  contentValue(
-    refWithRole(result.content, 'tool.projected_output') ??
-      refWithRole(result.content, 'tool.output'),
-    content
+): unknown => {
+  const projected = result.content.filter(
+    (ref) => ref.role === 'tool.projected_output'
   );
+  const outputs = result.content.filter((ref) => ref.role === 'tool.output');
+  // Core preserves roles on ContentSequence results. Their authorized text/JSON
+  // entries are results too; media remains available through attachment mapping.
+  const refs = projected.length
+    ? projected
+    : outputs.length
+    ? outputs
+    : result.content.filter(
+        (ref) =>
+          ref.role !== 'attachment' &&
+          (ref.kind === 'text' || ref.kind === 'json')
+      );
+  const values = refs.flatMap((ref) => {
+    const entry = resolved(ref, content);
+    return entry ? [entry.value] : [];
+  });
+  return values.length <= 1 ? values[0] : values;
+};
 
 const outputError = (value: unknown): string | undefined => {
   if (typeof value === 'string' && value.trim()) return value.trim();
   if (!isRecord(value)) return undefined;
-  if (typeof value.message === 'string' && value.message.trim())
+  if (typeof value.message === 'string' && value.message.trim()) {
     return value.message.trim();
+  }
   return outputError(value.error);
 };
 

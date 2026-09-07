@@ -1,14 +1,60 @@
 import type { ObservationFrame } from '@copilotz/copilotz/client';
 import type { ChatProjection } from './projection.ts';
 
-/** Coalesces retained prefixes without animating historical streams into the UI. */
+type HistoricalLane = {
+  offset: number;
+  terminal: boolean;
+};
+
+/**
+ * Keeps recovery prefixes out of the rendered view until each individual lane
+ * is coherent. The authoritative projection is never withheld: it continues
+ * retaining cursor, terminal, retry, and partial-output state while recovery
+ * is in progress.
+ */
 export function createObservationBootstrap() {
-  let pending: Map<string, { offset: number; terminal: boolean }> | undefined;
+  let pending: Map<string, HistoricalLane> | undefined;
   let declaring = false;
   let initialMessages = new Set<string>();
   let terminalStreams = new Set<string>();
+  const historicalAttemptIds = (state: ChatProjection, streams: Set<string>) =>
+    new Set(
+      [...streams]
+        .map((id) => state.lanes.get(id)?.attemptId)
+        .filter((id): id is string => Boolean(id))
+    );
+  const completedHistoricalAttemptIds = (state: ChatProjection) => {
+    const attempts = historicalAttemptIds(state, terminalStreams);
+    for (const lane of state.lanes.values()) {
+      if (!lane.ended) attempts.delete(lane.attemptId);
+    }
+    return attempts;
+  };
+  const visible = (state: ChatProjection): ChatProjection => {
+    if (!pending) return state;
+    const pendingAttempts = historicalAttemptIds(
+      state,
+      new Set(pending.keys())
+    );
+    const terminalAttempts = completedHistoricalAttemptIds(state);
+    const knownAttempts = new Set(
+      [...state.lanes.values()].map((lane) => lane.attemptId)
+    );
+    return {
+      ...state,
+      messages: state.messages.filter(
+        (message) =>
+          initialMessages.has(message.id) ||
+          !message.id.startsWith('live:') ||
+          (knownAttempts.has(message.metadata?.llmAttemptId as string) &&
+            !pendingAttempts.has(message.metadata?.llmAttemptId as string) &&
+            !terminalAttempts.has(message.metadata?.llmAttemptId as string))
+      )
+    };
+  };
   return {
     isPending: () => pending !== undefined,
+    visible,
     clear() {
       pending = undefined;
       declaring = false;
@@ -25,8 +71,9 @@ export function createObservationBootstrap() {
         frame.output.type === 'observation.bootstrap'
       ) {
         const streams = frame.output.streams;
-        if (!Array.isArray(streams))
+        if (!Array.isArray(streams)) {
           throw new Error('Invalid observation bootstrap.');
+        }
         if (!declaring) {
           pending = new Map();
           initialMessages = new Set(
@@ -48,7 +95,9 @@ export function createObservationBootstrap() {
           if (stream.terminal) terminalStreams.add(stream.streamId);
         }
       }
-      if (!pending) return { pending: false, completed: false, state };
+      if (!pending) {
+        return { pending: false, completed: false, state, visible: state };
+      }
       const id =
         frame.kind === 'output' ? frame.output.streamId : frame.streamId;
       if (typeof id === 'string') {
@@ -57,31 +106,40 @@ export function createObservationBootstrap() {
         if (
           expected &&
           lane &&
-          (lane.ended ||
-            (lane.offset >= expected.offset && !expected.terminal))
-        )
+          (expected.terminal
+            ? lane.ended
+            : lane.offset >= expected.offset || lane.ended)
+        ) {
           pending.delete(id);
+        }
       }
-      if (declaring || pending.size)
-        return { pending: true, completed: false, state };
+      if (declaring || pending.size) {
+        return {
+          pending: true,
+          completed: false,
+          state,
+          visible: visible(state)
+        };
+      }
+      const historicalRuns = completedHistoricalAttemptIds(state);
+      const completedState = {
+        ...state,
+        messages: state.messages.filter(
+          (message) =>
+            initialMessages.has(message.id) ||
+            !message.id.startsWith('live:') ||
+            !historicalRuns.has(message.metadata?.llmAttemptId as string)
+        )
+      };
       pending = undefined;
-      const historicalRuns = new Set(
-        [...terminalStreams].map((id) => state.lanes.get(id)?.attemptId)
-      );
-      for (const lane of state.lanes.values())
-        if (!lane.ended) historicalRuns.delete(lane.attemptId);
+      declaring = false;
+      initialMessages.clear();
+      terminalStreams.clear();
       return {
         pending: false,
         completed: true,
-        state: {
-          ...state,
-          messages: state.messages.filter(
-            (message) =>
-              initialMessages.has(message.id) ||
-              !message.id.startsWith('live:') ||
-              !historicalRuns.has(message.metadata?.llmAttemptId as string)
-          )
-        }
+        state: completedState,
+        visible: completedState
       };
     }
   };
