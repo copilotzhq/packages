@@ -28,6 +28,7 @@ import {
   StatusBadge,
 } from "../../components/patterns";
 import { formatNumber } from "../usage/calculations";
+import { chronologicalHistoryPage } from "./pagination";
 
 const MESSAGE_PAGE_SIZE = 50;
 
@@ -37,14 +38,16 @@ export function threadsModule(): AdminModule {
     icon: MessageSquare,
     id: "threads",
     label: "Threads",
-    navItems: [{
-      group: "operate",
-      icon: MessageSquare,
-      id: "threads",
-      label: "Threads",
-      order: 40,
-      routeId: "threads",
-    }],
+    navItems: [
+      {
+        group: "operate",
+        icon: MessageSquare,
+        id: "threads",
+        label: "Threads",
+        order: 40,
+        routeId: "threads",
+      },
+    ],
     routes: [
       {
         id: "threads",
@@ -70,17 +73,24 @@ function ThreadsPage({ context }: { context: AdminRuntimeContext }) {
     let active = true;
     setIsLoading(true);
     setError(null);
-    void context.client.listThreads({
-      limit: 50,
-      namespace: context.scope.namespace || undefined,
-      search: search || undefined,
-    }).then((next) => {
-      if (active) setThreads(next);
-    }).catch((cause) => {
-      if (active) setError(cause instanceof Error ? cause.message : "Failed to load threads");
-    }).finally(() => {
-      if (active) setIsLoading(false);
-    });
+    void context.client
+      .listThreads({
+        limit: 50,
+        namespace: context.scope.namespace || undefined,
+        search: search || undefined,
+      })
+      .then((next) => {
+        if (active) setThreads(next);
+      })
+      .catch((cause) => {
+        if (active)
+          setError(
+            cause instanceof Error ? cause.message : "Failed to load threads"
+          );
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
     return () => {
       active = false;
     };
@@ -105,7 +115,8 @@ function ThreadsPage({ context }: { context: AdminRuntimeContext }) {
           rows={threads}
           getRowKey={(thread) => thread.threadId}
           onRowClick={(thread) =>
-            context.navigate("threads.detail", { threadId: thread.threadId })}
+            context.navigate("threads.detail", { threadId: thread.threadId })
+          }
           empty={
             <EmptyState
               icon={MessageSquare}
@@ -123,7 +134,9 @@ function ThreadsPage({ context }: { context: AdminRuntimeContext }) {
                     {thread.name || thread.threadId}
                   </div>
                   <div className="max-w-xl truncate text-xs text-muted-foreground">
-                    {thread.summary ?? thread.lastMessagePreview ?? "No summary yet"}
+                    {thread.summary ??
+                      thread.lastMessagePreview ??
+                      "No summary yet"}
                   </div>
                 </div>
               ),
@@ -141,7 +154,7 @@ function ThreadsPage({ context }: { context: AdminRuntimeContext }) {
                 formatNumber(
                   Array.isArray(thread.participantIds)
                     ? thread.participantIds.length
-                    : 0,
+                    : 0
                 ),
             },
             {
@@ -184,50 +197,77 @@ function ThreadInspector({
 }) {
   const [thread, setThread] = React.useState<AdminThreadDetail | null>(null);
   const [messages, setMessages] = React.useState<AdminMessage[]>([]);
-  const [pageInfo, setPageInfo] = React.useState<AdminMessagePageInfo | null>(null);
+  const [pageInfo, setPageInfo] = React.useState<AdminMessagePageInfo | null>(
+    null
+  );
   const [isLoading, setIsLoading] = React.useState(true);
   const [isLoadingMore, setIsLoadingMore] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [paginationError, setPaginationError] = React.useState<string | null>(
+    null
+  );
+  const generation = React.useRef(0);
 
   React.useEffect(() => {
     let active = true;
+    const currentGeneration = ++generation.current;
     setIsLoading(true);
+    setIsLoadingMore(false);
     setError(null);
+    setPaginationError(null);
     void Promise.all([
       context.client.getThread(threadId),
       context.client.getThreadMessages(threadId, { limit: MESSAGE_PAGE_SIZE }),
-    ]).then(([nextThread, page]) => {
-      if (!active) return;
-      setThread(nextThread);
-      setMessages(Array.isArray(page?.data) ? page.data : []);
-      setPageInfo(page?.pageInfo ?? null);
-    }).catch((cause) => {
-      if (active) setError(cause instanceof Error ? cause.message : "Failed to load thread");
-    }).finally(() => {
-      if (active) setIsLoading(false);
-    });
+    ])
+      .then(([nextThread, page]) => {
+        if (!active) return;
+        setThread(nextThread);
+        setMessages(chronologicalHistoryPage(page?.data ?? []));
+        setPageInfo(page?.pageInfo ?? null);
+      })
+      .catch((cause) => {
+        if (active)
+          setError(
+            cause instanceof Error ? cause.message : "Failed to load thread"
+          );
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
     return () => {
       active = false;
+      if (generation.current === currentGeneration) generation.current++;
     };
   }, [context.client, context.refreshKey, threadId]);
 
   const loadMore = async () => {
-    if (!pageInfo?.hasMoreBefore || !pageInfo.oldestMessageId || isLoadingMore) {
+    if (!pageInfo?.hasMore || !pageInfo.next || isLoadingMore) {
       return;
     }
+    const currentGeneration = generation.current;
     setIsLoadingMore(true);
+    setPaginationError(null);
     try {
       const page = await context.client.getThreadMessages(threadId, {
-        before: pageInfo.oldestMessageId,
+        after: pageInfo.next,
         limit: MESSAGE_PAGE_SIZE,
       });
+      if (generation.current !== currentGeneration) return;
       setMessages((current) => [
-        ...(Array.isArray(page?.data) ? page.data : []),
+        ...chronologicalHistoryPage(page?.data ?? []),
         ...current,
       ]);
       setPageInfo(page?.pageInfo ?? null);
+    } catch (cause) {
+      if (generation.current === currentGeneration) {
+        setPaginationError(
+          cause instanceof Error
+            ? cause.message
+            : "Failed to load older messages"
+        );
+      }
     } finally {
-      setIsLoadingMore(false);
+      if (generation.current === currentGeneration) setIsLoadingMore(false);
     }
   };
 
@@ -242,10 +282,15 @@ function ThreadInspector({
     <div className="space-y-4">
       <PageHeader
         title={thread?.name ?? threadId}
-        description={thread?.summary ?? "Message timeline and runtime metadata."}
+        description={
+          thread?.summary ?? "Message timeline and runtime metadata."
+        }
         badges={[
           { label: thread?.status ?? "unknown" },
-          { label: `${messages.length}${pageInfo?.hasMoreBefore ? "+" : ""} messages`, variant: "secondary" },
+          {
+            label: `${messages.length}${pageInfo?.hasMore ? "+" : ""} messages`,
+            variant: "secondary",
+          },
         ]}
         actions={
           <Button
@@ -264,7 +309,7 @@ function ThreadInspector({
         <div className="overflow-hidden rounded-lg border bg-background">
           <div className="flex items-center justify-between border-b px-4 py-2">
             <div className="text-sm font-medium">Timeline</div>
-            {pageInfo?.hasMoreBefore && (
+            {pageInfo?.hasMore && (
               <Button
                 disabled={isLoadingMore}
                 onClick={() => void loadMore()}
@@ -272,21 +317,29 @@ function ThreadInspector({
                 type="button"
                 variant="ghost"
               >
-                {isLoadingMore
-                  ? <Loader2 className="size-3 animate-spin" />
-                  : <ChevronUp className="size-3" />}
-                Load older
+                {isLoadingMore ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <ChevronUp className="size-3" />
+                )}
+                {paginationError ? "Retry older messages" : "Load older"}
               </Button>
             )}
           </div>
           {messages.length === 0 ? (
-            <EmptyState title="No messages" description="This thread has no messages yet." />
+            <EmptyState
+              title="No messages"
+              description="This thread has no messages yet."
+            />
           ) : (
             <div className="divide-y">
               {messages.map((message) => (
                 <MessageRow key={message.id} message={message} />
               ))}
             </div>
+          )}
+          {paginationError && (
+            <span className="text-xs text-destructive">{paginationError}</span>
           )}
         </div>
       </InspectorPanel>
@@ -296,26 +349,39 @@ function ThreadInspector({
 
 function MessageRow({ message }: { message: AdminMessage }) {
   const [expanded, setExpanded] = React.useState(false);
-  const hasToolCalls =
-    Array.isArray(message.toolCalls) && message.toolCalls.length > 0;
-  const hasReasoning = Boolean(message.reasoning);
-  const hasMetadata = Boolean(message.metadata && Object.keys(message.metadata).length);
+  const senderType = String(message.sender.participantType ?? "system");
+  const senderId = String(
+    message.sender.agentId ??
+      message.sender.externalId ??
+      message.sender.id ??
+      senderType
+  );
+  const text = message.content
+    .flatMap((entry) =>
+      entry &&
+      typeof entry === "object" &&
+      typeof (entry as Record<string, unknown>).value === "string"
+        ? [(entry as Record<string, unknown>).value as string]
+        : []
+    )
+    .join("\n");
+  const hasMetadata = Boolean(
+    message.metadata && Object.keys(message.metadata).length
+  );
 
   return (
     <div className="px-4 py-3">
       <div className="flex items-start gap-3">
-        <SenderIcon senderType={message.senderType} />
+        <SenderIcon senderType={senderType} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="font-medium">
-              {message.senderId ?? message.senderUserId ?? message.senderType}
-            </span>
+            <span className="font-medium">{senderId}</span>
             <Badge variant="outline" className="text-[10px]">
-              {message.senderType}
+              {senderType}
             </Badge>
-            {message.targetId && (
+            {message.recipientIds[0] && (
               <Badge variant="secondary" className="text-[10px]">
-                to {message.targetId}
+                to {message.recipientIds[0]}
               </Badge>
             )}
             {message.createdAt && (
@@ -324,29 +390,33 @@ function MessageRow({ message }: { message: AdminMessage }) {
               </span>
             )}
           </div>
-          {message.content && (
+          {text && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content}
+              {text}
             </p>
           )}
-          {(hasToolCalls || hasReasoning || hasMetadata) && (
+          {(message.content.length > 0 || hasMetadata) && (
             <div className="mt-2">
               <button
                 className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
                 onClick={() => setExpanded((value) => !value)}
                 type="button"
               >
-                {hasToolCalls && <Wrench className="size-3" />}
-                {hasReasoning && !hasToolCalls && <Cpu className="size-3" />}
+                <Wrench className="size-3" />
                 Details
               </button>
               {expanded && (
                 <pre className="mt-2 max-h-72 overflow-auto rounded-md bg-muted p-3 text-xs">
-                  {JSON.stringify({
-                    ...(hasToolCalls ? { toolCalls: message.toolCalls } : {}),
-                    ...(hasReasoning ? { reasoning: message.reasoning } : {}),
-                    ...(hasMetadata ? { metadata: message.metadata } : {}),
-                  }, null, 2)}
+                  {JSON.stringify(
+                    {
+                      content: message.content,
+                      sender: message.sender,
+                      recipientIds: message.recipientIds,
+                      ...(hasMetadata ? { metadata: message.metadata } : {}),
+                    },
+                    null,
+                    2
+                  )}
                 </pre>
               )}
             </div>
@@ -361,13 +431,29 @@ function SenderIcon({ senderType }: { senderType: string }) {
   const base = "flex size-7 shrink-0 items-center justify-center rounded-full";
   switch (senderType) {
     case "agent":
-      return <div className={cn(base, "bg-primary/10 text-primary")}><Bot className="size-3.5" /></div>;
+      return (
+        <div className={cn(base, "bg-primary/10 text-primary")}>
+          <Bot className="size-3.5" />
+        </div>
+      );
     case "user":
-      return <div className={cn(base, "bg-secondary text-secondary-foreground")}><User className="size-3.5" /></div>;
+      return (
+        <div className={cn(base, "bg-secondary text-secondary-foreground")}>
+          <User className="size-3.5" />
+        </div>
+      );
     case "tool":
-      return <div className={cn(base, "bg-muted text-muted-foreground")}><Wrench className="size-3.5" /></div>;
+      return (
+        <div className={cn(base, "bg-muted text-muted-foreground")}>
+          <Wrench className="size-3.5" />
+        </div>
+      );
     default:
-      return <div className={cn(base, "bg-muted text-muted-foreground")}><Cpu className="size-3.5" /></div>;
+      return (
+        <div className={cn(base, "bg-muted text-muted-foreground")}>
+          <Cpu className="size-3.5" />
+        </div>
+      );
   }
 }
 

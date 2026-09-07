@@ -47,28 +47,27 @@ export interface AdminListOptions {
 
 export interface CopilotzAdminClient {
   paths: AdminClientPaths;
-  getOverview(
-    options?: { range?: AdminDatePreset; namespace?: string },
-  ): Promise<AdminOverview>;
-  getActivity(
-    options?: {
-      range?: AdminDatePreset;
-      interval?: AdminActivityInterval;
-      namespace?: string;
-    },
-  ): Promise<AdminActivityPoint[]>;
+  getOverview(options?: {
+    range?: AdminDatePreset;
+    namespace?: string;
+  }): Promise<AdminOverview>;
+  getActivity(options?: {
+    range?: AdminDatePreset;
+    interval?: AdminActivityInterval;
+    namespace?: string;
+  }): Promise<AdminActivityPoint[]>;
   getUsage(filters?: AdminUsageFilters): Promise<AdminUsageResponse>;
   listThreads(options?: AdminListOptions): Promise<AdminThreadSummary[]>;
   listParticipants(
-    options?: AdminListOptions,
+    options?: AdminListOptions
   ): Promise<AdminParticipantSummary[]>;
   listAgents(
-    options?: AdminListOptions & { range?: AdminDatePreset },
+    options?: AdminListOptions & { range?: AdminDatePreset }
   ): Promise<AdminAgentSummary[]>;
   getThread(threadId: string): Promise<AdminThreadDetail>;
   getThreadMessages(
     threadId: string,
-    options?: { limit?: number; before?: string },
+    options?: { limit?: number; after?: string }
   ): Promise<AdminMessagePage>;
   listEvents(options?: AdminEventFilters): Promise<AdminQueueEvent[]>;
   getThreadEvent(threadId: string): Promise<AdminQueueEvent | undefined>;
@@ -76,40 +75,44 @@ export interface CopilotzAdminClient {
   listCollections(): Promise<string[]>;
   listCollectionItems(
     collection: string,
-    options?: AdminListOptions,
+    options?: AdminListOptions
   ): Promise<AdminCollectionItem[]>;
   getCollectionItem(
     collection: string,
     itemId: string,
-    options?: { namespace?: string; populate?: string[] },
+    options?: { namespace?: string; populate?: string[] }
   ): Promise<AdminCollectionItem>;
   createCollectionItem(
     collection: string,
     data: Record<string, unknown>,
-    options?: { namespace?: string },
+    options?: { namespace?: string }
   ): Promise<AdminCollectionItem>;
   updateCollectionItem(
     collection: string,
     itemId: string,
     data: Record<string, unknown>,
-    options?: { namespace?: string },
+    options?: { namespace?: string }
   ): Promise<AdminCollectionItem>;
   deleteCollectionItem(
     collection: string,
     itemId: string,
-    options?: { namespace?: string },
+    options?: { namespace?: string }
   ): Promise<void>;
 }
 
 const DEFAULT_PATHS: AdminClientPaths = {
-  adminBase: "/v1/admin",
+  // Compass's Server facade owns the /api prefix. Its Admin adapter and Core
+  // thread routes are relative to that prefix (rather than the retired v1 API).
+  adminBase: "/admin",
   collectionsBase: "/v1/collections",
-  threadsBase: "/v1/threads",
+  threadsBase: "/threads",
 };
 
 function resolveBaseUrl(baseUrl?: string): string {
-  const candidate = (baseUrl && baseUrl.length > 0 ? baseUrl : "/api")
-    .replace(/\/$/, "");
+  const candidate = (baseUrl && baseUrl.length > 0 ? baseUrl : "/api").replace(
+    /\/$/,
+    ""
+  );
   return candidate.startsWith("http") || candidate.startsWith("/")
     ? candidate
     : `/${candidate}`;
@@ -140,7 +143,7 @@ function encodeListParam(value: string[] | undefined): string | undefined {
 function buildUrl(
   baseUrl: string,
   path: string,
-  params: Record<string, string | undefined> = {},
+  params: Record<string, string | undefined> = {}
 ): URL {
   const url = new URL(`${baseUrl}${path}`, globalThis.location?.origin);
   for (const [key, value] of Object.entries(params)) {
@@ -153,7 +156,7 @@ function buildUrl(
 
 async function mergeHeaders(
   headers: Record<string, string>,
-  getRequestHeaders?: RequestHeadersProvider,
+  getRequestHeaders?: RequestHeadersProvider
 ): Promise<Record<string, string>> {
   const provided = getRequestHeaders ? await getRequestHeaders() : undefined;
   return provided ? { ...headers, ...provided } : headers;
@@ -162,7 +165,9 @@ async function mergeHeaders(
 async function parseJsonResponse<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    const message = payload?.message ?? payload?.data?.message ??
+    const message =
+      payload?.message ??
+      payload?.data?.message ??
       payload?.error?.message ??
       `Admin request failed (${response.status})`;
     throw new Error(message);
@@ -173,7 +178,9 @@ async function parseJsonResponse<T>(response: Response): Promise<T> {
 async function parseJsonEnvelopeResponse<T>(response: Response): Promise<T> {
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
-    const message = payload?.message ?? payload?.data?.message ??
+    const message =
+      payload?.message ??
+      payload?.data?.message ??
       payload?.error?.message ??
       `Admin request failed (${response.status})`;
     throw new Error(message);
@@ -185,42 +192,156 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function numberValue(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function textValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function usageTotals(value: unknown = {}): AdminOverview["llmTotals"] {
+  const source = isRecord(value) ? value : {};
+  return {
+    inputTokens: numberValue(source.inputTokens),
+    outputTokens: numberValue(source.outputTokens),
+    reasoningTokens: numberValue(source.reasoningTokens),
+    totalTokens: numberValue(source.totalTokens),
+    totalCostUsd: numberValue(source.totalCostUsd),
+    totalCalls: numberValue(source.totalCalls),
+  };
+}
+
+function normalizeOverview(value: unknown): AdminOverview {
+  const source = isRecord(value) ? value : {};
+  const threads = isRecord(source.threadTotals) ? source.threadTotals : {};
+  const messages = isRecord(source.messageTotals) ? source.messageTotals : {};
+  const participants = isRecord(source.participantTotals)
+    ? source.participantTotals
+    : {};
+  return {
+    threadTotals: {
+      total: numberValue(threads.total),
+      active: numberValue(threads.active),
+      archived: numberValue(threads.archived),
+      closed: numberValue(threads.closed),
+    },
+    messageTotals: {
+      total: numberValue(messages.total),
+    },
+    participantTotals: {
+      total: numberValue(participants.total),
+      human: numberValue(participants.human),
+      agent: numberValue(participants.agent),
+      tool: numberValue(participants.tool),
+      job: numberValue(participants.job),
+    },
+    llmTotals: usageTotals(source.llmTotals),
+  };
+}
+
+function normalizeActivity(value: unknown): AdminActivityPoint[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).map((point) => ({
+    ...usageTotals(point),
+    bucket: textValue(point.bucket) ?? "",
+    messageCount: numberValue(point.messageCount),
+    toolCallCount: numberValue(point.toolCallCount),
+  }));
+}
+
+function normalizeAgent(value: unknown): AdminAgentSummary | undefined {
+  if (!isRecord(value)) return undefined;
+  const agentId = textValue(value.agentId ?? value.id);
+  if (!agentId) return undefined;
+  return {
+    agentId,
+    displayName: textValue(value.displayName ?? value.name) ?? agentId,
+    role: textValue(value.role) ?? null,
+    capabilities: isRecord(value.capabilities) ? value.capabilities : {},
+  };
+}
+
+function normalizeThread(value: unknown): AdminThreadDetail {
+  const source = isRecord(value) ? value : {};
+  const id = textValue(source.id) ?? "";
+  const metadata = isRecord(source.metadata) ? source.metadata : null;
+  return {
+    id,
+    name: textValue(source.name) ?? textValue(source.externalId) ?? id,
+    externalId: textValue(source.externalId) ?? null,
+    description: textValue(source.description) ?? null,
+    participants: Array.isArray(source.participants)
+      ? source.participants
+          .map((participant) =>
+            isRecord(participant) ? textValue(participant.id) : undefined
+          )
+          .filter((id): id is string => Boolean(id))
+      : null,
+    status: textValue(source.status) ?? "active",
+    summary: textValue(metadata?.summary) ?? null,
+    mode: textValue(metadata?.mode) ?? null,
+    metadata,
+    createdAt: textValue(source.createdAt) ?? null,
+    updatedAt: textValue(source.updatedAt) ?? null,
+  };
+}
+
+function normalizeMessage(value: unknown): AdminMessage | undefined {
+  if (!isRecord(value)) return undefined;
+  const id = textValue(value.id);
+  const threadId = textValue(value.threadId);
+  if (!id || !threadId) return undefined;
+  const metadata = isRecord(value.metadata) ? value.metadata : null;
+  return {
+    id,
+    threadId,
+    sender: isRecord(value.sender) ? value.sender : {},
+    recipientIds: Array.isArray(value.recipientIds)
+      ? value.recipientIds.filter((id): id is string => typeof id === "string")
+      : [],
+    content: Array.isArray(value.content) ? value.content : [],
+    metadata,
+    createdAt: textValue(value.createdAt) ?? null,
+    updatedAt: textValue(value.updatedAt) ?? null,
+  };
+}
+
 function normalizeMessagePageInfo(
   value: unknown,
-  messages: AdminMessage[],
+  messages: AdminMessage[]
 ): AdminMessagePageInfo {
-  const oldestFromData = messages[0]?.id ?? null;
-  const newestFromData = messages[messages.length - 1]?.id ?? null;
+  const nextFromData = messages[messages.length - 1]?.id ?? null;
 
   if (!isRecord(value)) {
     return {
-      hasMoreBefore: false,
-      oldestMessageId: oldestFromData,
-      newestMessageId: newestFromData,
+      hasMore: false,
+      next: nextFromData,
     };
   }
 
   return {
-    hasMoreBefore: value.hasMoreBefore === true,
-    oldestMessageId: typeof value.oldestMessageId === "string"
-      ? value.oldestMessageId
-      : oldestFromData,
-    newestMessageId: typeof value.newestMessageId === "string"
-      ? value.newestMessageId
-      : newestFromData,
+    hasMore: value.hasMore === true,
+    next: typeof value.next === "string" ? value.next : nextFromData,
   };
 }
 
 function normalizeMessagePage(payload: unknown): AdminMessagePage {
-  const candidate = isRecord(payload) && isRecord(payload.data) &&
-      Array.isArray(payload.data.data)
-    ? payload.data
-    : payload;
-  const data = isRecord(candidate) && Array.isArray(candidate.data)
-    ? candidate.data as AdminMessage[]
-    : Array.isArray(candidate)
-    ? candidate as AdminMessage[]
-    : [];
+  const candidate =
+    isRecord(payload) &&
+    isRecord(payload.data) &&
+    Array.isArray(payload.data.data)
+      ? payload.data
+      : payload;
+  const source =
+    isRecord(candidate) && Array.isArray(candidate.data)
+      ? candidate.data
+      : Array.isArray(candidate)
+      ? candidate
+      : [];
+  const data = source
+    .map(normalizeMessage)
+    .filter((message): message is AdminMessage => Boolean(message));
   const pageInfo = isRecord(candidate)
     ? normalizeMessagePageInfo(candidate.pageInfo, data)
     : normalizeMessagePageInfo(undefined, data);
@@ -228,9 +349,72 @@ function normalizeMessagePage(payload: unknown): AdminMessagePage {
   return { data, pageInfo };
 }
 
+function normalizeUsage(value: unknown): AdminUsageResponse {
+  const payload =
+    isRecord(value) && Array.isArray(value.data) ? value : { data: value };
+  const data = (Array.isArray(payload.data) ? payload.data : [])
+    .filter(isRecord)
+    .map((record) => ({
+      id: textValue(record.id) ?? "",
+      kind: textValue(record.kind) ?? null,
+      resource: textValue(record.resource) ?? null,
+      provider: textValue(record.provider) ?? null,
+      model: textValue(record.model) ?? null,
+      operation: textValue(record.operation) ?? null,
+      status: textValue(record.status) ?? null,
+      threadId: textValue(record.threadId) ?? null,
+      agentId: textValue(record.agentId) ?? null,
+      initiatedById: textValue(record.initiatedById) ?? null,
+      occurredAt: textValue(record.occurredAt) ?? null,
+      createdAt: textValue(record.createdAt) ?? null,
+      inputTokens:
+        typeof record.inputTokens === "number" ? record.inputTokens : null,
+      outputTokens:
+        typeof record.outputTokens === "number" ? record.outputTokens : null,
+      reasoningTokens:
+        typeof record.reasoningTokens === "number"
+          ? record.reasoningTokens
+          : null,
+      totalTokens:
+        typeof record.totalTokens === "number" ? record.totalTokens : null,
+      inputCostUsd:
+        typeof record.inputCostUsd === "number" ? record.inputCostUsd : null,
+      outputCostUsd:
+        typeof record.outputCostUsd === "number" ? record.outputCostUsd : null,
+      reasoningCostUsd:
+        typeof record.reasoningCostUsd === "number"
+          ? record.reasoningCostUsd
+          : null,
+      cacheReadInputCostUsd:
+        typeof record.cacheReadInputCostUsd === "number"
+          ? record.cacheReadInputCostUsd
+          : null,
+      cacheCreationInputCostUsd:
+        typeof record.cacheCreationInputCostUsd === "number"
+          ? record.cacheCreationInputCostUsd
+          : null,
+      totalCostUsd:
+        typeof record.totalCostUsd === "number" ? record.totalCostUsd : null,
+      metrics: isRecord(record.metrics) ? record.metrics : null,
+    }))
+    .filter((record) => record.id);
+  const pageInfo = isRecord(payload.pageInfo) ? payload.pageInfo : {};
+  return {
+    data,
+    pageInfo: {
+      hasMore: pageInfo.hasMore === true,
+      next: textValue(pageInfo.next) ?? null,
+    },
+  };
+}
+
 function isQueueEvent(value: unknown): value is AdminQueueEvent {
-  return isRecord(value) && typeof value.id === "string" &&
-    typeof value.threadId === "string" && typeof value.eventType === "string";
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.threadId === "string" &&
+    typeof value.eventType === "string"
+  );
 }
 
 function normalizeQueueEvent(value: unknown): AdminQueueEvent | undefined {
@@ -248,14 +432,14 @@ function normalizeQueueEvents(value: unknown): AdminQueueEvent[] {
 }
 
 export function createAdminClient(
-  options: AdminClientOptions = {},
+  options: AdminClientOptions = {}
 ): CopilotzAdminClient {
   const baseUrl = resolveBaseUrl(options.baseUrl);
   const paths = { ...DEFAULT_PATHS, ...options.paths };
 
   const requestJson = async <T>(
     path: string,
-    params?: Record<string, string | undefined>,
+    params?: Record<string, string | undefined>
   ): Promise<T> => {
     const url = buildUrl(baseUrl, path, params);
     const response = await fetch(url.toString(), {
@@ -266,7 +450,7 @@ export function createAdminClient(
 
   const requestEnvelopeJson = async <T>(
     path: string,
-    params?: Record<string, string | undefined>,
+    params?: Record<string, string | undefined>
   ): Promise<T> => {
     const url = buildUrl(baseUrl, path, params);
     const response = await fetch(url.toString(), {
@@ -279,14 +463,14 @@ export function createAdminClient(
     method: "POST" | "PUT" | "DELETE",
     path: string,
     data?: Record<string, unknown>,
-    params?: Record<string, string | undefined>,
+    params?: Record<string, string | undefined>
   ): Promise<T> => {
     const url = buildUrl(baseUrl, path, params);
     const response = await fetch(url.toString(), {
       method,
       headers: await mergeHeaders(
         data ? { "Content-Type": "application/json" } : {},
-        options.getRequestHeaders,
+        options.getRequestHeaders
       ),
       ...(data ? { body: JSON.stringify(data) } : {}),
     });
@@ -298,43 +482,48 @@ export function createAdminClient(
     paths,
     getOverview: async ({ range = "7d", namespace } = {}) => {
       const windowRange = getRangeWindow(range);
-      return await requestJson<AdminOverview>(`${paths.adminBase}/overview`, {
-        namespace,
-        from: windowRange.from,
-        to: windowRange.to,
-      });
+      const payload = await requestJson<unknown>(
+        `${paths.adminBase}/overview`,
+        {
+          namespace,
+          from: windowRange.from,
+          to: windowRange.to,
+        }
+      );
+      return normalizeOverview(payload);
     },
     getActivity: async ({ range = "7d", interval = "day", namespace } = {}) => {
       const windowRange = getRangeWindow(range);
-      return await requestJson<AdminActivityPoint[]>(
+      const payload = await requestJson<unknown>(
         `${paths.adminBase}/activity`,
         {
           namespace,
           interval,
           from: windowRange.from,
           to: windowRange.to,
-        },
+        }
       );
+      return normalizeActivity(payload);
     },
-    getUsage: async (filters = {}) =>
-      await requestJson<AdminUsageResponse>(`${paths.adminBase}/usage`, {
-        from: filters.from,
-        to: filters.to,
-        interval: filters.interval,
-        metric: filters.metric,
-        groupBy: filters.groupBy,
-        attribution: filters.attribution,
-        kind: filters.kind,
-        threadId: filters.threadId,
-        participantId: filters.participantId,
-        participantType: filters.participantType,
-        namespace: filters.namespace,
-        provider: filters.provider,
-        model: filters.model,
-        resource: filters.resource,
-        operation: filters.operation,
-        status: filters.status,
-      }),
+    getUsage: async (filters = {}) => {
+      const payload = await requestEnvelopeJson<unknown>(
+        `${paths.adminBase}/usage`,
+        {
+          from: filters.from,
+          to: filters.to,
+          kind: filters.kind,
+          threadId: filters.threadId,
+          provider: filters.provider,
+          model: filters.model,
+          agentId: filters.agentId,
+          initiatedById: filters.initiatedById,
+          status: filters.status,
+          limit: filters.limit ? String(filters.limit) : undefined,
+          after: filters.after,
+        }
+      );
+      return normalizeUsage(payload);
+    },
     listThreads: async (listOptions = {}) =>
       await requestJson<AdminThreadSummary[]>(`${paths.adminBase}/threads`, {
         search: listOptions.search,
@@ -348,34 +537,37 @@ export function createAdminClient(
           search: listOptions.search,
           namespace: listOptions.namespace,
           limit: String(listOptions.limit ?? 25),
-        },
+        }
       ),
     listAgents: async (listOptions = {}) => {
       const windowRange = getRangeWindow(listOptions.range ?? "7d");
-      return await requestJson<AdminAgentSummary[]>(
-        `${paths.adminBase}/agents`,
-        {
-          search: listOptions.search,
-          namespace: listOptions.namespace,
-          from: windowRange.from,
-          to: windowRange.to,
-          limit: String(listOptions.limit ?? 25),
-        },
-      );
+      const payload = await requestJson<unknown>(`${paths.adminBase}/agents`, {
+        search: listOptions.search,
+        namespace: listOptions.namespace,
+        from: windowRange.from,
+        to: windowRange.to,
+        limit: String(listOptions.limit ?? 25),
+      });
+      return (Array.isArray(payload) ? payload : [])
+        .map(normalizeAgent)
+        .filter((agent): agent is AdminAgentSummary => Boolean(agent));
     },
     getThread: async (threadId) =>
-      await requestJson<AdminThreadDetail>(
-        `${paths.threadsBase}/${encodeURIComponent(threadId)}`,
+      normalizeThread(
+        await requestJson<unknown>(
+          `${paths.threadsBase}/${encodeURIComponent(threadId)}`
+        )
       ),
     getThreadMessages: async (threadId, messageOptions = {}) => {
       const payload = await requestEnvelopeJson<unknown>(
         `${paths.threadsBase}/${encodeURIComponent(threadId)}/messages`,
         {
-          limit: messageOptions.limit
-            ? String(messageOptions.limit)
-            : undefined,
-          before: messageOptions.before,
-        },
+          query: encodeJsonParam({
+            limit: messageOptions.limit,
+            after: messageOptions.after,
+            order: "desc",
+          }),
+        }
       );
       return normalizeMessagePage(payload);
     },
@@ -394,7 +586,7 @@ export function createAdminClient(
     },
     getThreadEvent: async (threadId) => {
       const payload = await requestJson<unknown>(
-        `${paths.threadsBase}/${encodeURIComponent(threadId)}/events`,
+        `${paths.threadsBase}/${encodeURIComponent(threadId)}/events`
       );
       return normalizeQueueEvent(payload);
     },
@@ -416,9 +608,10 @@ export function createAdminClient(
         similarLimit: filters.similarLimit
           ? String(filters.similarLimit)
           : undefined,
-        minSimilarity: typeof filters.minSimilarity === "number"
-          ? String(filters.minSimilarity)
-          : undefined,
+        minSimilarity:
+          typeof filters.minSimilarity === "number"
+            ? String(filters.minSimilarity)
+            : undefined,
         relationDepth: filters.relationDepth
           ? String(filters.relationDepth)
           : undefined,
@@ -441,42 +634,42 @@ export function createAdminClient(
           filter: encodeJsonParam(listOptions.filter),
           sort: encodeJsonParam(listOptions.sort),
           populate: encodeListParam(listOptions.populate),
-        },
+        }
       ),
     getCollectionItem: async (collection, itemId, getOptions = {}) =>
       await requestJson<AdminCollectionItem>(
-        `${paths.collectionsBase}/${encodeURIComponent(collection)}/${
-          encodeURIComponent(itemId)
-        }`,
+        `${paths.collectionsBase}/${encodeURIComponent(
+          collection
+        )}/${encodeURIComponent(itemId)}`,
         {
           namespace: getOptions.namespace,
           populate: encodeListParam(getOptions.populate),
-        },
+        }
       ),
     createCollectionItem: async (collection, data, writeOptions = {}) =>
       await writeJson<AdminCollectionItem>(
         "POST",
         `${paths.collectionsBase}/${encodeURIComponent(collection)}`,
         data,
-        { namespace: writeOptions.namespace },
+        { namespace: writeOptions.namespace }
       ),
     updateCollectionItem: async (collection, itemId, data, writeOptions = {}) =>
       await writeJson<AdminCollectionItem>(
         "PUT",
-        `${paths.collectionsBase}/${encodeURIComponent(collection)}/${
-          encodeURIComponent(itemId)
-        }`,
+        `${paths.collectionsBase}/${encodeURIComponent(
+          collection
+        )}/${encodeURIComponent(itemId)}`,
         data,
-        { namespace: writeOptions.namespace },
+        { namespace: writeOptions.namespace }
       ),
     deleteCollectionItem: async (collection, itemId, writeOptions = {}) => {
       await writeJson<void>(
         "DELETE",
-        `${paths.collectionsBase}/${encodeURIComponent(collection)}/${
-          encodeURIComponent(itemId)
-        }`,
+        `${paths.collectionsBase}/${encodeURIComponent(
+          collection
+        )}/${encodeURIComponent(itemId)}`,
         undefined,
-        { namespace: writeOptions.namespace },
+        { namespace: writeOptions.namespace }
       );
     },
   };

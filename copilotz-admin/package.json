@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/admin",
-  "version": "0.67.3",
+  "version": "0.67.4",
   "description": "Copilotz admin dashboard components",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -11,6 +11,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js",
+      "require": "./dist/client.cjs"
     },
     "./styles.css": "./dist/styles.css"
   },

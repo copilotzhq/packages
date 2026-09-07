@@ -7,7 +7,10 @@ import { corePlugin } from "@copilotz/copilotz/core";
 import type { LlmAdapter } from "@copilotz/copilotz/llm";
 
 /** Minimal public Gateway/Worker composition used by the contract and browser flow. */
-export async function createHttpFixture(modelPlugin?: CopilotzPlugin) {
+export async function createHttpFixture(
+  modelPlugin?: CopilotzPlugin,
+  extraPlugins: readonly CopilotzPlugin[] = [],
+) {
   const database = await openManagedOminipgDatabase({ url: ":memory:" });
   const adapter: LlmAdapter = {
     call() {
@@ -62,6 +65,7 @@ export async function createHttpFixture(modelPlugin?: CopilotzPlugin) {
         },
         adapters: { llm: { test: adapter } },
       }),
+      ...extraPlugins,
       createServerPlugin({
         authenticate(request) {
           return {

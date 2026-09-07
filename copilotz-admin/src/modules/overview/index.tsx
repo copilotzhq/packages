@@ -1,7 +1,6 @@
 import React from "react";
 import {
   Activity,
-  AlertTriangle,
   Bot,
   MessageSquare,
   Sparkles,
@@ -29,19 +28,23 @@ export function overviewModule(): AdminModule {
     icon: Activity,
     id: "overview",
     label: "Overview",
-    navItems: [{
-      group: "operate",
-      icon: Activity,
-      id: "overview",
-      label: "Overview",
-      order: 10,
-      routeId: "overview",
-    }],
-    routes: [{
-      id: "overview",
-      title: "Overview",
-      render: (context) => <OverviewPage context={context} />,
-    }],
+    navItems: [
+      {
+        group: "operate",
+        icon: Activity,
+        id: "overview",
+        label: "Overview",
+        order: 10,
+        routeId: "overview",
+      },
+    ],
+    routes: [
+      {
+        id: "overview",
+        title: "Overview",
+        render: (context) => <OverviewPage context={context} />,
+      },
+    ],
   };
 }
 
@@ -70,16 +73,22 @@ function OverviewPage({ context }: { context: AdminRuntimeContext }) {
         namespace: context.scope.namespace || undefined,
         range: "7d",
       }),
-    ]).then(([nextOverview, nextThreads, nextAgents]) => {
-      if (!active) return;
-      setOverview(nextOverview);
-      setThreads(nextThreads);
-      setAgents(nextAgents);
-    }).catch((cause) => {
-      if (active) setError(cause instanceof Error ? cause.message : "Failed to load overview");
-    }).finally(() => {
-      if (active) setIsLoading(false);
-    });
+    ])
+      .then(([nextOverview, nextThreads, nextAgents]) => {
+        if (!active) return;
+        setOverview(nextOverview);
+        setThreads(nextThreads);
+        setAgents(nextAgents);
+      })
+      .catch((cause) => {
+        if (active)
+          setError(
+            cause instanceof Error ? cause.message : "Failed to load overview"
+          );
+      })
+      .finally(() => {
+        if (active) setIsLoading(false);
+      });
     return () => {
       active = false;
     };
@@ -88,9 +97,6 @@ function OverviewPage({ context }: { context: AdminRuntimeContext }) {
   if (error) {
     return <EmptyState title="Unable to load overview" description={error} />;
   }
-
-  const queueFailures = (overview?.queueTotals.failed ?? 0) +
-    (overview?.queueTotals.expired ?? 0);
 
   return (
     <div className="space-y-4">
@@ -105,28 +111,39 @@ function OverviewPage({ context }: { context: AdminRuntimeContext }) {
       <MetricStrip
         items={[
           {
-            detail: `${formatNumber(overview?.threadTotals.active ?? 0)} active`,
+            detail: `${formatNumber(
+              overview?.threadTotals.active ?? 0
+            )} active`,
             icon: MessageSquare,
             label: "Threads",
             value: formatNumber(overview?.threadTotals.total ?? 0),
           },
           {
-            detail: `${formatNumber(overview?.participantTotals.agents ?? 0)} agents`,
+            detail: `${formatNumber(
+              overview?.participantTotals.agent ?? 0
+            )} agents`,
             icon: Users,
             label: "Participants",
             value: formatNumber(overview?.participantTotals.total ?? 0),
           },
           {
-            detail: `${formatNumber(overview?.llmTotals.totalCalls ?? 0)} LLM calls`,
+            detail: `${formatNumber(
+              overview?.llmTotals.totalCalls ?? 0
+            )} LLM calls`,
             icon: Wallet,
             label: "Cost",
-            value: formatMetricValue(overview?.llmTotals.totalCostUsd ?? 0, "cost"),
+            value: formatMetricValue(
+              overview?.llmTotals.totalCostUsd ?? 0,
+              "cost"
+            ),
           },
           {
-            detail: `${formatNumber(queueFailures)} failures/expired`,
-            icon: queueFailures > 0 ? AlertTriangle : Sparkles,
-            label: "Queue",
-            value: formatNumber(overview?.queueTotals.total ?? 0),
+            detail: `${formatNumber(
+              overview?.messageTotals.total ?? 0
+            )} messages`,
+            icon: Sparkles,
+            label: "Closed threads",
+            value: formatNumber(overview?.threadTotals.closed ?? 0),
           },
         ]}
       />
@@ -137,7 +154,8 @@ function OverviewPage({ context }: { context: AdminRuntimeContext }) {
             rows={threads}
             getRowKey={(thread) => thread.threadId}
             onRowClick={(thread) =>
-              context.navigate("threads.detail", { threadId: thread.threadId })}
+              context.navigate("threads.detail", { threadId: thread.threadId })
+            }
             columns={[
               {
                 id: "name",
@@ -148,7 +166,9 @@ function OverviewPage({ context }: { context: AdminRuntimeContext }) {
                       {thread.name || thread.threadId}
                     </div>
                     <div className="max-w-md truncate text-xs text-muted-foreground">
-                      {thread.summary ?? thread.lastMessagePreview ?? "No summary"}
+                      {thread.summary ??
+                        thread.lastMessagePreview ??
+                        "No summary"}
                     </div>
                   </div>
                 ),
@@ -168,12 +188,13 @@ function OverviewPage({ context }: { context: AdminRuntimeContext }) {
           />
         </section>
         <section className="space-y-3">
-          <PageHeader title="Top Agents" />
+          <PageHeader title="Configured Agents" />
           <ResourceTable
             rows={agents}
-            getRowKey={(agent) => `${agent.namespace}:${agent.agentId}`}
+            getRowKey={(agent) => agent.agentId}
             onRowClick={(agent) =>
-              context.navigate("agents.detail", { agentId: agent.agentId })}
+              context.navigate("agents.detail", { agentId: agent.agentId })
+            }
             columns={[
               {
                 id: "agent",
@@ -192,15 +213,15 @@ function OverviewPage({ context }: { context: AdminRuntimeContext }) {
               },
               {
                 align: "right",
-                id: "calls",
-                header: "Calls",
-                render: (agent) => formatNumber(agent.llmCallCount),
+                id: "role",
+                header: "Role",
+                render: (agent) => agent.role ?? "-",
               },
               {
                 align: "right",
                 id: "cost",
-                header: "Cost",
-                render: (agent) => formatMetricValue(agent.totalCostUsd, "cost"),
+                header: "Capabilities",
+                render: (agent) => Object.keys(agent.capabilities).length,
               },
             ]}
           />

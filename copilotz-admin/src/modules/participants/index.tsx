@@ -1,7 +1,6 @@
 import React from "react";
 import { Users } from "lucide-react";
 import type {
-  AdminParticipantDetail,
   AdminParticipantSummary,
 } from "../../api/types";
 import type { AdminModule, AdminRuntimeContext } from "../../core/types";
@@ -121,8 +120,7 @@ function ParticipantsPage({ context }: { context: AdminRuntimeContext }) {
             {
               id: "scope",
               header: "Scope",
-              render: (participant) =>
-                participant.isGlobal ? "Global" : participant.namespace,
+              render: (participant) => participant.namespace,
             },
             {
               align: "right",
@@ -145,16 +143,20 @@ function ParticipantsPage({ context }: { context: AdminRuntimeContext }) {
 
 function ParticipantDetailPage({ context }: { context: AdminRuntimeContext }) {
   const participantId = context.route.params?.participantId;
-  const [participant, setParticipant] = React.useState<AdminParticipantDetail | null>(null);
+  const [participant, setParticipant] = React.useState<AdminParticipantSummary | null>(null);
   const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!participantId) return;
     let active = true;
     setError(null);
-    void context.client.getCollectionItem("participant", participantId, {
-      namespace: context.scope.namespace || undefined,
-    }).then((next) => {
+    void context.client.listParticipants({
+      search: participantId,
+      limit: 50,
+    }).then((participants) => {
+      const next = participants.find((candidate) =>
+        candidate.id === participantId || candidate.externalId === participantId
+      ) ?? null;
       if (active) setParticipant(next);
     }).catch((cause) => {
       if (active) setError(cause instanceof Error ? cause.message : "Failed to load participant");
@@ -170,10 +172,6 @@ function ParticipantDetailPage({ context }: { context: AdminRuntimeContext }) {
   if (error) {
     return <EmptyState title="Unable to load participant" description={error} />;
   }
-
-  const memories = Array.isArray(participant?.memories)
-    ? participant.memories.length
-    : 0;
 
   return (
     <div className="space-y-4">
@@ -194,7 +192,7 @@ function ParticipantDetailPage({ context }: { context: AdminRuntimeContext }) {
         items={[
           { label: "Type", value: String(participant?.participantType ?? "unknown") },
           { label: "Namespace", value: String(participant?.namespace ?? context.scope.namespace ?? "global") },
-          { label: "Memories", value: formatNumber(memories) },
+          { label: "Messages", value: formatNumber(participant?.messageCount ?? 0) },
         ]}
       />
       <JsonPanel title="Advanced JSON" value={participant} minHeight={460} />

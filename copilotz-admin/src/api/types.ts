@@ -68,34 +68,42 @@ export interface AdminOverview {
     total: number;
     active: number;
     archived: number;
-  };
-  queueTotals: {
-    total: number;
-    pending: number;
-    processing: number;
-    completed: number;
-    failed: number;
-    expired: number;
-    overwritten: number;
+    closed: number;
   };
   messageTotals: {
     total: number;
-    toolCallMessages: number;
   };
   participantTotals: {
     total: number;
-    humans: number;
-    agents: number;
-    jobs?: number;
+    human: number;
+    agent: number;
+    tool: number;
+    job: number;
   };
-  llmTotals: AdminUsageTotals;
+  llmTotals: Pick<
+    AdminUsageTotals,
+    | "totalCalls"
+    | "inputTokens"
+    | "outputTokens"
+    | "reasoningTokens"
+    | "totalTokens"
+    | "totalCostUsd"
+  >;
 }
 
-export interface AdminActivityPoint extends AdminUsageTotals {
+export interface AdminActivityPoint
+  extends Pick<
+    AdminUsageTotals,
+    | "totalCalls"
+    | "inputTokens"
+    | "outputTokens"
+    | "reasoningTokens"
+    | "totalTokens"
+    | "totalCostUsd"
+  > {
   bucket: string;
   messageCount: number;
-  toolCallMessageCount: number;
-  llmCallCount: number;
+  toolCallCount: number;
 }
 
 export interface AdminThreadSummary {
@@ -112,29 +120,27 @@ export interface AdminThreadSummary {
 }
 
 export interface AdminParticipantSummary {
+  id: string;
   externalId: string;
   displayName: string;
-  participantType: "human" | "agent" | "job";
+  participantType: "human" | "agent" | "tool" | "job";
   namespace: string;
-  isGlobal: boolean;
   messageCount: number;
   threadCount: number;
   lastActivityAt: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string | null;
+  updatedAt: string | null;
 }
 
-export interface AdminAgentSummary extends AdminUsageTotals {
+export interface AdminAgentSummary {
   agentId: string;
   displayName: string;
-  description: string | null;
-  isConfigured: boolean;
-  namespace: string;
-  isGlobal: boolean;
-  messageCount: number;
-  llmCallCount: number;
-  toolCallMessageCount: number;
-  lastActivityAt: string | null;
+  role: string | null;
+  capabilities: Record<string, unknown>;
 }
 
+/** @deprecated Aggregate chart points are a caller-supplied presentation type. */
 export interface AdminUsagePoint extends AdminUsageTotals {
   bucket: string;
   groupKey: string;
@@ -142,28 +148,48 @@ export interface AdminUsagePoint extends AdminUsageTotals {
 }
 
 export interface AdminUsageResponse {
-  points: AdminUsagePoint[];
-  rows: AdminUsagePoint[];
-  totals: AdminUsageTotals;
+  data: AdminUsageRecord[];
+  pageInfo: { hasMore: boolean; next: string | null };
+}
+
+export interface AdminUsageRecord {
+  id: string;
+  kind: string | null;
+  resource: string | null;
+  provider: string | null;
+  model: string | null;
+  operation: string | null;
+  status: string | null;
+  threadId: string | null;
+  agentId: string | null;
+  initiatedById: string | null;
+  occurredAt: string | null;
+  createdAt: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  reasoningTokens: number | null;
+  totalTokens: number | null;
+  inputCostUsd: number | null;
+  outputCostUsd: number | null;
+  reasoningCostUsd: number | null;
+  cacheReadInputCostUsd: number | null;
+  cacheCreationInputCostUsd: number | null;
+  totalCostUsd: number | null;
+  metrics: Record<string, unknown> | null;
 }
 
 export interface AdminUsageFilters {
   from?: string;
   to?: string;
-  interval?: AdminUsageInterval;
-  metric?: AdminUsageMetricKind;
-  groupBy?: AdminUsageGroupBy;
-  attribution?: AdminUsageAttribution;
   kind?: AdminUsageKind;
   threadId?: string;
-  participantId?: string;
-  participantType?: "all" | "human" | "agent" | "job";
-  namespace?: string;
   provider?: string;
   model?: string;
-  resource?: string;
-  operation?: string;
+  agentId?: string;
+  initiatedById?: string;
   status?: string;
+  limit?: number;
+  after?: string;
 }
 
 export interface AdminEventFilters {
@@ -315,23 +341,17 @@ export interface AdminThreadDetail {
 export interface AdminMessage {
   id: string;
   threadId: string;
-  senderUserId: string | null;
-  senderId: string | null;
-  senderType: "agent" | "user" | "system" | "tool";
-  targetId: string | null;
-  content: string | null;
-  toolCallId: string | null;
-  toolCalls: unknown[] | null;
-  reasoning: string | null;
+  sender: Record<string, unknown>;
+  recipientIds: string[];
+  content: unknown[];
   metadata: Record<string, unknown> | null;
   createdAt: string | null;
   updatedAt: string | null;
 }
 
 export interface AdminMessagePageInfo {
-  hasMoreBefore: boolean;
-  oldestMessageId: string | null;
-  newestMessageId: string | null;
+  hasMore: boolean;
+  next: string | null;
 }
 
 export interface AdminMessagePage {
