@@ -1,5 +1,11 @@
 # @copilotz/chat-adapter
 
+## 0.67.0 — 2026-09-06
+
+Consume authorized, resolved Core history directly without per-Asset requests or
+a history byte cache. Preserve tool-result reconciliation, current-prefix replay,
+and older-page boundaries. Requires Copilotz and synchronized frontend 0.67.0.
+
 ## 0.66.2 — 2026-09-05
 
 Preserve the selected participant team separately from each message recipient.
