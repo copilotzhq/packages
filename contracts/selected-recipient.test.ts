@@ -59,13 +59,13 @@ for (const existing of [false, true]) {
           name: id,
           role: "assistant",
           instructions: `ACTIVE_AGENT=${id}`,
-          models: { generate: ["test"] },
+          models: { generate: [{ connection: "test", model: "test" }] },
           capabilities: {
             tools: [],
             agents: participants.filter((other) => other !== id),
           },
         }])),
-        models: { test: { adapter: "test", model: "test" } },
+        llmConnections: { test: { adapter: "test" } },
       },
       adapters: { llm: { test: adapter } },
     }));

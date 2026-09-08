@@ -1,5 +1,9 @@
 # @copilotz/chat-ui
 
+## 0.68.0 — 2026-09-07
+
+Synchronize the frontend package suite with Copilotz 0.68.0 Agent connections.
+
 ## 0.66.0 — 2026-09-05
 
 Expose browser-safe MIME helpers through ./model so the controller can reuse them without importing React. The CopilotzChat component contract and backend-agnostic UI remain available.

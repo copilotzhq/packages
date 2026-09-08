@@ -30,11 +30,11 @@ Deno.test("live tokens continue while canonical history reconciliation is slow o
           name: "Support",
           role: "assistant",
           instructions: "Reply",
-          models: { generate: ["test"] },
+          models: { generate: [{ connection: "test", model: "test" }] },
           capabilities: { tools: [] },
         },
       },
-      models: { test: { adapter: "test", model: "test" } },
+      llmConnections: { test: { adapter: "test" } },
     },
     adapters: {
       llm: {

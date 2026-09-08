@@ -1,5 +1,9 @@
 # @copilotz/chat-adapter
 
+## 0.68.0 — 2026-09-07
+
+Synchronize with Copilotz 0.68.0, including the Agent connection contract.
+
 ## 0.67.2 — 2026-09-06
 
 Synchronize with Copilotz 0.67.2, which fixes automatic Responses routing and

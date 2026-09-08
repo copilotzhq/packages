@@ -20,13 +20,13 @@ Deno.test("reasoning failure recovers through the real facade and controller wit
           name: "Support",
           role: "support",
           instructions: "Reply",
-          models: { generate: ["primary", "backup"] },
+          models: { generate: [{ connection: "primary", model: "primary" }, { connection: "backup", model: "backup" }] },
           capabilities: { tools: [] },
         },
       },
-      models: {
-        primary: { adapter: "primary", model: "primary" },
-        backup: { adapter: "backup", model: "backup" },
+      llmConnections: {
+        primary: { adapter: "primary" },
+        backup: { adapter: "backup" },
       },
     },
     adapters: {

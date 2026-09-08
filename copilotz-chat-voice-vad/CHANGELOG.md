@@ -1,5 +1,9 @@
 # @copilotz/chat-voice-vad
 
+## 0.68.0 — 2026-09-07
+
+Synchronize the frontend package suite with Copilotz 0.68.0 Agent connections.
+
 ## 0.66.0 — 2026-09-05
 
 Synchronize peer dependencies with chat-ui 0.66.0.
