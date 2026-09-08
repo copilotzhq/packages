@@ -12,7 +12,7 @@
     "@copilotz/copilotz/core": "jsr:@copilotz/copilotz@0.68.0/core",
     "@copilotz/copilotz/admin": "jsr:@copilotz/copilotz@0.68.0/admin",
     "@copilotz/copilotz/core/server": "jsr:@copilotz/copilotz@0.68.0/core/server",
-    "@copilotz/copilotz/core/client": "jsr:@copilotz/copilotz@0.68.0/client",
+    "@copilotz/copilotz/core/client": "jsr:@copilotz/copilotz@0.68.0/core/client",
     "@copilotz/copilotz/client": "jsr:@copilotz/copilotz@0.68.0/client",
     "@copilotz/copilotz/content": "jsr:@copilotz/copilotz@0.68.0/content",
     "@copilotz/copilotz/llm": "jsr:@copilotz/copilotz@0.68.0/llm",
