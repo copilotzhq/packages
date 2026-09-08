@@ -37,22 +37,11 @@ export {
   usageModule,
 } from "./modules";
 export {
-  addUsageTotals,
-  aggregateUsageRows,
-  buildUsageChartState,
-  EMPTY_USAGE_TOTALS,
   formatCompactMetric,
   formatMetricValue,
   formatNumber,
   formatPercent,
-  formatUsageBucket,
-  getUsageDimensionLabel,
-  getUsageGroupLabel,
-  getUsageMetricLabel,
-  getUsageRange,
-  getUsageTotalValue,
 } from "./modules";
-export type * from "./modules";
 export { defaultAdminConfig, mergeAdminConfig } from "./config";
 export { useCopilotzAdmin } from "./useCopilotzAdmin";
 export type {

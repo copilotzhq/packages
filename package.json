@@ -1,9 +1,10 @@
 {
   "name": "copilotz-packages",
-  "version": "0.68.0",
+  "version": "0.69.1",
   "private": true,
   "workspaces": [
     "copilotz-admin",
+    "copilotz-usage",
     "copilotz-chat-ui",
     "copilotz-chat-adapter",
     "copilotz-chat-voice-moonshine",
@@ -11,7 +12,7 @@
   ],
   "scripts": {
     "changeset": "changeset",
-    "build": "npm -w copilotz-admin run build && npm -w copilotz-chat-ui run build && npm -w copilotz-chat-adapter run build && npm -w copilotz-chat-voice-moonshine run build && npm -w copilotz-chat-voice-vad run build",
+    "build": "npm -w copilotz-usage run build && npm -w copilotz-admin run build && npm -w copilotz-chat-ui run build && npm -w copilotz-chat-adapter run build && npm -w copilotz-chat-voice-moonshine run build && npm -w copilotz-chat-voice-vad run build",
     "build:css": "npm -w copilotz-chat-ui run build:css",
     "check:versions": "node scripts/sync-versions.mjs --check",
     "dev": "npm -w copilotz-admin run dev & npm -w copilotz-chat-ui run dev & npm -w copilotz-chat-adapter run dev & npm -w copilotz-chat-voice-moonshine run dev & npm -w copilotz-chat-voice-vad run dev",

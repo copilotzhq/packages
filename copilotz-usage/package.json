@@ -1,0 +1,55 @@
+{
+  "name": "@copilotz/usage",
+  "version": "0.69.1",
+  "description": "Reusable Copilotz usage analytics UI",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./styles.css": "./dist/styles.css",
+    "./client": {
+      "types": "./dist/client.d.ts",
+      "import": "./dist/client.js",
+      "require": "./dist/client.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "scripts": {
+    "build": "tsup && cp src/styles.css dist/styles.css",
+    "test": "npm run build && node --test test/*.test.mjs"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.10",
+    "@types/react-dom": "^19.1.7",
+    "tsup": "^8.3.5",
+    "typescript": "~5.8.2"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@copilotz/copilotz": "npm:@jsr/copilotz__copilotz@0.69.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/copilotzhq/packages.git",
+    "directory": "copilotz-usage"
+  },
+  "homepage": "https://github.com/copilotzhq/packages/tree/main/copilotz-usage"
+}

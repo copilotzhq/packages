@@ -1,5 +1,13 @@
 # @copilotz/admin
 
+## 0.69.1 — 2026-09-07
+
+Add the reusable Usage analytics module, backed by `@copilotz/usage`.
+
+**Breaking:** `createAdminClient().getUsage()` is replaced by
+`getUsageDataSource()`, which exposes analytics and attempts queries and their
+new summary DTO.
+
 ## 0.68.0 — 2026-09-07
 
 Synchronize the frontend package suite with Copilotz 0.68.0 Agent connections.

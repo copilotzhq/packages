@@ -44,6 +44,7 @@ jobs:
       - name: Test built packages and browser controller
         run: |
           node --test copilotz-admin/test/*.test.mjs
+          node --test copilotz-usage/test/*.test.mjs
           node --test copilotz-chat-ui/tests/**/*.test.js
           node --test --experimental-strip-types copilotz-chat-ui/tests/**/*.test.ts
           npm -w copilotz-chat-adapter test

@@ -16,10 +16,12 @@ import type {
   AdminQueueEvent,
   AdminThreadDetail,
   AdminThreadSummary,
-  AdminUsageFilters,
-  AdminUsageResponse,
   RequestHeadersProvider,
 } from "./types";
+import {
+  createUsageClient,
+  type UsageDataSource,
+} from "@copilotz/usage/client";
 
 export interface AdminClientPaths {
   adminBase: string;
@@ -56,7 +58,7 @@ export interface CopilotzAdminClient {
     interval?: AdminActivityInterval;
     namespace?: string;
   }): Promise<AdminActivityPoint[]>;
-  getUsage(filters?: AdminUsageFilters): Promise<AdminUsageResponse>;
+  getUsageDataSource(): UsageDataSource;
   listThreads(options?: AdminListOptions): Promise<AdminThreadSummary[]>;
   listParticipants(
     options?: AdminListOptions
@@ -349,65 +351,6 @@ function normalizeMessagePage(payload: unknown): AdminMessagePage {
   return { data, pageInfo };
 }
 
-function normalizeUsage(value: unknown): AdminUsageResponse {
-  const payload =
-    isRecord(value) && Array.isArray(value.data) ? value : { data: value };
-  const data = (Array.isArray(payload.data) ? payload.data : [])
-    .filter(isRecord)
-    .map((record) => ({
-      id: textValue(record.id) ?? "",
-      kind: textValue(record.kind) ?? null,
-      resource: textValue(record.resource) ?? null,
-      provider: textValue(record.provider) ?? null,
-      model: textValue(record.model) ?? null,
-      operation: textValue(record.operation) ?? null,
-      status: textValue(record.status) ?? null,
-      threadId: textValue(record.threadId) ?? null,
-      agentId: textValue(record.agentId) ?? null,
-      initiatedById: textValue(record.initiatedById) ?? null,
-      occurredAt: textValue(record.occurredAt) ?? null,
-      createdAt: textValue(record.createdAt) ?? null,
-      inputTokens:
-        typeof record.inputTokens === "number" ? record.inputTokens : null,
-      outputTokens:
-        typeof record.outputTokens === "number" ? record.outputTokens : null,
-      reasoningTokens:
-        typeof record.reasoningTokens === "number"
-          ? record.reasoningTokens
-          : null,
-      totalTokens:
-        typeof record.totalTokens === "number" ? record.totalTokens : null,
-      inputCostUsd:
-        typeof record.inputCostUsd === "number" ? record.inputCostUsd : null,
-      outputCostUsd:
-        typeof record.outputCostUsd === "number" ? record.outputCostUsd : null,
-      reasoningCostUsd:
-        typeof record.reasoningCostUsd === "number"
-          ? record.reasoningCostUsd
-          : null,
-      cacheReadInputCostUsd:
-        typeof record.cacheReadInputCostUsd === "number"
-          ? record.cacheReadInputCostUsd
-          : null,
-      cacheCreationInputCostUsd:
-        typeof record.cacheCreationInputCostUsd === "number"
-          ? record.cacheCreationInputCostUsd
-          : null,
-      totalCostUsd:
-        typeof record.totalCostUsd === "number" ? record.totalCostUsd : null,
-      metrics: isRecord(record.metrics) ? record.metrics : null,
-    }))
-    .filter((record) => record.id);
-  const pageInfo = isRecord(payload.pageInfo) ? payload.pageInfo : {};
-  return {
-    data,
-    pageInfo: {
-      hasMore: pageInfo.hasMore === true,
-      next: textValue(pageInfo.next) ?? null,
-    },
-  };
-}
-
 function isQueueEvent(value: unknown): value is AdminQueueEvent {
   return (
     isRecord(value) &&
@@ -436,6 +379,10 @@ export function createAdminClient(
 ): CopilotzAdminClient {
   const baseUrl = resolveBaseUrl(options.baseUrl);
   const paths = { ...DEFAULT_PATHS, ...options.paths };
+  const usageSource = createUsageClient({
+    baseUrl: `${baseUrl}${paths.adminBase}/usage`,
+    getRequestHeaders: options.getRequestHeaders,
+  });
 
   const requestJson = async <T>(
     path: string,
@@ -505,25 +452,7 @@ export function createAdminClient(
       );
       return normalizeActivity(payload);
     },
-    getUsage: async (filters = {}) => {
-      const payload = await requestEnvelopeJson<unknown>(
-        `${paths.adminBase}/usage`,
-        {
-          from: filters.from,
-          to: filters.to,
-          kind: filters.kind,
-          threadId: filters.threadId,
-          provider: filters.provider,
-          model: filters.model,
-          agentId: filters.agentId,
-          initiatedById: filters.initiatedById,
-          status: filters.status,
-          limit: filters.limit ? String(filters.limit) : undefined,
-          after: filters.after,
-        }
-      );
-      return normalizeUsage(payload);
-    },
+    getUsageDataSource: () => usageSource,
     listThreads: async (listOptions = {}) =>
       await requestJson<AdminThreadSummary[]>(`${paths.adminBase}/threads`, {
         search: listOptions.search,

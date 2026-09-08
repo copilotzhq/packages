@@ -30,6 +30,12 @@ export { participantsModule } from "./participants";
 export { threadsModule } from "./threads";
 export { usageModule } from "./usage";
 export {
+  formatCompactMetric,
+  formatMetricValue,
+  formatNumber,
+  formatPercent,
+} from "./usage/calculations";
+export {
   BRAIN_RELATION_GROUP_DEFINITIONS,
   BRAIN_VIEW_LABELS,
   ENTITY_FOCUS_RELATION_TYPES,
@@ -44,5 +50,3 @@ export type {
   AdminBrainRelationGroupId,
   AdminBrainView,
 } from "./brain/view-model";
-export * from "./usage/calculations";
-export type * from "./usage/types";

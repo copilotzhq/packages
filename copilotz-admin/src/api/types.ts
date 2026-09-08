@@ -147,51 +147,6 @@ export interface AdminUsagePoint extends AdminUsageTotals {
   groupLabel: string;
 }
 
-export interface AdminUsageResponse {
-  data: AdminUsageRecord[];
-  pageInfo: { hasMore: boolean; next: string | null };
-}
-
-export interface AdminUsageRecord {
-  id: string;
-  kind: string | null;
-  resource: string | null;
-  provider: string | null;
-  model: string | null;
-  operation: string | null;
-  status: string | null;
-  threadId: string | null;
-  agentId: string | null;
-  initiatedById: string | null;
-  occurredAt: string | null;
-  createdAt: string | null;
-  inputTokens: number | null;
-  outputTokens: number | null;
-  reasoningTokens: number | null;
-  totalTokens: number | null;
-  inputCostUsd: number | null;
-  outputCostUsd: number | null;
-  reasoningCostUsd: number | null;
-  cacheReadInputCostUsd: number | null;
-  cacheCreationInputCostUsd: number | null;
-  totalCostUsd: number | null;
-  metrics: Record<string, unknown> | null;
-}
-
-export interface AdminUsageFilters {
-  from?: string;
-  to?: string;
-  kind?: AdminUsageKind;
-  threadId?: string;
-  provider?: string;
-  model?: string;
-  agentId?: string;
-  initiatedById?: string;
-  status?: string;
-  limit?: number;
-  after?: string;
-}
-
 export interface AdminEventFilters {
   namespace?: string;
   threadId?: string;

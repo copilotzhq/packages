@@ -1,5 +1,9 @@
 # @copilotz/chat-adapter
 
+## 0.69.1 — 2026-09-07
+
+Synchronize with Copilotz 0.69.1.
+
 ## 0.68.0 — 2026-09-07
 
 Synchronize with Copilotz 0.68.0, including the Agent connection contract.

@@ -4,10 +4,8 @@ import { readFile } from "node:fs/promises";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import {
-  aggregateUsageRows,
   ENTITY_FOCUS_RELATION_TYPES,
   brainModule,
-  buildUsageChartState,
   collectAdminNavItems,
   collectAdminRoutes,
   collectCollectionEditors,
@@ -27,7 +25,7 @@ import {
 } from "../dist/index.js";
 
 const { chronologicalHistoryPage } = await import(
-  "../src/modules/threads/pagination.ts",
+  "../src/modules/threads/pagination.ts"
 );
 
 Object.defineProperty(globalThis, "location", {
@@ -102,19 +100,14 @@ test("root export includes reusable admin patterns", () => {
   assert.equal(typeof StatusBadge, "function");
 });
 
-test("admin client builds configurable paths and headers", async () => {
+test("admin client creates one canonical Usage source with configured path and headers", async () => {
   const seen = [];
   globalThis.fetch = async (url, init) => {
     seen.push({ url, init });
-    return new Response(
-      JSON.stringify({
-        data: { totalCalls: 0, points: [], rows: [], totals: {} },
-      }),
-      {
-        headers: { "Content-Type": "application/json" },
-        status: 200,
-      }
-    );
+    return new Response(JSON.stringify({ summary: { attempts: 0 } }), {
+      headers: { "Content-Type": "application/json" },
+      status: 200,
+    });
   };
 
   const client = createAdminClient({
@@ -123,22 +116,32 @@ test("admin client builds configurable paths and headers", async () => {
     paths: { adminBase: "/admin" },
   });
 
-  await client.getUsage({ agentId: "support", provider: "openai" });
+  const source = client.getUsageDataSource();
+  assert.equal(client.getUsageDataSource(), source);
+  await source.analytics({
+    filters: {
+      kind: "llm",
+      from: "2026-09-01T00:00:00.000Z",
+      to: "2026-09-02T00:00:00.000Z",
+      provider: "openai",
+      agentId: "support",
+    },
+  });
 
   assert.equal(seen.length, 1);
   assert.equal(
     seen[0].url,
-    "http://localhost/custom/admin/usage?provider=openai&agentId=support"
+    "/custom/admin/usage?kind=llm&from=2026-09-01T00%3A00%3A00.000Z&to=2026-09-02T00%3A00%3A00.000Z&provider=openai&agentId=support"
   );
   assert.equal(seen[0].init.headers.Authorization, "Bearer test");
 });
 
-test("admin client sends supported usage filters", async () => {
+test("admin Usage source preserves attempt pagination filters", async () => {
   const seen = [];
   globalThis.fetch = async (url, init) => {
     seen.push({ url, init });
     return new Response(
-      JSON.stringify({ data: { points: [], rows: [], totals: {} } }),
+      JSON.stringify({ items: [], pageInfo: { hasMore: false, next: null } }),
       {
         headers: { "Content-Type": "application/json" },
         status: 200,
@@ -147,20 +150,23 @@ test("admin client sends supported usage filters", async () => {
   };
 
   const client = createAdminClient({ baseUrl: "/custom" });
-  await client.getUsage({
-    kind: "tool",
-    threadId: "thread-1",
-    agentId: "support",
-    initiatedById: "person",
+  await client.getUsageDataSource().attempts({
+    filters: {
+      kind: "tool",
+      from: "2026-09-01T00:00:00.000Z",
+      to: "2026-09-02T00:00:00.000Z",
+      threadId: "thread-1",
+      agentId: "support",
+      status: "failed",
+    },
     after: "usage-10",
     limit: 50,
-    status: "failed",
   });
 
   assert.equal(seen.length, 1);
   assert.equal(
     seen[0].url,
-    "http://localhost/custom/admin/usage?kind=tool&threadId=thread-1&agentId=support&initiatedById=person&status=failed&limit=50&after=usage-10"
+    "/custom/admin/usage/attempts?kind=tool&from=2026-09-01T00%3A00%3A00.000Z&to=2026-09-02T00%3A00%3A00.000Z&threadId=thread-1&agentId=support&status=failed&after=usage-10&limit=50"
   );
 });
 
@@ -499,20 +505,7 @@ test("admin client normalizes the installed Admin and Core facade projections", 
       },
     },
     "/api/admin/usage": {
-      data: [
-        {
-          id: "usage-1",
-          kind: "llm",
-          provider: "openai",
-          model: "gpt-test",
-          inputTokens: 3,
-          outputTokens: 5,
-          totalTokens: 8,
-          totalCostUsd: 0.02,
-          occurredAt: "2026-07-07T00:00:00.000Z",
-          status: "completed",
-        },
-      ],
+      summary: { attempts: 1, totalTokens: 8 },
     },
     "/api/admin/agents": {
       data: [
@@ -532,121 +525,39 @@ test("admin client normalizes the installed Admin and Core facade projections", 
     },
   };
   globalThis.fetch = async (url) =>
-    new Response(JSON.stringify(responses[new URL(url).pathname]), {
-      headers: { "Content-Type": "application/json" },
-      status: 200,
-    });
+    new Response(
+      JSON.stringify(
+        responses[new URL(url, globalThis.location.origin).pathname]
+      ),
+      {
+        headers: { "Content-Type": "application/json" },
+        status: 200,
+      }
+    );
 
   const client = createAdminClient({ baseUrl: "/api" });
   const [overview, usage, agents, thread] = await Promise.all([
     client.getOverview(),
-    client.getUsage({ groupBy: "provider" }),
+    client.getUsageDataSource().analytics({
+      filters: {
+        kind: "llm",
+        from: "2026-07-01T00:00:00.000Z",
+        to: "2026-07-08T00:00:00.000Z",
+      },
+      groupBy: ["provider"],
+    }),
     client.listAgents(),
     client.getThread("thread-1"),
   ]);
 
   assert.equal(overview.participantTotals.human, 1);
   assert.equal(overview.participantTotals.agent, 2);
-  assert.equal(usage.data[0].totalTokens, 8);
-  assert.equal(usage.data[0].provider, "openai");
+  assert.equal(usage.summary.totalTokens, 8);
   assert.equal(agents[0].agentId, "support");
   assert.equal(agents[0].displayName, "Support");
   assert.equal(thread.name, "external-1");
   assert.deepEqual(thread.participants, ["person"]);
 });
-
-test("admin usage preserves the bounded server page without inventing totals", async () => {
-  const records = Array.from({ length: 50 }, (_, index) => ({
-    id: `usage-${index}`,
-    kind: "tool",
-    totalTokens: index,
-  }));
-  globalThis.fetch = async () =>
-    new Response(
-      JSON.stringify({
-        data: records,
-        pageInfo: { hasMore: true, next: "usage-49" },
-      }),
-      { headers: { "Content-Type": "application/json" }, status: 200 }
-    );
-  const page = await createAdminClient({ baseUrl: "/api" }).getUsage({
-    limit: 50,
-    after: "usage-0",
-    resource: "ignored-by-server",
-  });
-  assert.equal(page.data.length, 50);
-  assert.equal(page.pageInfo.hasMore, true);
-  assert.equal(page.pageInfo.next, "usage-49");
-  assert.equal("totals" in page, false);
-});
-
-test("usage calculations aggregate and build chart state", () => {
-  const points = [
-    usagePoint("2026-01-01T00:00:00.000Z", "agent-a", "Agent A", 10, 0.05),
-    usagePoint("2026-01-01T00:00:00.000Z", "agent-a", "Agent A", 15, 0.08),
-    usagePoint("2026-01-02T00:00:00.000Z", "agent-b", "Agent B", 5, 0.01),
-  ];
-
-  const rows = aggregateUsageRows(points, "tokens", "total");
-  assert.equal(rows[0].groupKey, "agent-a");
-  assert.equal(rows[0].totalTokens, 25);
-
-  const chart = buildUsageChartState(points, "cost", "total", "day");
-  assert.equal(chart.series.length, 2);
-  assert.equal(chart.data.length, 2);
-});
-
-test("usage calculations aggregate generic metering fields", () => {
-  const points = [
-    {
-      ...usagePoint("2026-01-01T00:00:00.000Z", "tool-a", "Tool A", 0, 0),
-      failedCalls: 1,
-      totalCalls: 2,
-      totalDurationMs: 1500,
-      unpricedCalls: 1,
-    },
-    {
-      ...usagePoint("2026-01-01T00:00:00.000Z", "tool-a", "Tool A", 0, 0),
-      totalCalls: 1,
-      totalCredits: 3,
-      totalDurationMs: 500,
-    },
-  ];
-
-  const durationRows = aggregateUsageRows(points, "duration", "total");
-  assert.equal(durationRows[0].totalDurationMs, 2000);
-  assert.equal(durationRows[0].value, 2000);
-
-  const failureRows = aggregateUsageRows(points, "failures", "total");
-  assert.equal(failureRows[0].failedCalls, 1);
-  assert.equal(failureRows[0].unpricedCalls, 1);
-  assert.equal(failureRows[0].totalCredits, 3);
-});
-
-function usagePoint(bucket, groupKey, groupLabel, totalTokens, totalCostUsd) {
-  return {
-    bucket,
-    cacheCreationInputCostUsd: 0,
-    cacheCreationInputTokens: 0,
-    cacheReadInputCostUsd: 0,
-    cacheReadInputTokens: 0,
-    groupKey,
-    groupLabel,
-    inputCostUsd: totalCostUsd / 2,
-    inputTokens: totalTokens / 2,
-    outputCostUsd: totalCostUsd / 2,
-    outputTokens: totalTokens / 2,
-    reasoningCostUsd: 0,
-    reasoningTokens: 0,
-    failedCalls: 0,
-    totalCalls: 1,
-    totalCostUsd,
-    totalCredits: 0,
-    totalDurationMs: 0,
-    totalTokens,
-    unpricedCalls: 0,
-  };
-}
 
 function relatedNode(edgeId, nodeId, kind, layer) {
   return {

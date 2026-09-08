@@ -14,6 +14,7 @@ const actions = Object.freeze({
   threads: "copilotz.admin.threads",
   participants: "copilotz.admin.participants",
   usage: "copilotz.admin.usage",
+  usageAttempts: "copilotz.admin.usage",
   agents: "copilotz.admin.agents",
 });
 
@@ -63,7 +64,9 @@ const adminHttpPlugin = definePlugin({
         routes: Object.entries(actions).map(([name, action]) => ({
           id: `test.admin.${name}`,
           method: "GET" as const,
-          path: `/admin/${name}`,
+          path: name === "usageAttempts"
+            ? "/admin/usage/attempts"
+            : `/admin/${name}`,
           metadata: { admin: true },
           async handler(context) {
             const search = new URL(context.request.url).searchParams;
@@ -73,18 +76,18 @@ const adminHttpPlugin = definePlugin({
                 return [key, values.length === 1 ? values[0] : values];
               }),
             );
-            const output = await context.invoke(action, {
+            const output = (await context.invoke(action, {
               resource: "admin",
               method: "GET",
-              path: [name],
+              path: name === "usageAttempts" ? ["usage", "attempts"] : [name],
               query,
-            }) as { status: number; data?: unknown; pageInfo?: unknown };
-            return Response.json({
-              data: output.data,
-              pageInfo: output.pageInfo,
-            }, {
-              status: output.status,
-            });
+            })) as { status: number; data?: unknown; pageInfo?: unknown };
+            return Response.json(
+              name === "usage" || name === "usageAttempts"
+                ? output.data
+                : { data: output.data, pageInfo: output.pageInfo },
+              { status: output.status },
+            );
           },
         })),
       }),
@@ -92,61 +95,84 @@ const adminHttpPlugin = definePlugin({
   },
 });
 
-Deno.test("published Admin client follows the compiled Admin and Core facade contracts", async () => {
-  const app = await createHttpFixture(undefined, [
-    createAdminPlugin(),
-    adminHttpPlugin,
-  ]);
-  const client = createAdminClient({
-    baseUrl: "https://test/api",
-    getRequestHeaders: () => ({ "x-user": "person" }),
-  });
-  const fetch = globalThis.fetch;
-  globalThis.fetch =
-    ((url, init) => app.fetch(new Request(url, init))) as typeof fetch;
-  try {
-    const generic = createCopilotzClient({
-      baseUrl: "https://test/api",
-      fetch: globalThis.fetch,
-    });
-    await generic.actions.invoke("test.admin.seed", {}, {
-      idempotencyKey: "admin-seed",
-    });
-    const [overview, agents, usage] = await Promise.all([
-      client.getOverview(),
-      client.listAgents(),
-      client.getUsage({ limit: 50 }),
+Deno.test(
+  "published Admin client follows the compiled Admin and Core facade contracts",
+  async () => {
+    const app = await createHttpFixture(undefined, [
+      createAdminPlugin(),
+      adminHttpPlugin,
     ]);
-    assertEquals(overview.threadTotals.total, 1);
-    assertEquals(overview.messageTotals.total, 55);
-    assertEquals(agents[0]?.agentId, "support");
-    assertEquals(usage.data.length, 50);
-    assertEquals(usage.pageInfo.hasMore, true);
-    const nextUsage = await client.getUsage({
-      limit: 50,
-      after: usage.pageInfo.next!,
-    });
-    assertEquals(nextUsage.data.length, 5);
-    assertEquals(
-      new Set([...usage.data, ...nextUsage.data].map((row) => row.id)).size,
-      55,
-    );
-    const thread = await client.getThread("admin-thread");
-    assertEquals(thread.id, "admin-thread");
-    const first = await client.getThreadMessages(thread.id, { limit: 50 });
-    assertEquals(first.pageInfo.hasMore, true);
-    const second = await client.getThreadMessages(thread.id, {
-      limit: 50,
-      after: first.pageInfo.next!,
-    });
-    assertEquals(second.pageInfo.hasMore, false);
-    assertEquals(
-      new Set([...first.data, ...second.data].map((row) => row.id)).size,
-      55,
-    );
-    assertEquals(second.data.length, 5);
-  } finally {
-    globalThis.fetch = fetch;
-    await app.close();
-  }
-});
+    const fetch = globalThis.fetch;
+    globalThis.fetch =
+      ((url, init) => app.fetch(new Request(url, init))) as typeof fetch;
+    try {
+      const client = createAdminClient({
+        baseUrl: "https://test/api",
+        getRequestHeaders: () => ({ "x-user": "person" }),
+      });
+      const generic = createCopilotzClient({
+        baseUrl: "https://test/api",
+        fetch: globalThis.fetch,
+      });
+      await generic.actions.invoke(
+        "test.admin.seed",
+        {},
+        {
+          idempotencyKey: "admin-seed",
+        },
+      );
+      const [overview, agents, usage] = await Promise.all([
+        client.getOverview(),
+        client.listAgents(),
+        client.getUsageDataSource().attempts({
+          filters: {
+            kind: "llm",
+            from: "2026-01-01T00:00:00.000Z",
+            to: "2027-01-01T00:00:00.000Z",
+          },
+          after: undefined,
+          limit: 50,
+          signal: undefined,
+        }),
+      ]);
+      assertEquals(overview.threadTotals.total, 1);
+      assertEquals(overview.messageTotals.total, 55);
+      assertEquals(agents[0]?.agentId, "support");
+      assertEquals(usage.items.length, 50);
+      assertEquals(usage.pageInfo.hasMore, true);
+      const nextUsage = await client.getUsageDataSource().attempts({
+        filters: {
+          kind: "llm",
+          from: "2026-01-01T00:00:00.000Z",
+          to: "2027-01-01T00:00:00.000Z",
+        },
+        limit: 50,
+        after: usage.pageInfo.next!,
+        signal: undefined,
+      });
+      assertEquals(nextUsage.items.length, 5);
+      assertEquals(
+        new Set([...usage.items, ...nextUsage.items].map((row) => row.id))
+          .size,
+        55,
+      );
+      const thread = await client.getThread("admin-thread");
+      assertEquals(thread.id, "admin-thread");
+      const first = await client.getThreadMessages(thread.id, { limit: 50 });
+      assertEquals(first.pageInfo.hasMore, true);
+      const second = await client.getThreadMessages(thread.id, {
+        limit: 50,
+        after: first.pageInfo.next!,
+      });
+      assertEquals(second.pageInfo.hasMore, false);
+      assertEquals(
+        new Set([...first.data, ...second.data].map((row) => row.id)).size,
+        55,
+      );
+      assertEquals(second.data.length, 5);
+    } finally {
+      globalThis.fetch = fetch;
+      await app.close();
+    }
+  },
+);

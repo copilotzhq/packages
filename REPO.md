@@ -1,7 +1,7 @@
 ---
 name: packages
 kind: lib
-summary: Shared React chat UI, Copilotz adapter, and admin packages used by client web apps.
+summary: Shared React chat UI, adapter, usage analytics, and admin packages used by client web apps.
 depends_on:
   - copilotz
 tags:
@@ -17,12 +17,14 @@ entrypoints:
   - copilotz-chat-adapter/src/useCopilotzChat.ts
   - copilotz-admin/src/index.ts
   - copilotz-admin/src/core/CopilotzAdmin.tsx
+  - copilotz-usage/src/index.tsx
+  - copilotz-usage/src/client.ts
 status: active
 ---
 
 ## Purpose
 
-Shared npm packages for Copilotz web experiences: `@copilotz/chat-ui` provides the reusable React chat UI layer, `@copilotz/chat-adapter` binds that UI to Copilotz the canonical browser client, threads, tools, assets, and user context, and `@copilotz/admin` provides the reusable admin shell and default Copilotz admin modules.
+Shared npm packages for Copilotz web experiences: `@copilotz/chat-ui` provides the reusable React chat UI layer, `@copilotz/chat-adapter` binds that UI to Copilotz the canonical browser client, threads, tools, assets, and user context, `@copilotz/usage` owns reusable analytics components and its browser-safe data source, and `@copilotz/admin` provides the reusable admin shell and default modules.
 
 ## Read These First
 
@@ -35,6 +37,8 @@ Shared npm packages for Copilotz web experiences: `@copilotz/chat-ui` provides t
 - `copilotz-admin/src/index.ts`
 - `copilotz-admin/src/core/CopilotzAdmin.tsx`
 - `copilotz-admin/src/modules/index.ts`
+- `copilotz-usage/src/index.tsx`
+- `copilotz-usage/src/client.ts`
 
 ## Common Task Locations
 
@@ -47,6 +51,7 @@ Shared npm packages for Copilotz web experiences: `@copilotz/chat-ui` provides t
 - Admin API client and DTOs: `copilotz-admin/src/api/`
 - Built-in admin modules: `copilotz-admin/src/modules/`
 - Reusable admin UI patterns: `copilotz-admin/src/components/patterns/`
+- Usage analytics UI and data-source client: `copilotz-usage/src/`
 
 ## Warnings
 

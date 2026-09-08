@@ -4,6 +4,7 @@ Public packages for the Copilotz chat system:
 
 - `@copilotz/chat-ui`: Headless + styled chat UI components.
 - `@copilotz/chat-adapter`: Copilotz API adapter and ready-to-use `CopilotzChat` wrapper.
+- `@copilotz/usage`: Reusable Usage analytics components and browser-safe data-source client.
 - `@copilotz/chat-voice-moonshine`: Optional Moonshine-based voice provider.
 - `@copilotz/chat-voice-vad`: Optional VAD-only voice provider.
 
