@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/usage",
-  "version": "0.69.1",
+  "version": "0.70.0",
   "description": "Reusable Copilotz usage analytics UI",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -44,7 +44,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@copilotz/copilotz": "npm:@jsr/copilotz__copilotz@0.69.1"
+    "@copilotz/copilotz": "npm:@jsr/copilotz__copilotz@0.70.0"
   },
   "repository": {
     "type": "git",
