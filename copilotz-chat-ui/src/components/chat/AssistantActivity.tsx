@@ -82,6 +82,12 @@ const resolveActivityLabel = (
       : (labels?.activityAnsweringComplete || 'Prepared response');
   }
 
+  if (item.kind === 'compacting') {
+    return item.status === 'active'
+      ? (labels?.activityCompactingActive || 'Consolidating memory')
+      : (labels?.activityCompactingComplete || 'Memory consolidated');
+  }
+
   return item.status === 'active'
     ? (labels?.activityThinkingActive || 'Thinking')
     : (labels?.activityThinkingComplete || 'Thought through request');

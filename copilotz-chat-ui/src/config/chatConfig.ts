@@ -108,6 +108,8 @@ export const defaultChatConfig: Required<ChatConfig> = {
     activityToolFailed: "{{tool}} failed",
     activityAnsweringActive: "Preparing response",
     activityAnsweringComplete: "Prepared response",
+    activityCompactingActive: "Consolidating memory",
+    activityCompactingComplete: "Memory consolidated",
     activityShowDetails: "Show details",
     activityHideDetails: "Hide details",
     defaultThreadName: "Main Thread",

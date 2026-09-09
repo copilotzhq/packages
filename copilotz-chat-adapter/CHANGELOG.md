@@ -1,5 +1,9 @@
 # @copilotz/chat-adapter
 
+## 0.70.1 — 2026-09-09
+
+Project durable foreground consolidation activity across replay, completion, failure, and cancellation without exposing private maintenance content.
+
 ## 0.70.0 — 2026-09-08
 
 Synchronize with Copilotz 0.70.0.

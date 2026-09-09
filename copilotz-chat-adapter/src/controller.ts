@@ -246,7 +246,7 @@ export function createChatController(
       let removedPreparing = next.state.messages.some(
         (message) =>
           message.metadata?.operationId === operationId &&
-          message.metadata?.llmAttemptId
+          (message.metadata?.llmAttemptId || message.metadata?.contextCompactionRunId)
       )
         ? clearPreparing(operationId)
         : undefined;

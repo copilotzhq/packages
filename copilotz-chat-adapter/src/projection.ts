@@ -14,6 +14,7 @@ import {
   type ParsedToolCallDelta
 } from './toolActivity.ts';
 import { projectAgentInvocation } from './agentInvocation.ts';
+import { projectContextCompaction } from './contextCompaction.ts';
 import { encodeBase64 } from './messageContract.ts';
 import { getAttachmentKindFromMimeType } from '@copilotz/chat-ui/model';
 
@@ -133,6 +134,7 @@ export function projectFrame(
         ? object(output.metadata).sourceAction
         : output.data
     );
+    state.messages = projectContextCompaction(state.messages, output.type, operationId, data, at);
     state.messages = projectAgentInvocation(
       state.messages,
       output.type,
@@ -218,6 +220,8 @@ export function projectFrame(
     }
     if (/^operation\.(completed|failed|cancelled)$/.test(output.type)) {
       state.operations.delete(operationId);
+      state.messages = state.messages.filter(message => !(message.metadata?.operationId === operationId &&
+        message.metadata?.contextCompactionRunId && message.isStreaming));
       state.messages = state.messages.map((message) =>
         message.metadata?.operationId === operationId
           ? closeAssistantMessage(message, at)

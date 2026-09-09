@@ -161,7 +161,7 @@ export type ToolRendererMap = Record<
   ComponentType<ToolRendererProps>
 >;
 
-export type AssistantActivityKind = "thinking" | "tool" | "answering";
+export type AssistantActivityKind = "thinking" | "tool" | "answering" | "compacting";
 export type AssistantActivityStatus = "active" | "complete" | "failed";
 
 export interface AssistantActivityItem {
@@ -355,6 +355,8 @@ export interface ChatConfig {
     activityToolFailed?: string;
     activityAnsweringActive?: string;
     activityAnsweringComplete?: string;
+    activityCompactingActive?: string;
+    activityCompactingComplete?: string;
     activityShowDetails?: string;
     activityHideDetails?: string;
     defaultThreadName?: string;
