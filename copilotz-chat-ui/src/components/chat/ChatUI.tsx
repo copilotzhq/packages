@@ -915,7 +915,18 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                               : "rounded-md border border-border bg-muted/70 px-3 py-2 text-sm text-muted-foreground"
                           }
                         >
-                          {activityNotice.message}
+                          <div className="flex items-center justify-between gap-3">
+                            <span>{activityNotice.message}</span>
+                            {activityNotice.action && (
+                              <button
+                                type="button"
+                                className="shrink-0 underline underline-offset-2"
+                                onClick={activityNotice.action.onClick}
+                              >
+                                {activityNotice.action.label}
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
                     )}

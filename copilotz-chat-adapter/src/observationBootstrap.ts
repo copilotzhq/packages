@@ -74,14 +74,9 @@ export function createObservationBootstrap() {
         if (!Array.isArray(streams)) {
           throw new Error('Invalid observation bootstrap.');
         }
-        if (!declaring) {
-          pending = new Map();
-          initialMessages = new Set(
-            visibleMessageIds ?? state.messages.map((message) => message.id)
-          );
-          terminalStreams = new Set();
-        }
-        declaring = frame.output.more === true;
+        // Validate the whole declaration before changing the recovery lane
+        // state. A malformed frame must leave the previous committed view and
+        // its bootstrap bookkeeping untouched.
         for (const stream of streams) {
           if (
             typeof stream.streamId !== 'string' ||
@@ -91,6 +86,16 @@ export function createObservationBootstrap() {
           ) {
             throw new Error('Invalid observation bootstrap stream.');
           }
+        }
+        if (!declaring) {
+          pending = new Map();
+          initialMessages = new Set(
+            visibleMessageIds ?? state.messages.map((message) => message.id)
+          );
+          terminalStreams = new Set();
+        }
+        declaring = frame.output.more === true;
+        for (const stream of streams) {
           pending!.set(stream.streamId, stream);
           if (stream.terminal) terminalStreams.add(stream.streamId);
         }

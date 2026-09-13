@@ -11,6 +11,7 @@ const dependencySections = [
   "peerDependencies",
   "optionalDependencies",
 ];
+const coreDependencyName = "@copilotz/copilotz";
 
 const rootPackagePath = path.join(root, "package.json");
 const rootPackage = readJson(rootPackagePath);
@@ -68,6 +69,7 @@ function checkVersions(version, workspacePackages, workspacePackageNames) {
       workspacePackageNames,
       version,
     );
+    collectCoreDependencyProblems(problems, `${workspace}/package.json`, packageJson, version);
   }
 
   const lockPath = path.join(root, "package-lock.json");
@@ -100,6 +102,7 @@ function checkVersions(version, workspacePackages, workspacePackageNames) {
       workspacePackageNames,
       version,
     );
+    collectCoreDependencyProblems(problems, `package-lock.json ${workspace}`, lockPackage, version);
   }
 
   if (problems.length > 0) {
@@ -120,6 +123,7 @@ function syncVersions(version, workspacePackages, workspacePackageNames) {
   for (const { packagePath, packageJson } of workspacePackages) {
     packageJson.version = version;
     syncInternalDependencyRanges(packageJson, workspacePackageNames, version);
+    syncCoreDependencyRanges(packageJson, version);
     writeJson(packagePath, packageJson);
   }
 
@@ -137,6 +141,7 @@ function syncVersions(version, workspacePackages, workspacePackageNames) {
 
     lock.packages[workspace].version = version;
     syncInternalDependencyRanges(lock.packages[workspace], workspacePackageNames, version);
+    syncCoreDependencyRanges(lock.packages[workspace], version);
   }
 
   writeJson(lockPath, lock);
@@ -171,6 +176,34 @@ function syncInternalDependencyRanges(packageJson, workspacePackageNames, versio
       }
     }
   }
+}
+
+function collectCoreDependencyProblems(problems, label, packageJson, version) {
+  const expectedRange = coreDependencyRange(version);
+
+  for (const section of dependencySections) {
+    const dependencies = packageJson[section];
+    if (dependencies?.[coreDependencyName] && dependencies[coreDependencyName] !== expectedRange) {
+      problems.push(
+        `${label} ${section}.${coreDependencyName} is ${dependencies[coreDependencyName]}, expected ${expectedRange}`,
+      );
+    }
+  }
+}
+
+function syncCoreDependencyRanges(packageJson, version) {
+  const expectedRange = coreDependencyRange(version);
+
+  for (const section of dependencySections) {
+    const dependencies = packageJson[section];
+    if (dependencies?.[coreDependencyName]) {
+      dependencies[coreDependencyName] = expectedRange;
+    }
+  }
+}
+
+function coreDependencyRange(version) {
+  return `npm:@jsr/copilotz__copilotz@${version}`;
 }
 
 function resolveVersion(currentVersion, requested) {

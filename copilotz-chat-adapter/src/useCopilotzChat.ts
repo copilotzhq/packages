@@ -84,7 +84,17 @@ export function useCopilotzChat(options: UseCopilotzChatOptions) {
           message:
             snapshot.error instanceof Error
               ? snapshot.error.message
-              : 'Unable to update the conversation.'
+              : 'Unable to update the conversation.',
+          ...(snapshot.currentThreadId
+            ? {
+                action: {
+                  label: 'Reload conversation',
+                  onClick: () => {
+                    void controller?.recover();
+                  }
+                }
+              }
+            : {})
         }
       : undefined,
     toolCallDraftSource: controller?.toolCallDraftSource,
@@ -94,6 +104,7 @@ export function useCopilotzChat(options: UseCopilotzChatOptions) {
       attachments?: Parameters<ChatController['send']>[1]
     ) => controller?.send(content, attachments),
     stopGeneration: () => controller?.stop(),
+    recoverConversation: () => controller?.recover(),
     createThread: (title?: string) => {
       controller?.createThread(title);
       url.setThreadId(null);

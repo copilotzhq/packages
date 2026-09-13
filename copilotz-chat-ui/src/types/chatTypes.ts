@@ -522,6 +522,10 @@ export interface ChatCallbacks {
 export interface ChatActivityNotice {
   tone: "info" | "error";
   message: string;
+  action?: {
+    label: string;
+    onClick: () => void;
+  };
 }
 
 // Main Chat Props

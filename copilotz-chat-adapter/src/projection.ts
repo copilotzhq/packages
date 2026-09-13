@@ -44,12 +44,14 @@ export type ChatProjection = {
   messages: ChatMessage[];
   lanes: Map<string, Lane>;
   operations: Set<string>;
+  terminalOperations: Set<string>;
   tools: Map<string, ToolOrigin>;
 };
 export const emptyProjection = (): ChatProjection => ({
   messages: [],
   lanes: new Map(),
   operations: new Set(),
+  terminalOperations: new Set(),
   tools: new Map()
 });
 const object = (value: unknown): Record<string, unknown> =>
@@ -122,6 +124,7 @@ export function projectFrame(
     messages: previous.messages,
     lanes: new Map(previous.lanes),
     operations: new Set(previous.operations),
+    terminalOperations: new Set(previous.terminalOperations),
     tools: new Map(previous.tools)
   };
   const drafts: ParsedToolCallDelta[] = [];
@@ -154,7 +157,11 @@ export function projectFrame(
         actionRunId: data.actionRunId
       });
     }
-    if (operationId && !output.type.startsWith('operation.'))
+    if (
+      operationId &&
+      !state.terminalOperations.has(operationId) &&
+      !output.type.startsWith('operation.')
+    )
       state.operations.add(operationId);
     if (output.type === 'stream.output') {
       const metadata = object(output.metadata);
@@ -220,6 +227,7 @@ export function projectFrame(
     }
     if (/^operation\.(completed|failed|cancelled)$/.test(output.type)) {
       state.operations.delete(operationId);
+      state.terminalOperations.add(operationId);
       state.messages = state.messages.filter(message => !(message.metadata?.operationId === operationId &&
         message.metadata?.contextCompactionRunId && message.isStreaming));
       state.messages = state.messages.map((message) =>

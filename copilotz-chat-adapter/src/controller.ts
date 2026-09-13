@@ -60,6 +60,33 @@ export type ChatSnapshot = {
   error: unknown;
 };
 
+const MAX_FRAME_RECOVERY_ATTEMPTS = 3;
+
+/** A failed frame can be recovered without cancelling durable work. */
+class RecoverableFrameError extends Error {
+  readonly cause: unknown;
+  constructor(cause: unknown) {
+    super('The live conversation stream is being resynchronized.', { cause });
+    this.cause = cause;
+    Object.defineProperty(this, 'name', { value: 'RecoverableFrameError' });
+  }
+}
+
+/** Repeated poison frames detach observation until the user requests recovery. */
+class FrameRecoveryExhaustedError extends Error {
+  readonly cause: unknown;
+  constructor(cause: unknown) {
+    super(
+      'The conversation stream could not be applied repeatedly. Retry to resynchronize.',
+      { cause }
+    );
+    this.cause = cause;
+    Object.defineProperty(this, 'name', {
+      value: 'FrameRecoveryExhaustedError'
+    });
+  }
+}
+
 /** Owns connection lifetime independently of React. */
 export function createChatController(
   core: CoreClient,
@@ -86,10 +113,14 @@ export function createChatController(
   const lifetime = new AbortController();
   let historyAbort = new AbortController();
   let observation: ReturnType<typeof createObservationSupervisor> | undefined;
+  let observationToken = 0;
   let reconciliation:
     | ReturnType<typeof createHistoryReconciliation>
     | undefined;
   let checkpoint: string | undefined;
+  let frameRecoveryFailures = 0;
+  let frameRecoveryNotice: unknown;
+  const stoppingOperations = new Map<string, number>();
   const preparingByOperation = new Map<string, string>();
   const submissions = new Set<{
     controller: AbortController;
@@ -109,18 +140,64 @@ export function createChatController(
   const listeners = new Set<() => void>();
   const history = createHistoryReader();
   const reportedTools = new Set<string>();
-  const toolCallDraftSource = createToolCallDraftStore();
+  let notifying = false;
+  const specialStateFor = (error: unknown): SpecialChatState | null => {
+    try {
+      return options.runErrorInterceptor?.(error) ?? null;
+    } catch {
+      return null;
+    }
+  };
+  const subscriberError = (error: unknown) => {
+    snapshot = {
+      ...snapshot,
+      error,
+      specialState: specialStateFor(error),
+      isRecoveringStream: false
+    };
+  };
   const publish = (patch: Partial<ChatSnapshot>) => {
     if (disposed) return;
     snapshot = { ...snapshot, ...patch };
-    for (const listener of listeners) listener();
+    if (notifying) return;
+    notifying = true;
+    try {
+      const failed: unknown[] = [];
+      for (const listener of [...listeners]) {
+        try {
+          listener();
+        } catch (error) {
+          listeners.delete(listener);
+          failed.push(error);
+        }
+      }
+      if (failed.length === 0) return;
+      subscriberError(failed[0]);
+      for (const listener of [...listeners]) {
+        try {
+          listener();
+        } catch (error) {
+          listeners.delete(listener);
+        }
+      }
+    } finally {
+      notifying = false;
+    }
   };
-  const report = (error: unknown) =>
+  const report = (error: unknown) => {
     publish({
       error,
-      specialState: options.runErrorInterceptor?.(error) ?? null,
+      specialState: specialStateFor(error),
       isRecoveringStream: false
     });
+  };
+  const reportSubscriberFailure = (error: unknown) => {
+    subscriberError(error);
+    publish({});
+  };
+  const toolCallDraftSource = createToolCallDraftStore({
+    onSubscriberError: reportSubscriberFailure
+  });
   const projectHistory = (
     page: Parameters<typeof history.project>[0],
     signal = historyAbort.signal
@@ -150,10 +227,14 @@ export function createChatController(
         result.toolResultUpdates
       )
     );
-  const clearPreparing = (operationId?: string) => {
+  const preparingForOperation = (operationId?: string) => {
     const id = operationId && preparingByOperation.get(operationId);
+    return id;
+  };
+  const removePreparing = (operationId?: string) => {
+    const id = preparingForOperation(operationId);
     if (!id) return undefined;
-    preparingByOperation.delete(operationId);
+    if (operationId) preparingByOperation.delete(operationId);
     projection = {
       ...projection,
       messages: projection.messages.filter((message) => message.id !== id)
@@ -187,7 +268,11 @@ export function createChatController(
               tool.result &&
               typeof tool.result === 'object'
             ) {
-              options.onToolOutput?.(tool.result as Record<string, unknown>);
+              try {
+                options.onToolOutput?.(tool.result as Record<string, unknown>);
+              } catch (error) {
+                reportSubscriberFailure(error);
+              }
               reportedTools.add(key);
             }
           }
@@ -222,12 +307,113 @@ export function createChatController(
       }))
     });
   };
+  const hasStoppingForGeneration = (generation: number) =>
+    [...stoppingOperations.values()].some((value) => value === generation) ||
+    [...submissions].some(
+      (submission) =>
+        submission.generation === generation &&
+        submission.stopRequested &&
+        !submission.operationId
+    );
+  const confirmOperation = (
+    operationId: string,
+    generation: number,
+    notify = true
+  ) => {
+    if (stoppingOperations.get(operationId) !== generation) return;
+    stoppingOperations.delete(operationId);
+    if (notify && generation === epoch && !disposed) {
+      publish({ isStopping: hasStoppingForGeneration(generation) });
+    }
+  };
+  const isTerminalOperationStatus = (
+    value: unknown
+  ): value is { state: 'completed' | 'failed' | 'cancelled' } => {
+    const state = (value as { state?: unknown })?.state;
+    return (
+      state === 'completed' || state === 'failed' || state === 'cancelled'
+    );
+  };
+  const waitForStopConfirmation = async (
+    operationId: string,
+    signal: AbortSignal
+  ) => {
+    try {
+      await settle({ operationId }, signal);
+      return true;
+    } catch (error) {
+      if (signal.aborted || disposed) return false;
+      try {
+        const status = await core.operations.get(operationId);
+        if (isTerminalOperationStatus(status)) return true;
+      } catch {
+        // Preserve the result error below when status cannot be read.
+      }
+      throw error;
+    }
+  };
+  const settleStoppedSubmission = async (
+    operationId: string,
+    generation: number,
+    signal: AbortSignal
+  ) => {
+    try {
+      const confirmed = await waitForStopConfirmation(operationId, signal);
+      if (confirmed) confirmOperation(operationId, generation, false);
+      return confirmed;
+    } catch (error) {
+      if (signal.aborted || generation !== epoch || disposed) return false;
+      report(error);
+      return true;
+    }
+  };
+  const reportFrameRecoveryError = (error: unknown, generation: number) => {
+    if (generation !== epoch || disposed) return;
+    frameRecoveryNotice = error;
+    report(error);
+  };
   const bootstrap = createObservationBootstrap();
-  const apply = (frame: ObservationFrame, generation: number) =>
+  // Status reads never block replay. Heartbeats repair a missed terminal frame,
+  // while the projection remembers terminal operations throughout observation.
+  const operationStatusReads = new Set<string>();
+  const reconcileOperationStatus = (
+    operationId: string,
+    generation: number,
+    token: number
+  ) => {
+    const key = `${generation}:${token}:${operationId}`;
+    if (operationStatusReads.has(key) || projection.terminalOperations.has(operationId)) return;
+    operationStatusReads.add(key);
+    void Promise.resolve().then(() => core.operations.get(operationId)).then(async (status) => {
+      if (disposed || generation !== epoch || token !== observationToken ||
+          projection.terminalOperations.has(operationId) || !isTerminalOperationStatus(status)) return;
+      await apply({
+        kind: 'output',
+        checkpoint: checkpoint!,
+        output: { type: `operation.${status.state}`, operationId }
+      } as ObservationFrame, generation, undefined, token);
+    }).catch(() => {
+      // A failed read is not completion. Retry on the next observation heartbeat.
+    }).finally(() => {
+      operationStatusReads.delete(key);
+    });
+  };
+  const apply = (
+    frame: ObservationFrame,
+    generation: number,
+    signal?: AbortSignal,
+    token?: number
+  ) =>
     serialize(async () => {
-      if (disposed || generation !== epoch) {
+      if (
+        disposed ||
+        generation !== epoch ||
+        signal?.aborted ||
+        (token !== undefined && token !== observationToken)
+      ) {
         throw new DOMException('Thread changed', 'AbortError');
       }
+      const previousOperations = projection.operations;
       const intercepted =
         frame.kind === 'output'
           ? options.eventInterceptor?.(frame.output)
@@ -243,32 +429,46 @@ export function createChatController(
         frame.kind === 'output' && typeof frame.output.operationId === 'string'
           ? frame.output.operationId
           : undefined;
-      let removedPreparing = next.state.messages.some(
-        (message) =>
-          message.metadata?.operationId === operationId &&
-          (message.metadata?.llmAttemptId || message.metadata?.contextCompactionRunId)
-      )
-        ? clearPreparing(operationId)
-        : undefined;
-      if (
+      const terminalOutput =
         frame.kind === 'output' &&
         /^operation\.(completed|failed|cancelled)$/.test(frame.output.type)
+      const removedPreparing =
+        (next.state.messages.some(
+          (message) =>
+            message.metadata?.operationId === operationId &&
+            (message.metadata?.llmAttemptId ||
+              message.metadata?.contextCompactionRunId)
+        ) || terminalOutput)
+          ? preparingForOperation(operationId)
+          : undefined;
+      if (
+        disposed ||
+        generation !== epoch ||
+        signal?.aborted ||
+        (token !== undefined && token !== observationToken)
       ) {
-        removedPreparing ??= clearPreparing(operationId);
-      }
-      if (disposed || generation !== epoch) {
         throw new DOMException('Thread changed', 'AbortError');
       }
-      projection = next.state;
-      if (removedPreparing) {
-        projection = {
-          ...projection,
-          messages: projection.messages.filter(
-            (message) => message.id !== removedPreparing
-          )
-        };
-      }
+      const committedState = removedPreparing
+        ? {
+            ...next.state,
+            messages: next.state.messages.filter(
+              (message) => message.id !== removedPreparing
+            )
+          }
+        : next.state;
       for (const draft of next.drafts) toolCallDraftSource.apply(draft);
+      projection = committedState;
+      if (removedPreparing && operationId) {
+        preparingByOperation.delete(operationId);
+      }
+      checkpoint = frame.checkpoint;
+      const terminalOperation =
+        terminalOutput ? operationId : undefined;
+      if (terminalOperation) confirmOperation(terminalOperation, generation, false);
+      const clearFrameRecoveryError =
+        frameRecoveryNotice !== undefined && snapshot.error === frameRecoveryNotice;
+      frameRecoveryNotice = undefined;
       const visible = restored.visible;
       publish({
         messages: visible.messages.filter(
@@ -283,39 +483,143 @@ export function createChatController(
           ),
         ...(intercepted && intercepted.specialState !== undefined
           ? { specialState: intercepted.specialState }
+          : {}),
+        ...(clearFrameRecoveryError ? { error: null, specialState: null } : {}),
+        ...(terminalOperation
+          ? { isStopping: hasStoppingForGeneration(generation) }
           : {})
       });
-      checkpoint = frame.checkpoint;
       if ((next.refresh || restored.completed) && snapshot.currentThreadId) {
         reconciliation?.request();
       }
+      for (const id of projection.operations) {
+        if (!previousOperations.has(id) || restored.completed ||
+            (frame.kind === 'output' && frame.output.type === 'observation.heartbeat')) {
+          reconcileOperationStatus(id, generation, observationToken);
+        }
+      }
     });
+  const resyncHistory = async (
+    id: string,
+    generation: number,
+    signal: AbortSignal,
+    token?: number
+  ) => {
+    const page = await retryRead(
+      () =>
+        core.threads.messages(
+          id,
+          { order: 'desc', limit: 50 },
+          { signal }
+        ),
+      signal
+    );
+    if (
+      disposed ||
+      generation !== epoch ||
+      signal.aborted ||
+      (token !== undefined && token !== observationToken)
+    ) {
+      throw new DOMException('Thread changed', 'AbortError');
+    }
+    history.clear();
+    const result = await projectHistory(page, signal);
+    await serialize(() => {
+      if (
+        disposed ||
+        generation !== epoch ||
+        signal.aborted ||
+        (token !== undefined && token !== observationToken)
+      ) {
+        throw new DOMException('Thread changed', 'AbortError');
+      }
+      const localPending = projection.messages.filter((message) =>
+        message.id.startsWith('pending:')
+      );
+      const pendingOperations = new Set(
+        [...submissions]
+          .filter(
+            (submission) =>
+              submission.generation === generation && submission.operationId
+          )
+          .map((submission) => submission.operationId!)
+      );
+      const nextProjection = mergeHistory(
+        {
+          ...emptyProjection(),
+          messages: localPending,
+          operations: pendingOperations
+        },
+        result
+      );
+      const localPendingIds = new Set(localPending.map((message) => message.id));
+      projection = nextProjection;
+      bootstrap.clear();
+      toolCallDraftSource.clear();
+      for (const [operationId, messageId] of preparingByOperation) {
+        if (!localPendingIds.has(messageId)) preparingByOperation.delete(operationId);
+      }
+      history.clear();
+      checkpoint = page.pageInfo.checkpoint;
+      publish({
+        messages: projection.messages,
+        messagePageInfo: page.pageInfo,
+        isRecoveringStream: true,
+        isMessagesLoading: false
+      });
+    });
+  };
   const observeThread = (
     id: string,
     generation: number,
     recovered: boolean
   ) => {
+    const token = ++observationToken;
     observation?.close();
-    let frameError: unknown;
     observation = createObservationSupervisor({
       observe: (signal, progress) => {
-        frameError = undefined;
         return core.threads.observe(id, {
           checkpoint,
           signal,
           onFrame: async (frame) => {
             try {
-              await apply(frame, generation);
+              await apply(frame, generation, signal, token);
               progress();
             } catch (error) {
-              frameError = error;
-              throw error;
+              if (
+                disposed ||
+                generation !== epoch ||
+                signal.aborted ||
+                token !== observationToken ||
+                (error as { name?: string })?.name === 'AbortError'
+              ) {
+                throw error;
+              }
+              frameRecoveryFailures += 1;
+              publish({ isRecoveringStream: true });
+              try {
+                await resyncHistory(id, generation, signal, token);
+              } catch (resyncError) {
+                if (signal.aborted || generation !== epoch || disposed) {
+                  throw resyncError;
+                }
+                frameRecoveryNotice = resyncError;
+              }
+              if (frameRecoveryFailures >= MAX_FRAME_RECOVERY_ATTEMPTS) {
+                const exhausted = new FrameRecoveryExhaustedError(
+                  frameRecoveryNotice ?? error
+                );
+                reportFrameRecoveryError(exhausted, generation);
+                throw exhausted;
+              }
+              throw new RecoverableFrameError(error);
             }
           }
         });
       },
       retryable: (error) =>
-        error !== frameError && isTransientRequestError(error),
+        error instanceof RecoverableFrameError ||
+        isTransientRequestError(error),
       onRetry: () => {
         if (generation === epoch && !disposed) {
           publish({ isRecoveringStream: true });
@@ -330,7 +634,7 @@ export function createChatController(
             code === 'invalid_replay_cursor')
         ) {
           publish({ isRecoveringStream: true });
-          void openThread(id, true);
+          void recover();
         } else {
           publish({ isStreaming: false });
           report(error);
@@ -345,7 +649,13 @@ export function createChatController(
     pending?: { messages: ChatMessage[]; operationId: string }
   ) => {
     const generation = ++epoch;
+    observationToken++;
     observation?.close();
+    for (const [operationId, owner] of stoppingOperations) {
+      if (owner !== generation) stoppingOperations.delete(operationId);
+    }
+    frameRecoveryFailures = 0;
+    frameRecoveryNotice = undefined;
     historyAbort.abort();
     historyAbort = new AbortController();
     const signal = historyAbort.signal;
@@ -374,6 +684,7 @@ export function createChatController(
       isMessagesLoading: true,
       isLoadingOlderMessages: false,
       isStreaming: Boolean(pending),
+      isStopping: false,
       error: null
     });
     try {
@@ -503,6 +814,9 @@ export function createChatController(
         { idempotencyKey, signal: submission.controller.signal }
       );
       submission.operationId = receipt.operationId;
+      if (submission.stopRequested && generation === epoch && !disposed) {
+        stoppingOperations.set(receipt.operationId, generation);
+      }
       await serialize(() => {
         if (generation === epoch && !disposed) {
           projection.operations.add(receipt.operationId);
@@ -515,7 +829,7 @@ export function createChatController(
                   message.metadata?.llmAttemptId
               )
             )
-              clearPreparing(receipt.operationId);
+              removePreparing(receipt.operationId);
           }
         }
       });
@@ -524,7 +838,14 @@ export function createChatController(
         reconciliation?.request();
       }
       if (submission.stopRequested) {
-        await core.operations.cancel(receipt.operationId);
+        try {
+          await core.operations.cancel(receipt.operationId);
+        } catch (error) {
+          stoppingOperations.delete(receipt.operationId);
+          if (generation === epoch && !disposed) {
+            report(error);
+          }
+        }
       }
       const result = (await settle(receipt, submission.controller.signal)) as {
         threadId: string;
@@ -532,6 +853,7 @@ export function createChatController(
       // The send Action settles before downstream Agents. History bootstrap then
       // observes their overlapping work through the same conversation feed.
       settled = true;
+      confirmOperation(receipt.operationId, generation, false);
       if (!threadId && generation === epoch && !disposed) {
         const messages = projection.messages.filter(
           (message) =>
@@ -556,16 +878,25 @@ export function createChatController(
       }
       await refreshThreads();
     } catch (error) {
+      let handledStoppedSubmission = false;
+      if (submission.stopRequested && submission.operationId) {
+        handledStoppedSubmission = await settleStoppedSubmission(
+          submission.operationId,
+          generation,
+          historyAbort.signal
+        );
+      }
       if (
-        generation === epoch &&
+        !handledStoppedSubmission &&
         !submission.stopRequested &&
+        generation === epoch &&
         !submission.controller.signal.aborted
       ) {
         report(error);
       }
     } finally {
       if ((!settled || submission.stopRequested) && submission.operationId) {
-        await serialize(() => clearPreparing(submission.operationId));
+        await serialize(() => removePreparing(submission.operationId));
       } else if (!settled && preparingId) {
         await serialize(() => {
           projection = {
@@ -587,25 +918,77 @@ export function createChatController(
                 (pending) =>
                   pending.generation === epoch && !pending.stopRequested
               )),
-          isStopping: false
+          isStopping: hasStoppingForGeneration(sendGeneration)
         });
       }
     }
   };
   const stop = async () => {
+    const generation = epoch;
     const ids = new Set(projection.operations);
     for (const submission of submissions) {
-      if (submission.generation !== epoch) continue;
+      if (submission.generation !== generation) continue;
       submission.stopRequested = true;
       if (submission.operationId) ids.add(submission.operationId);
     }
+    for (const id of ids) stoppingOperations.set(id, generation);
     publish({ isStopping: true });
+    const results = await Promise.allSettled(
+      [...ids].map((id) =>
+        Promise.resolve().then(() => core.operations.cancel(id))
+      )
+    );
+    for (const [index, result] of results.entries()) {
+      if (result.status !== 'rejected') continue;
+      const id = [...ids][index];
+      stoppingOperations.delete(id);
+      if (generation === epoch && !disposed) report(result.reason);
+    }
+    if (generation === epoch && !disposed) {
+      publish({ isStopping: hasStoppingForGeneration(generation) });
+      const signal = historyAbort.signal;
+      for (const id of ids) {
+        if (stoppingOperations.get(id) !== generation) continue;
+        void waitForStopConfirmation(id, signal)
+          .then((confirmed) => {
+            if (!confirmed) return;
+            confirmOperation(id, generation);
+          })
+          .catch((error) => {
+            if (
+              generation !== epoch ||
+              disposed ||
+              signal.aborted
+            )
+              return;
+            stoppingOperations.delete(id);
+            report(error);
+            publish({ isStopping: hasStoppingForGeneration(generation) });
+          });
+      }
+    }
+  };
+  const recover = async () => {
+    const id = snapshot.currentThreadId;
+    if (!id || disposed) return false;
+    const generation = epoch;
+    observation?.close();
+    const token = ++observationToken;
+    frameRecoveryFailures = 0;
+    frameRecoveryNotice = undefined;
+    publish({
+      error: null,
+      specialState: null,
+      isRecoveringStream: true
+    });
     try {
-      await Promise.all([...ids].map((id) => core.operations.cancel(id)));
+      await resyncHistory(id, generation, historyAbort.signal, token);
+      if (generation !== epoch || disposed) return false;
+      observeThread(id, generation, true);
+      return true;
     } catch (error) {
-      report(error);
-    } finally {
-      publish({ isStopping: false });
+      if (generation === epoch && !disposed) report(error);
+      return false;
     }
   };
   const mutate = async (operation: Promise<{ operationId: string }>) => {
@@ -632,6 +1015,7 @@ export function createChatController(
     },
     refreshThreads,
     openThread,
+    recover,
     send,
     stop,
     toolCallDraftSource,
@@ -652,7 +1036,11 @@ export function createChatController(
     createThread(title?: string) {
       draftName = title?.trim() || undefined;
       ++epoch;
+      observationToken++;
       observation?.close();
+      stoppingOperations.clear();
+      frameRecoveryFailures = 0;
+      frameRecoveryNotice = undefined;
       historyAbort.abort();
       historyAbort = new AbortController();
       reconciliation = undefined;
@@ -666,6 +1054,7 @@ export function createChatController(
         isMessagesLoading: false,
         isLoadingOlderMessages: false,
         isStreaming: false,
+        isStopping: false,
         messagePageInfo: { hasMore: false }
       });
     },
@@ -767,10 +1156,12 @@ export function createChatController(
     dispose() {
       disposed = true;
       ++epoch;
+      observationToken++;
       lifetime.abort();
       historyAbort.abort();
       observation?.close();
       for (const submission of submissions) submission.controller.abort();
+      stoppingOperations.clear();
       bootstrap.clear();
       history.clear();
       listeners.clear();

@@ -18,6 +18,71 @@ import type {
 } from './specialState';
 import type { RequestHeadersProvider } from './useCopilotzChat';
 
+type ChatRenderBoundaryProps = {
+  children: React.ReactNode;
+  onRetry: () => void | Promise<boolean | undefined>;
+};
+type ChatRenderBoundaryState = { error: Error | null; retrying: boolean };
+
+/** Keeps a custom renderer failure local so the controller can recover its last valid state. */
+class ChatRenderBoundary extends React.Component<
+  ChatRenderBoundaryProps,
+  ChatRenderBoundaryState
+> {
+  state: ChatRenderBoundaryState = { error: null, retrying: false };
+
+  static getDerivedStateFromError(error: unknown): ChatRenderBoundaryState {
+    return {
+      retrying: false,
+      error:
+        error instanceof Error
+          ? error
+          : new Error('The conversation could not be rendered.')
+    };
+  }
+
+  private retry = async () => {
+    if (this.state.retrying) return;
+    this.setState({ retrying: true });
+    let recovered: boolean | undefined | void;
+    try {
+      recovered = await this.props.onRetry();
+    } catch {
+      this.setState({ retrying: false });
+      return;
+    }
+    if (recovered === false) {
+      this.setState({ retrying: false });
+      return;
+    }
+    this.setState({ error: null, retrying: false });
+  };
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div
+          role="alert"
+          className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground"
+        >
+          <div className="flex items-center gap-3 rounded-md border border-border bg-muted/70 px-3 py-2">
+            <span>{this.state.error.message}</span>
+            <button
+              type="button"
+              className="shrink-0 underline underline-offset-2"
+              onClick={() => void this.retry()}
+              disabled={this.state.retrying}
+            >
+              {this.state.retrying ? 'Retrying…' : 'Retry'}
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export interface CopilotzChatProps {
   userId: string;
   userName?: string;
@@ -163,6 +228,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     editMessage,
     deleteThread,
     stopGeneration,
+    recoverConversation,
     loadOlderMessages
   } = useCopilotzChat({
     userId,
@@ -309,39 +375,44 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
   return (
     <ChatUserContextProvider initial={userContextSeed}>
       {specialStateContent ?? (
-        <ChatUI
-          messages={messages}
-          isMessagesLoading={isMessagesLoading}
-          isLoadingOlderMessages={isLoadingOlderMessages}
-          hasMoreMessagesBefore={messagePageInfo.hasMore}
-          activityNotice={activityNotice}
-          isBackgroundRefreshingMessages={isRecoveringStream}
-          onLoadOlderMessages={loadOlderMessages}
-          threads={threads}
-          currentThreadId={currentThreadId}
-          config={mergedConfig}
-          callbacks={chatCallbacks}
-          isGenerating={isStreaming}
-          isStoppingGeneration={isStopping}
-          suggestions={suggestions}
-          agentOptions={agentOptions}
-          selectedAgentId={selectedAgentId}
-          onSelectAgent={onSelectAgent}
-          participantIds={participantIds}
-          onParticipantsChange={onParticipantsChange}
-          targetAgentId={targetAgentId}
-          onTargetAgentChange={onTargetAgentChange}
-          user={userProp}
-          assistant={assistantProp}
-          onAddMemory={onAddMemory}
-          onUpdateMemory={onUpdateMemory}
-          onDeleteMemory={onDeleteMemory}
-          userMenuSections={userMenuSections}
-          userMenuAdditionalItems={userMenuAdditionalItems}
-          toolRenderers={toolRenderers}
-          toolCallDraftSource={toolCallDraftSource}
-          className={className}
-        />
+        <ChatRenderBoundary
+          key={currentThreadId ?? 'new'}
+          onRetry={() => recoverConversation?.()}
+        >
+          <ChatUI
+            messages={messages}
+            isMessagesLoading={isMessagesLoading}
+            isLoadingOlderMessages={isLoadingOlderMessages}
+            hasMoreMessagesBefore={messagePageInfo.hasMore}
+            activityNotice={activityNotice}
+            isBackgroundRefreshingMessages={isRecoveringStream}
+            onLoadOlderMessages={loadOlderMessages}
+            threads={threads}
+            currentThreadId={currentThreadId}
+            config={mergedConfig}
+            callbacks={chatCallbacks}
+            isGenerating={isStreaming}
+            isStoppingGeneration={isStopping}
+            suggestions={suggestions}
+            agentOptions={agentOptions}
+            selectedAgentId={selectedAgentId}
+            onSelectAgent={onSelectAgent}
+            participantIds={participantIds}
+            onParticipantsChange={onParticipantsChange}
+            targetAgentId={targetAgentId}
+            onTargetAgentChange={onTargetAgentChange}
+            user={userProp}
+            assistant={assistantProp}
+            onAddMemory={onAddMemory}
+            onUpdateMemory={onUpdateMemory}
+            onDeleteMemory={onDeleteMemory}
+            userMenuSections={userMenuSections}
+            userMenuAdditionalItems={userMenuAdditionalItems}
+            toolRenderers={toolRenderers}
+            toolCallDraftSource={toolCallDraftSource}
+            className={className}
+          />
+        </ChatRenderBoundary>
       )}
     </ChatUserContextProvider>
   );

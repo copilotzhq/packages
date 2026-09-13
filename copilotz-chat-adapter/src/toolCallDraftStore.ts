@@ -16,12 +16,29 @@ export type ToolCallDraftStore = ToolCallDraftSource & Readonly<{
   clear(): void;
 }>;
 
-export const createToolCallDraftStore = (): ToolCallDraftStore => {
+export const createToolCallDraftStore = (options: {
+  onSubscriberError?: (error: unknown) => void;
+} = {}): ToolCallDraftStore => {
   const snapshots = new Map<string, ToolCallDraftSnapshot>();
   const lastSequenceById = new Map<string, number>();
   const listenersById = new Map<string, Set<() => void>>();
   const notify = (draftId: string): void => {
-    for (const listener of listenersById.get(draftId) ?? []) listener();
+    const listeners = listenersById.get(draftId);
+    if (!listeners) return;
+    for (const listener of [...listeners]) {
+      try {
+        listener();
+      } catch (error) {
+        listeners.delete(listener);
+        try {
+          options.onSubscriberError?.(error);
+        } catch {
+          // Reporting must not turn a draft notification failure into a frame
+          // application failure.
+        }
+      }
+    }
+    if (listeners.size === 0) listenersById.delete(draftId);
   };
 
   const store: ToolCallDraftStore = {
