@@ -1,5 +1,10 @@
 # @copilotz/chat-ui
 
+## 0.75.0 — 2026-09-16
+
+Add Space-aware conversation navigation with create and move controls, explicit
+No Space grouping, and archived or unavailable Space buckets.
+
 ## 0.70.1 — 2026-09-09
 
 Show foreground memory consolidation as an Agent activity under its avatar.

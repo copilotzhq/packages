@@ -1,5 +1,10 @@
 # @copilotz/chat-adapter
 
+## 0.75.0 — 2026-09-16
+
+Integrate host-owned Core Spaces into chat navigation, including Space discovery,
+creation, thread moves, optimistic updates, and recovery when Space reads fail.
+
 ## 0.70.1 — 2026-09-09
 
 Project durable foreground consolidation activity across replay, completion, failure, and cancellation without exposing private maintenance content.

@@ -29,7 +29,7 @@ Then you need to show assistant activity — the library doesn't support that. S
 | Assistant Activity | Compact summary, optional details, hidden loader mode |
 | Media | Image/audio/video attachments with native playback controls |
 | Input | File upload (drag & drop), audio recording, attachment previews |
-| Threads | Sidebar with search, archive, date grouping, rename, delete |
+| Threads | Sidebar with search, archive, Date / Spaces grouping, rename, delete |
 | User Profile | Dynamic fields, memories (CRUD), agent vs user distinction |
 | Customization | 50+ labels (i18n-ready), feature toggles, theming |
 
@@ -117,7 +117,11 @@ File uploads with drag & drop. Audio recording with built-in MediaRecorder. Atta
 
 ### Thread Management
 
-Sidebar with threads grouped by date (Today, Yesterday, etc.). Search and filter. Archive toggle. Create, rename, and delete with confirmation dialogs. Collapsible icon mode for more screen space.
+Sidebar with threads grouped by date (Today, Yesterday, etc.) or Spaces. Search
+conversations and Spaces, create a Space, and move conversations by selection or
+drag and drop. Conversations without a Space remain visible in the No Space
+group. Archive toggle, rename, and delete with confirmation dialogs are retained.
+Collapsible icon mode supports smaller screens.
 
 ### User Profile
 
@@ -305,6 +309,10 @@ All user interactions are handled through callbacks. This keeps the component pu
     onDeleteThread: (threadId, stateCallback) => {},
     onArchiveThread: (threadId, stateCallback) => {},
 
+    // Spaces
+    onCreateSpace: (name, stateCallback) => {},
+    onMoveThreadToSpace: (threadId, spaceId, stateCallback) => {},
+
     // User Menu
     onViewProfile: () => {},
     onOpenSettings: () => {},
@@ -324,6 +332,7 @@ All user interactions are handled through callbacks. This keeps the component pu
 |------|------|-------------|
 | `messages` | `ChatMessage[]` | Array of messages to display |
 | `threads` | `ChatThread[]` | Array of conversation threads |
+| `spaces` | `ChatSpace[]` | Available Spaces used for grouping and assignment |
 | `currentThreadId` | `string \| null` | Currently selected thread ID |
 | `config` | `ChatConfig` | Configuration object |
 | `callbacks` | `ChatCallbacks` | Event handlers |

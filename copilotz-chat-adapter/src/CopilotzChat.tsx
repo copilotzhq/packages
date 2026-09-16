@@ -17,6 +17,7 @@ import type {
   RunErrorInterceptor
 } from './specialState';
 import type { RequestHeadersProvider } from './useCopilotzChat';
+import type { ChatSpaceService } from './controller';
 
 type ChatRenderBoundaryProps = {
   children: React.ReactNode;
@@ -139,6 +140,8 @@ export interface CopilotzChatProps {
   /** Multi-agent: ID of the agent this message is directed at */
   targetAgentId?: string | null;
   onTargetAgentChange?: (agentId: string | null) => void;
+  /** Host-owned Space API; its server must enforce actor and membership. */
+  spaceService?: ChatSpaceService;
   baseUrl?: string;
   getRequestHeaders?: RequestHeadersProvider;
   className?: string;
@@ -176,6 +179,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
   onParticipantsChange,
   targetAgentId = null,
   onTargetAgentChange,
+  spaceService,
   baseUrl,
   getRequestHeaders,
   className,
@@ -210,6 +214,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     isLoadingOlderMessages,
     messagePageInfo,
     threads,
+    spaces,
     currentThreadId,
     isStreaming,
     isStopping,
@@ -224,7 +229,8 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     selectThread,
     renameThread,
     archiveThread,
-    updateThreadTags,
+    createSpace,
+    moveThreadToSpace,
     editMessage,
     deleteThread,
     stopGeneration,
@@ -243,6 +249,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     preferredAgentName: selectedAgentRunId,
     participants: participantAgentIds,
     targetAgentName: targetAgentRunId,
+    spaceService,
     baseUrl,
     getRequestHeaders,
     eventInterceptor,
@@ -262,9 +269,10 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
       onRenameThread: _5,
       onArchiveThread: _6,
       onDeleteThread: _7,
-      onUpdateThreadTags: _8,
-      onCopyMessage: _9,
-      onEditMessage: _10,
+      onCreateSpace: _8,
+      onMoveThreadToSpace: _9,
+      onCopyMessage: _10,
+      onEditMessage: _11,
       ...restUserCallbacks
     } = userCallbacks || {};
 
@@ -294,10 +302,25 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
         void archiveThread(threadId);
         userCallbacks?.onArchiveThread?.(threadId);
       },
-      onUpdateThreadTags: (threadId, tags) => {
-        void updateThreadTags(threadId, tags);
-        userCallbacks?.onUpdateThreadTags?.(threadId, tags);
-      },
+      ...(spaceService
+        ? {
+            onCreateSpace: async (name: string) => {
+              const space = await createSpace(name);
+              if (space) userCallbacks?.onCreateSpace?.(name);
+              return space;
+            },
+            onMoveThreadToSpace: async (
+              threadId: string,
+              spaceId: string | null
+            ) => {
+              const moved = await moveThreadToSpace(threadId, spaceId);
+              if (moved === true) {
+                userCallbacks?.onMoveThreadToSpace?.(threadId, spaceId);
+              }
+              return moved ?? false;
+            }
+          }
+        : {}),
       onDeleteThread: (threadId: string) => {
         void deleteThread(threadId);
         userCallbacks?.onDeleteThread?.(threadId);
@@ -319,12 +342,14 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     selectThread,
     renameThread,
     archiveThread,
-    updateThreadTags,
+    createSpace,
+    moveThreadToSpace,
     editMessage,
     deleteThread,
     userCallbacks,
     onLogout,
-    onViewProfile
+    onViewProfile,
+    spaceService
   ]);
 
   const mergedConfig: ChatConfig = useMemo(() => {
@@ -388,6 +413,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
             isBackgroundRefreshingMessages={isRecoveringStream}
             onLoadOlderMessages={loadOlderMessages}
             threads={threads}
+            spaces={spaces}
             currentThreadId={currentThreadId}
             config={mergedConfig}
             callbacks={chatCallbacks}

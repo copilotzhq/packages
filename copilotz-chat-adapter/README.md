@@ -17,6 +17,7 @@ import '@copilotz/chat-ui/styles.css';
   userName="Alex"
   baseUrl="/api"
   getRequestHeaders={getRequestHeaders}
+  spaceService={spaceService}
 />;
 ```
 
@@ -24,6 +25,31 @@ import '@copilotz/chat-ui/styles.css';
 supplies executable sender identity, namespace and database scope. Request headers
 come from the application; this package does not read credentials from build-time
 environment variables.
+
+### Spaces
+
+Spaces are supplied through an explicit host-owned service. The service must
+authorize the signed-in actor and enforce conversation membership on every
+request; Core's generic collection client does not grant Space access by
+itself.
+
+```ts
+const spaceService = {
+  list: ({ signal } = {}) => api.listSpaces({ signal }),
+  create: (name, { signal } = {}) => api.createSpace({ name, signal }),
+  move: (threadId, spaceId, { signal } = {}) =>
+    api.moveConversation({ threadId, spaceId, signal }),
+};
+```
+
+`list` returns `ChatSpace` values (`id`, `name`, optional `status`, and optional
+`threadIds`). `threadIds` is a projection fallback; each conversation is
+assigned from one authoritative `spaceId` when the host provides it. The
+controller exposes Spaces in its snapshot, groups conversations once, and
+optimistically moves them. A rejected move restores its previous placement.
+Successful moves remain committed when a later refresh fails; the refresh error
+is reported while Date navigation continues to work. Without `spaceService`,
+the adapter keeps the ordinary Date sidebar and does not show Space controls.
 
 For custom interfaces, `useCopilotzChat` subscribes to the same controller. For
 non-React hosts:

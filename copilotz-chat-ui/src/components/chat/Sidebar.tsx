@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ChatSpace,
+  ChatState,
+  StateCallback,
   ChatThread,
-  ChatThreadTag,
   ChatUserMenuSection,
 } from "../../types/chatTypes";
 import { Button } from "../ui/button";
@@ -56,13 +58,15 @@ import {
 import {
   Archive,
   Bot,
+  Calendar,
   ChevronRight,
   Edit2,
   Filter,
+  Folder,
+  FolderPlus,
   MoreHorizontal,
   Plus,
   Search,
-  Tag,
   Trash2,
   X,
 } from "lucide-react";
@@ -73,6 +77,7 @@ import {
   UserMenuUser,
 } from "./UserMenu";
 import { Avatar, AvatarFallback } from "../ui/avatar";
+import { groupThreadsBySpace } from "../../lib/spaceGrouping";
 
 export interface SidebarConfig {
   labels?: {
@@ -89,15 +94,17 @@ export interface SidebarConfig {
     archiveThread?: string;
     unarchiveThread?: string;
     deleteThread?: string;
-    manageTags?: string;
-    tags?: string;
-    addTag?: string;
-    removeTag?: string;
-    tagNamePlaceholder?: string;
-    untagged?: string;
+    spaces?: string;
     groupBy?: string;
     groupByDate?: string;
-    groupByTag?: string;
+    groupBySpaces?: string;
+    noSpace?: string;
+    selectSpace?: string;
+    moveToSpace?: string;
+    removeFromSpace?: string;
+    createSpace?: string;
+    spaceNamePlaceholder?: string;
+    searchSpaces?: string;
     today?: string;
     yesterday?: string;
     createNewThread?: string;
@@ -112,10 +119,10 @@ export interface SidebarConfig {
     subtitle?: React.ReactNode;
   };
   features?: {
-    threadTags?: {
+    spaces?: {
       enabled?: boolean;
       groupingEnabled?: boolean;
-      defaultGroupBy?: "date" | "tag";
+      defaultGroupBy?: "date" | "space";
       allowCreate?: boolean;
       allowDrag?: boolean;
     };
@@ -123,9 +130,20 @@ export interface SidebarConfig {
   userMenu?: UserMenuConfig;
 }
 
+type SpaceMoveHandler = (
+  threadId: string,
+  spaceId: string | null,
+  callback?: StateCallback<ChatState>
+) => void | Promise<unknown>;
+type SpaceCreateHandler = (
+  name: string,
+  callback?: StateCallback<ChatState>
+) => ChatSpace | void | Promise<ChatSpace | void>;
+
 export interface SidebarProps
   extends React.ComponentProps<typeof ShadcnSidebar> {
   threads: ChatThread[];
+  spaces?: readonly ChatSpace[];
   currentThreadId?: string | null;
   config: SidebarConfig;
   onCreateThread?: (title?: string) => void;
@@ -133,7 +151,8 @@ export interface SidebarProps
   onRenameThread?: (threadId: string, newTitle: string) => void;
   onDeleteThread?: (threadId: string) => void;
   onArchiveThread?: (threadId: string) => void;
-  onUpdateThreadTags?: (threadId: string, tags: ChatThreadTag[]) => void;
+  onCreateSpace?: SpaceCreateHandler;
+  onMoveThreadToSpace?: SpaceMoveHandler;
   // User menu props
   user?: UserMenuUser | null;
   userMenuCallbacks?: UserMenuCallbacks;
@@ -144,7 +163,6 @@ export interface SidebarProps
   userMenuAdditionalItems?: React.ReactNode;
 }
 
-// Create thread dialog
 const CreateThreadDialog: React.FC<{
   config: SidebarConfig;
   onCreateThread: (title?: string) => void;
@@ -220,226 +238,172 @@ const ThreadInitialsIcon = ({ title }: { title: string }) => {
 type ThreadGroup = {
   key: string;
   label: string;
-  tag?: ChatThreadTag;
+  spaceId: string | null;
+  space?: ChatSpace;
   threads: ChatThread[];
   muted?: boolean;
 };
 
-function slugTagName(name: string): string {
-  const slug = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-  return slug || "tag";
-}
+const SpacePickerDialog: React.FC<{
+  config: SidebarConfig;
+  thread: ChatThread;
+  spaces: readonly ChatSpace[];
+  allowCreate: boolean;
+  onMove: SpaceMoveHandler;
+  onCreate?: SpaceCreateHandler;
+  onClose: () => void;
+}> = ({ config, thread, spaces, allowCreate, onMove, onCreate, onClose }) => {
+  const [search, setSearch] = useState("");
+  const [name, setName] = useState("");
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const query = search.trim().toLowerCase();
+  const matches = spaces.filter((space) =>
+    !query || space.name.toLowerCase().includes(query) ||
+      space.id.toLowerCase().includes(query)
+  );
 
-function createThreadTag(name: string): ChatThreadTag {
-  return {
-    id: `tag_${slugTagName(name)}`,
-    name: name.trim(),
-  };
-}
-
-function mergeThreadTags(
-  tags: ChatThreadTag[],
-  tag: ChatThreadTag
-): ChatThreadTag[] {
-  const nameKey = tag.name.trim().toLowerCase();
-  if (!nameKey) return tags;
-  if (
-    tags.some(
-      (existing) =>
-        existing.id === tag.id || existing.name.trim().toLowerCase() === nameKey
-    )
-  ) {
-    return tags;
-  }
-  return [...tags, tag];
-}
-
-function collectThreadTags(threads: ChatThread[]): ChatThreadTag[] {
-  const tags: ChatThreadTag[] = [];
-  for (const thread of threads) {
-    for (const tag of thread.tags ?? []) {
-      if (!tags.some((existing) => existing.id === tag.id)) {
-        tags.push(tag);
+  const move = async (spaceId: string | null) => {
+    if (working) return;
+    setWorking(true);
+    setError(null);
+    try {
+      const result = await onMove(thread.id, spaceId);
+      if (result === false) {
+        setError("This conversation could not be moved.");
+        return;
       }
+      onClose();
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "This conversation could not be moved."
+      );
+    } finally {
+      setWorking(false);
     }
-  }
-  return tags.sort((a, b) => a.name.localeCompare(b.name));
-}
-
-type TagColor = {
-  accent: string;
-  background: string;
-  border: string;
-};
-
-function normalizeTagColorKey(tag: ChatThreadTag): string {
-  return (tag.name || tag.id || "tag")
-    .trim()
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "");
-}
-
-function hashTagColorKey(value: string): number {
-  let hash = 0;
-  for (const char of value) {
-    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  }
-  return hash;
-}
-
-function hslToRgb(hue: number, saturation: number, lightness: number) {
-  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation;
-  const x = chroma * (1 - Math.abs(((hue / 60) % 2) - 1));
-  const match = lightness - chroma / 2;
-  let red = 0;
-  let green = 0;
-  let blue = 0;
-
-  if (hue < 60) {
-    red = chroma;
-    green = x;
-  } else if (hue < 120) {
-    red = x;
-    green = chroma;
-  } else if (hue < 180) {
-    green = chroma;
-    blue = x;
-  } else if (hue < 240) {
-    green = x;
-    blue = chroma;
-  } else if (hue < 300) {
-    red = x;
-    blue = chroma;
-  } else {
-    red = chroma;
-    blue = x;
-  }
-
-  return {
-    red: Math.round((red + match) * 255),
-    green: Math.round((green + match) * 255),
-    blue: Math.round((blue + match) * 255),
   };
-}
 
-function tagColor(tag: ChatThreadTag): TagColor {
-  if (tag.color) {
-    return {
-      accent: tag.color,
-      background: `color-mix(in srgb, ${tag.color} 12%, transparent)`,
-      border: `color-mix(in srgb, ${tag.color} 24%, transparent)`,
-    };
-  }
-
-  const hue = hashTagColorKey(normalizeTagColorKey(tag)) % 360;
-  const { red, green, blue } = hslToRgb(hue, 0.68, 0.48);
-
-  return {
-    accent: `rgb(${red} ${green} ${blue})`,
-    background: `rgb(${red} ${green} ${blue} / 0.12)`,
-    border: `rgb(${red} ${green} ${blue} / 0.24)`,
+  const create = async () => {
+    if (working) return;
+    const trimmed = name.trim();
+    if (!trimmed || !onCreate) return;
+    setWorking(true);
+    setError(null);
+    try {
+      const created = await onCreate(trimmed);
+      if (!created?.id) {
+        setError("The Space could not be created.");
+        return;
+      }
+      const result = await onMove(thread.id, created.id);
+      if (result === false) {
+        setError("The Space was created, but this conversation could not be moved.");
+        return;
+      }
+      onClose();
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "The Space could not be created."
+      );
+    } finally {
+      setWorking(false);
+    }
   };
-}
 
-const TagDot = ({ tag }: { tag: ChatThreadTag }) => {
-  const color = tagColor(tag);
   return (
-    <span
-      aria-hidden="true"
-      className="h-2 w-2 shrink-0 rounded-full"
-      style={{ backgroundColor: color.accent }}
-    />
-  );
-};
-
-const ThreadTagBadge = ({ tag }: { tag: ChatThreadTag }) => {
-  const color = tagColor(tag);
-  return (
-    <Badge
-      variant="secondary"
-      className="h-4 max-w-24 gap-1 rounded border px-1.5 py-0 text-[10px] font-normal text-muted-foreground"
-      style={{
-        backgroundColor: color.background,
-        borderColor: color.border,
-      }}
-    >
-      <TagDot tag={tag} />
-      <span className="truncate">{tag.name}</span>
-    </Badge>
-  );
-};
-
-const ThreadTagEditorBadge = ({
-  tag,
-  removeLabel,
-  onRemove,
-}: {
-  tag: ChatThreadTag;
-  removeLabel: string;
-  onRemove: () => void;
-}) => {
-  const color = tagColor(tag);
-  return (
-    <Badge
-      variant="secondary"
-      className="gap-1 rounded-md border py-1 text-sm font-normal"
-      style={{
-        backgroundColor: color.background,
-        borderColor: color.border,
-      }}
-    >
-      <TagDot tag={tag} />
-      {tag.name}
-      <button
-        type="button"
-        className="rounded-sm hover:bg-background/80"
-        onClick={onRemove}
-        aria-label={removeLabel}
-      >
-        <X className="h-3 w-3" />
-      </button>
-    </Badge>
-  );
-};
-
-const ThreadTagOptionButton = ({
-  tag,
-  assigned,
-  onClick,
-}: {
-  tag: ChatThreadTag;
-  assigned: boolean;
-  onClick: () => void;
-}) => {
-  const color = tagColor(tag);
-  return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      disabled={assigned}
-      className="gap-1.5 border font-medium disabled:opacity-70"
-      style={{
-        backgroundColor: color.background,
-        borderColor: color.border,
-        color: color.accent,
-      }}
-      onClick={onClick}
-    >
-      <TagDot tag={tag} />
-      {tag.name}
-    </Button>
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>
+          {config.labels?.selectSpace || "Select Space"}
+        </DialogTitle>
+        <DialogDescription>{thread.title || "Conversation"}</DialogDescription>
+      </DialogHeader>
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
+      <div className="space-y-3">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            aria-label={config.labels?.searchSpaces || "Search Spaces"}
+            placeholder={config.labels?.searchSpaces || "Search Spaces"}
+            className="pl-9"
+            autoFocus
+            disabled={working}
+          />
+        </div>
+        <div className="max-h-56 space-y-1 overflow-y-auto">
+          <Button
+            type="button"
+            variant={thread.spaceId == null ? "secondary" : "ghost"}
+            className="w-full justify-start"
+            disabled={working || thread.spaceId == null}
+            onClick={() => void move(null)}
+          >
+            <X className="mr-2 h-4 w-4" />
+            {config.labels?.noSpace || "No Space"}
+          </Button>
+          {matches.map((space) => (
+            <Button
+              type="button"
+              key={space.id}
+              variant={thread.spaceId === space.id ? "secondary" : "ghost"}
+              className="w-full justify-start"
+              disabled={working || thread.spaceId === space.id}
+              onClick={() => void move(space.id)}
+            >
+              <Folder className="mr-2 h-4 w-4" />
+              <span className="truncate">{space.name || space.id}</span>
+            </Button>
+          ))}
+          {matches.length === 0 && (
+            <p className="px-2 py-3 text-sm text-muted-foreground">
+              {config.labels?.noThreadsFound || "No Spaces found"}
+            </p>
+          )}
+        </div>
+        {allowCreate && onCreate && (
+          <div className="flex gap-2 border-t pt-3">
+            <Input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              aria-label={
+                config.labels?.spaceNamePlaceholder || "Space name"
+              }
+              placeholder={
+                config.labels?.spaceNamePlaceholder || "Space name"
+              }
+              disabled={working}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void create();
+                }
+              }}
+            />
+            <Button
+              type="button"
+              onClick={() => void create()}
+              disabled={working || !name.trim()}
+            >
+              {config.labels?.createSpace || "Create Space"}
+            </Button>
+          </div>
+        )}
+      </div>
+    </DialogContent>
   );
 };
 
 export const Sidebar: React.FC<SidebarProps> = ({
   threads,
+  spaces = [],
   currentThreadId,
   config,
   onCreateThread,
@@ -447,8 +411,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onRenameThread,
   onDeleteThread,
   onArchiveThread,
-  onUpdateThreadTags,
-  // User menu props
+  onCreateSpace,
+  onMoveThreadToSpace,
   user,
   userMenuCallbacks,
   currentTheme,
@@ -462,26 +426,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [deleteThreadId, setDeleteThreadId] = useState<string | null>(null);
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
-  const [tagDialogThreadId, setTagDialogThreadId] = useState<string | null>(
+  const [spacePickerThreadId, setSpacePickerThreadId] = useState<string | null>(
     null
   );
-  const [newTagName, setNewTagName] = useState("");
   const [draggingThreadId, setDraggingThreadId] = useState<string | null>(null);
-  const [dragOverTagId, setDragOverTagId] = useState<string | null>(null);
+  const [dragOverSpaceId, setDragOverSpaceId] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<
     Record<string, boolean>
   >({});
   const inputRef = useRef<HTMLInputElement>(null);
-  const threadTagsConfig = config.features?.threadTags;
-  const tagsEnabled = !!threadTagsConfig?.enabled;
-  const canUpdateTags = tagsEnabled && !!onUpdateThreadTags;
-  const canDragTags = canUpdateTags && threadTagsConfig?.allowDrag !== false;
-  const [groupBy, setGroupBy] = useState<"date" | "tag">(
-    threadTagsConfig?.defaultGroupBy === "tag" ? "tag" : "date"
-  );
-
-  // Use the sidebar context to control expansion
   const { setOpen } = useSidebar();
+  const spacesConfig = config.features?.spaces;
+  const spacesEnabled =
+    spacesConfig?.enabled !== false &&
+    (spaces.length > 0 || !!onMoveThreadToSpace);
+  const canMoveSpaces = spacesEnabled && !!onMoveThreadToSpace;
+  const canDragSpaces = canMoveSpaces && spacesConfig?.allowDrag !== false;
+  const [groupBy, setGroupBy] = useState<"date" | "space">(
+    spacesConfig?.defaultGroupBy === "space" ? "space" : "date"
+  );
 
   useEffect(() => {
     if (editingThreadId && inputRef.current) {
@@ -490,58 +453,51 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   }, [editingThreadId]);
 
+  const activeSpaces = useMemo(
+    () => spaces.filter((space) => space.status !== "archived"),
+    [spaces]
+  );
+  const spaceMap = useMemo(
+    () => new Map(spaces.map((space) => [space.id, space])),
+    [spaces]
+  );
+  const pickerThread = spacePickerThreadId
+    ? threads.find((thread) => thread.id === spacePickerThreadId) ?? null
+    : null;
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
-
+  const threadSpace = (thread: ChatThread) =>
+    thread.spaceId ? spaceMap.get(thread.spaceId) : undefined;
   const threadMatchesTitle = (thread: ChatThread) =>
     !normalizedSearchQuery ||
-    (thread.title ?? "").toString().toLowerCase().includes(
-      normalizedSearchQuery,
+    (thread.title ?? "").toString().toLowerCase().includes(normalizedSearchQuery);
+  const threadMatchesSpace = (thread: ChatThread) => {
+    const space = threadSpace(thread);
+    return !!space && (
+      space.name.toLowerCase().includes(normalizedSearchQuery) ||
+      space.id.toLowerCase().includes(normalizedSearchQuery)
     );
-
-  const tagMatchesSearch = (tag: ChatThreadTag) =>
-    !normalizedSearchQuery ||
-    tag.name.toLowerCase().includes(normalizedSearchQuery) ||
-    tag.id.toLowerCase().includes(normalizedSearchQuery);
-
-  const threadMatchesSearch = (thread: ChatThread) =>
-    threadMatchesTitle(thread) || (thread.tags ?? []).some(tagMatchesSearch);
-
-  // Filter threads based on search and archive filter
-  const filteredThreads = threads.filter((thread) => {
-    const matchesArchiveFilter = showArchived || !thread.isArchived;
-    return threadMatchesSearch(thread) && matchesArchiveFilter;
-  });
-
-  const allTags = useMemo(() => collectThreadTags(threads), [threads]);
+  };
+  const filteredThreads = threads.filter((thread) =>
+    (showArchived || !thread.isArchived) &&
+      (threadMatchesTitle(thread) || threadMatchesSpace(thread))
+  );
 
   const threadGroups = useMemo((): ThreadGroup[] => {
-    if (tagsEnabled && groupBy === "tag") {
-      const groups: ThreadGroup[] = allTags
-        .map((tag) => {
-          const tagMatches = tagMatchesSearch(tag);
-          return {
-            key: tag.id,
-            label: tag.name,
-            tag,
-            threads: filteredThreads.filter((thread) =>
-              (thread.tags ?? []).some((threadTag) => threadTag.id === tag.id) &&
-              (tagMatches || threadMatchesTitle(thread))
-            ),
-          };
-        })
-        .filter((group) => group.threads.length > 0);
-      const untagged = filteredThreads.filter(
-        (thread) => (thread.tags ?? []).length === 0 &&
-          threadMatchesTitle(thread)
-      );
-      if (untagged.length > 0) {
-        groups.push({
-          key: "untagged",
-          label: config.labels?.untagged || "No tag",
-          threads: untagged,
-          muted: true,
-        });
-      }
+    if (spacesEnabled && spacesConfig?.groupingEnabled !== false && groupBy === "space") {
+      const groups: ThreadGroup[] = groupThreadsBySpace(
+        filteredThreads,
+        spaces,
+        config.labels?.noSpace || "No Space"
+      )
+        .map((group) => ({ ...group, threads: [...group.threads] }))
+        .filter((group) =>
+          group.threads.length > 0 ||
+          !normalizedSearchQuery ||
+          group.label.toLowerCase().includes(normalizedSearchQuery) ||
+          group.space?.id.toLowerCase().includes(normalizedSearchQuery)
+        );
+      const spaceless = groups.find((group) => group.spaceId === null);
+      if (spaceless) spaceless.muted = true;
       return groups;
     }
 
@@ -551,107 +507,66 @@ export const Sidebar: React.FC<SidebarProps> = ({
       const date = new Date(thread.updatedAt);
       const today = new Date();
       const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
-
-      let groupKey: string;
+      let label: string;
       if (date.toDateString() === today.toDateString()) {
-        groupKey = config.labels?.today || "Today";
+        label = config.labels?.today || "Today";
       } else if (date.toDateString() === yesterday.toDateString()) {
-        groupKey = config.labels?.yesterday || "Yesterday";
+        label = config.labels?.yesterday || "Yesterday";
       } else {
-        groupKey = date.toLocaleDateString("en-US", {
+        label = date.toLocaleDateString("en-US", {
           weekday: "long",
           day: "2-digit",
           month: "long",
         });
       }
-
-      const existing = groupMap.get(groupKey);
-      if (existing) {
-        existing.threads.push(thread);
-      } else {
-        const group = { key: groupKey, label: groupKey, threads: [thread] };
-        groupMap.set(groupKey, group);
+      const existing = groupMap.get(label);
+      if (existing) existing.threads.push(thread);
+      else {
+        const group = {
+          key: `date:${label}`,
+          label,
+          spaceId: null,
+          threads: [thread],
+        };
+        groupMap.set(label, group);
         groups.push(group);
       }
     }
     return groups;
   }, [
-    allTags,
+    config.labels?.noSpace,
     config.labels?.today,
-    config.labels?.untagged,
     config.labels?.yesterday,
     filteredThreads,
     groupBy,
     normalizedSearchQuery,
-    tagsEnabled,
+    spaceMap,
+    spaces,
+    spacesConfig?.groupingEnabled,
+    spacesEnabled,
   ]);
-
-  const tagDialogThread = tagDialogThreadId
-    ? threads.find((thread) => thread.id === tagDialogThreadId) ?? null
-    : null;
-
-  const toggleGroup = (groupKey: string, open: boolean) => {
-    setCollapsedGroups((current) => ({
-      ...current,
-      [groupKey]: !open,
-    }));
-  };
 
   const handleDeleteThread = (threadId: string) => {
     onDeleteThread?.(threadId);
     setDeleteThreadId(null);
   };
-
-  const updateThreadTags = (thread: ChatThread, tags: ChatThreadTag[]) => {
-    onUpdateThreadTags?.(thread.id, tags);
-  };
-
-  const addTagToThread = (thread: ChatThread, tag: ChatThreadTag) => {
-    updateThreadTags(thread, mergeThreadTags(thread.tags ?? [], tag));
-  };
-
-  const removeTagFromThread = (thread: ChatThread, tagId: string) => {
-    updateThreadTags(
-      thread,
-      (thread.tags ?? []).filter((tag) => tag.id !== tagId)
-    );
-  };
-
-  const handleCreateTag = () => {
-    if (!tagDialogThread || !newTagName.trim()) return;
-    addTagToThread(tagDialogThread, createThreadTag(newTagName));
-    setNewTagName("");
-  };
-
-  const handleDropOnTag = (tag: ChatThreadTag) => {
-    const thread = draggingThreadId
-      ? threads.find((candidate) => candidate.id === draggingThreadId)
-      : null;
-    if (thread) addTagToThread(thread, tag);
-    setDraggingThreadId(null);
-    setDragOverTagId(null);
-  };
-
   const startEditing = (thread: ChatThread) => {
     setEditingThreadId(thread.id);
     setEditTitle(thread.title || "");
   };
-
   const saveEdit = () => {
     if (editingThreadId && editTitle.trim()) {
       onRenameThread?.(editingThreadId, editTitle.trim());
     }
     setEditingThreadId(null);
   };
-
-  const cancelEdit = () => {
-    setEditingThreadId(null);
+  const toggleGroup = (groupKey: string, open: boolean) => {
+    setCollapsedGroups((current) => ({ ...current, [groupKey]: !open }));
   };
 
   return (
     <ShadcnSidebar collapsible="icon" {...props}>
       <SidebarHeader className="gap-3 p-3 group-data-[collapsible=icon]:items-center group-data-[collapsible=icon]:px-0">
-        {/* Branding / Logo */}
         <div className="flex items-center gap-3 px-2 py-3 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
           <div className="flex h-8 w-8 shrink-0 items-center justify-center">
             {config.branding?.logo || (
@@ -662,12 +577,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </Avatar>
             )}
           </div>
-          <div className="flex flex-col min-w-0 group-data-[collapsible=icon]:hidden">
-            <span className="text-sm font-semibold truncate">
+          <div className="flex min-w-0 flex-col group-data-[collapsible=icon]:hidden">
+            <span className="truncate text-sm font-semibold">
               {config.branding?.title || "Chat"}
             </span>
             {config.branding?.subtitle && (
-              <span className="text-xs text-muted-foreground truncate">
+              <span className="truncate text-xs text-muted-foreground">
                 {config.branding.subtitle}
               </span>
             )}
@@ -675,7 +590,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         <div className="space-y-3 px-1 group-data-[collapsible=icon]:hidden">
-          {/* New Chat Button */}
           {onCreateThread && (
             <CreateThreadDialog
               config={config}
@@ -698,8 +612,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               }
             />
           )}
-
-          {/* Search */}
           <div className="relative">
             <Search
               aria-hidden="true"
@@ -707,13 +619,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
             />
             <Input
               className="h-9 rounded-xl border-sidebar-border/80 bg-sidebar pl-3 pr-10 text-sidebar-foreground shadow-sm placeholder:text-sidebar-foreground/50 focus-visible:ring-1 focus-visible:ring-sidebar-ring"
-              placeholder={config.labels?.search || "Search..."}
+              placeholder={config.labels?.search || "Search conversations..."}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
-
-          {tagsEnabled && threadTagsConfig?.groupingEnabled !== false && (
+          {spacesEnabled && spacesConfig?.groupingEnabled !== false && (
             <div className="grid grid-cols-2 gap-1 rounded-xl border border-sidebar-border/60 bg-sidebar-accent/70 p-1">
               <Button
                 variant="ghost"
@@ -730,21 +641,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => setGroupBy("tag")}
+                onClick={() => setGroupBy("space")}
                 className={`h-8 rounded-lg px-2 text-xs font-semibold transition-colors ${
-                  groupBy === "tag"
+                  groupBy === "space"
                     ? "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar"
                     : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
                 }`}
               >
-                {config.labels?.groupByTag || "Tag"}
+                {config.labels?.groupBySpaces || config.labels?.spaces || "Spaces"}
               </Button>
             </div>
           )}
+          {currentThreadId && canMoveSpaces && (
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full justify-start rounded-xl"
+              onClick={() => setSpacePickerThreadId(currentThreadId)}
+            >
+              <Folder className="mr-2 h-4 w-4" />
+              {threadSpace(
+                threads.find((thread) => thread.id === currentThreadId) ||
+                  ({ spaceId: null } as ChatThread)
+              )?.name || config.labels?.selectSpace || "Select Space"}
+            </Button>
+          )}
         </div>
-
-        {/* Collapsed View: Search Icon Button (expands sidebar on click) */}
-        <div className="hidden group-data-[collapsible=icon]:flex justify-center">
+        <div className="hidden justify-center group-data-[collapsible=icon]:flex">
           <Button
             variant="ghost"
             size="icon"
@@ -758,14 +681,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </SidebarHeader>
 
       <SidebarContent>
-        {/* Archive Filter Toggle (if needed) */}
-        {threads.some((t) => t.isArchived) && (
-          <div className="px-4 py-2 mt-2 group-data-[collapsible=icon]:hidden">
+        {threads.some((thread) => thread.isArchived) && (
+          <div className="mt-2 px-4 py-2 group-data-[collapsible=icon]:hidden">
             <Button
               variant="ghost"
               size="sm"
               onClick={() => setShowArchived(!showArchived)}
-              className="h-6 text-xs w-full justify-start text-muted-foreground"
+              className="h-6 w-full justify-start text-xs text-muted-foreground"
             >
               <Filter className="mr-2 h-3 w-3" />
               {showArchived
@@ -774,10 +696,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </Button>
           </div>
         )}
-
         {threadGroups.length === 0 ? (
           <div className="px-4 py-8 text-center text-muted-foreground group-data-[collapsible=icon]:hidden">
-            <div className="mx-auto h-8 w-8 mb-2 flex items-center justify-center rounded-full bg-muted/50">
+            <div className="mx-auto mb-2 flex h-8 w-8 items-center justify-center rounded-full bg-muted/50">
               <Plus className="h-4 w-4 opacity-50" />
             </div>
             <p className="text-xs">
@@ -798,25 +719,37 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <SidebarGroup
                   className="mt-1 py-1"
                   onDragOver={(event) => {
-                    if (!canDragTags || !group.tag) return;
+                    if (
+                      !canDragSpaces ||
+                      groupBy !== "space" ||
+                      group.unavailable
+                    )
+                      return;
                     event.preventDefault();
-                    setDragOverTagId(group.tag.id);
+                    setDragOverSpaceId(group.spaceId);
                   }}
                   onDragLeave={() => {
-                    if (dragOverTagId === group.tag?.id) {
-                      setDragOverTagId(null);
-                    }
+                    if (dragOverSpaceId === group.spaceId) setDragOverSpaceId(null);
                   }}
                   onDrop={(event) => {
-                    if (!canDragTags || !group.tag) return;
+                    if (
+                      !canDragSpaces ||
+                      groupBy !== "space" ||
+                      group.unavailable
+                    )
+                      return;
                     event.preventDefault();
-                    handleDropOnTag(group.tag);
+                    if (draggingThreadId) {
+                      void onMoveThreadToSpace!(draggingThreadId, group.spaceId);
+                    }
+                    setDraggingThreadId(null);
+                    setDragOverSpaceId(null);
                   }}
                 >
                   <SidebarGroupLabel
                     asChild
                     className={`h-7 group-data-[collapsible=icon]:hidden ${
-                      dragOverTagId === group.tag?.id
+                      dragOverSpaceId === group.spaceId
                         ? "bg-sidebar-accent text-sidebar-accent-foreground"
                         : ""
                     }`}
@@ -827,11 +760,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           isOpen ? "rotate-90" : ""
                         }`}
                       />
-                      {group.tag ? (
-                        <TagDot tag={group.tag} />
-                      ) : group.muted ? (
-                        <Tag className="mr-1 h-3.5 w-3.5 opacity-50" />
-                      ) : null}
+                      {groupBy === "space" ? (
+                        group.space ? (
+                          <Folder className="mr-1 h-3.5 w-3.5" />
+                        ) : (
+                          <FolderPlus className="mr-1 h-3.5 w-3.5 opacity-50" />
+                        )
+                      ) : (
+                        <Calendar className="mr-1 h-3.5 w-3.5 opacity-50" />
+                      )}
                       <span
                         className={`min-w-0 flex-1 truncate ${
                           group.muted ? "text-muted-foreground" : ""
@@ -847,139 +784,103 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   <CollapsibleContent>
                     <SidebarGroupContent>
                       <SidebarMenu>
-                        {group.threads.map((thread) => {
-                          const visibleTags = tagsEnabled
-                            ? (thread.tags ?? [])
-                                .filter((tag) => tag.id !== group.tag?.id)
-                                .slice(0, 2)
-                            : [];
-                          return (
-                            <SidebarMenuItem key={thread.id}>
-                              {editingThreadId === thread.id ? (
-                                <div className="flex items-center gap-1 px-2 py-1">
-                                  <Input
-                                    ref={inputRef}
-                                    value={editTitle}
-                                    onChange={(e) =>
-                                      setEditTitle(e.target.value)
-                                    }
-                                    onKeyDown={(e) => {
-                                      if (e.key === "Enter") {
-                                        saveEdit();
-                                      }
-                                      if (e.key === "Escape") {
-                                        cancelEdit();
-                                      }
-                                    }}
-                                    onBlur={saveEdit}
-                                    className="h-7 text-sm"
-                                  />
-                                </div>
-                              ) : (
-                                <SidebarMenuButton
-                                  isActive={currentThreadId === thread.id}
-                                  onClick={() => onSelectThread?.(thread.id)}
-                                  tooltip={thread.title}
-                                  draggable={canDragTags}
-                                  className="h-auto min-h-9 items-start py-1.5"
-                                  onDragStart={() =>
-                                    setDraggingThreadId(thread.id)}
-                                  onDragEnd={() => {
-                                    setDraggingThreadId(null);
-                                    setDragOverTagId(null);
+                        {group.threads.map((thread) => (
+                          <SidebarMenuItem key={thread.id}>
+                            {editingThreadId === thread.id ? (
+                              <div className="flex items-center gap-1 px-2 py-1">
+                                <Input
+                                  ref={inputRef}
+                                  value={editTitle}
+                                  onChange={(e) => setEditTitle(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") saveEdit();
+                                    if (e.key === "Escape") setEditingThreadId(null);
                                   }}
-                                >
-                                  <ThreadInitialsIcon
-                                    title={thread.title || "?"}
-                                  />
-                                  <div className="flex min-w-0 flex-1 flex-col items-start gap-1 group-data-[collapsible=icon]:hidden">
-                                    <span className="w-full truncate leading-5">
-                                      {thread.title || "New Chat"}
-                                    </span>
-                                    {visibleTags.length > 0 && (
-                                      <span className="flex max-w-full flex-wrap gap-1">
-                                        {visibleTags.map((tag) => (
-                                          <ThreadTagBadge
-                                            key={tag.id}
-                                            tag={tag}
-                                          />
-                                        ))}
+                                  onBlur={saveEdit}
+                                  className="h-7 text-sm"
+                                />
+                              </div>
+                            ) : (
+                              <SidebarMenuButton
+                                isActive={currentThreadId === thread.id}
+                                onClick={() => onSelectThread?.(thread.id)}
+                                tooltip={thread.title}
+                                draggable={canDragSpaces}
+                                className="h-auto min-h-9 items-start py-1.5"
+                                onDragStart={() => setDraggingThreadId(thread.id)}
+                                onDragEnd={() => {
+                                  setDraggingThreadId(null);
+                                  setDragOverSpaceId(null);
+                                }}
+                              >
+                                <ThreadInitialsIcon title={thread.title || "?"} />
+                                <div className="flex min-w-0 flex-1 flex-col items-start gap-1 group-data-[collapsible=icon]:hidden">
+                                  <span className="w-full truncate leading-5">
+                                    {thread.title || "New Chat"}
+                                  </span>
+                                  {groupBy === "date" && threadSpace(thread) && (
+                                    <Badge
+                                      variant="secondary"
+                                      className="h-4 max-w-28 gap-1 rounded border px-1.5 py-0 text-[10px] font-normal text-muted-foreground"
+                                    >
+                                      <Folder className="h-2.5 w-2.5" />
+                                      <span className="truncate">
+                                        {threadSpace(thread)!.name}
                                       </span>
-                                    )}
-                                  </div>
-                                  {thread.isArchived && (
-                                    <Archive className="ml-auto mt-1 h-3 w-3 opacity-50 group-data-[collapsible=icon]:hidden" />
+                                    </Badge>
                                   )}
-                                </SidebarMenuButton>
-                              )}
-
-                              {!editingThreadId && (
-                                <DropdownMenu>
-                                  <DropdownMenuTrigger asChild>
-                                    <SidebarMenuAction showOnHover>
-                                      <MoreHorizontal />
-                                      <span className="sr-only">More</span>
-                                    </SidebarMenuAction>
-                                  </DropdownMenuTrigger>
-                                  <DropdownMenuContent
-                                    className="w-48"
-                                    side="right"
-                                    align="start"
+                                </div>
+                                {thread.isArchived && (
+                                  <Archive className="ml-auto mt-1 h-3 w-3 opacity-50 group-data-[collapsible=icon]:hidden" />
+                                )}
+                              </SidebarMenuButton>
+                            )}
+                            {!editingThreadId && (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <SidebarMenuAction showOnHover>
+                                    <MoreHorizontal />
+                                    <span className="sr-only">More</span>
+                                  </SidebarMenuAction>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent
+                                  className="w-48"
+                                  side="right"
+                                  align="start"
+                                >
+                                  <DropdownMenuItem onClick={() => startEditing(thread)}>
+                                    <Edit2 className="mr-2 h-4 w-4" />
+                                    <span>{config.labels?.renameThread || "Rename"}</span>
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onClick={() => onArchiveThread?.(thread.id)}>
+                                    <Archive className="mr-2 h-4 w-4" />
+                                    <span>
+                                      {thread.isArchived
+                                        ? config.labels?.unarchiveThread || "Unarchive"
+                                        : config.labels?.archiveThread || "Archive"}
+                                    </span>
+                                  </DropdownMenuItem>
+                                  {canMoveSpaces && (
+                                    <DropdownMenuItem
+                                      onClick={() => setSpacePickerThreadId(thread.id)}
+                                    >
+                                      <Folder className="mr-2 h-4 w-4" />
+                                      <span>{config.labels?.moveToSpace || "Move to Space"}</span>
+                                    </DropdownMenuItem>
+                                  )}
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem
+                                    onClick={() => setDeleteThreadId(thread.id)}
+                                    className="text-destructive focus:text-destructive"
                                   >
-                                    <DropdownMenuItem
-                                      onClick={() => startEditing(thread)}
-                                    >
-                                      <Edit2 className="mr-2 h-4 w-4" />
-                                      <span>
-                                        {config.labels?.renameThread ||
-                                          "Rename"}
-                                      </span>
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem
-                                      onClick={() =>
-                                        onArchiveThread?.(thread.id)}
-                                    >
-                                      <Archive className="mr-2 h-4 w-4" />
-                                      <span>
-                                        {thread.isArchived
-                                          ? config.labels?.unarchiveThread ||
-                                            "Unarchive"
-                                          : config.labels?.archiveThread ||
-                                            "Archive"}
-                                      </span>
-                                    </DropdownMenuItem>
-                                    {canUpdateTags && (
-                                      <DropdownMenuItem
-                                        onClick={() => {
-                                          setTagDialogThreadId(thread.id);
-                                          setNewTagName("");
-                                        }}
-                                      >
-                                        <Tag className="mr-2 h-4 w-4" />
-                                        <span>
-                                          {config.labels?.manageTags ||
-                                            "Manage tags"}
-                                        </span>
-                                      </DropdownMenuItem>
-                                    )}
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem
-                                      onClick={() =>
-                                        setDeleteThreadId(thread.id)}
-                                      className="text-destructive focus:text-destructive"
-                                    >
-                                      <Trash2 className="mr-2 h-4 w-4" />
-                                      <span>
-                                        {config.labels?.deleteThread ||
-                                          "Delete"}
-                                      </span>
-                                    </DropdownMenuItem>
-                                  </DropdownMenuContent>
-                                </DropdownMenu>
-                              )}
-                            </SidebarMenuItem>
-                          );
-                        })}
+                                    <Trash2 className="mr-2 h-4 w-4" />
+                                    <span>{config.labels?.deleteThread || "Delete"}</span>
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            )}
+                          </SidebarMenuItem>
+                        ))}
                       </SidebarMenu>
                     </SidebarGroupContent>
                   </CollapsibleContent>
@@ -1001,107 +902,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
           additionalItems={userMenuAdditionalItems}
         />
       </SidebarFooter>
-
       <SidebarRail />
 
-      {tagDialogThread && (
+      {pickerThread && (
         <Dialog
-          open={!!tagDialogThread}
-          onOpenChange={(open) => {
-            if (!open) {
-              setTagDialogThreadId(null);
-              setNewTagName("");
-            }
-          }}
+          open={!!spacePickerThreadId}
+          onOpenChange={(open) => !open && setSpacePickerThreadId(null)}
         >
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>
-                {config.labels?.manageTags || "Manage tags"}
-              </DialogTitle>
-              <DialogDescription>
-                {tagDialogThread.title || "New Chat"}
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <div className="text-sm font-medium">
-                  {config.labels?.tags || "Tags"}
-                </div>
-                {(tagDialogThread.tags ?? []).length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    {config.labels?.untagged || "Untagged"}
-                  </p>
-                ) : (
-                  <div className="flex flex-wrap gap-2">
-                    {(tagDialogThread.tags ?? []).map((tag) => (
-                      <ThreadTagEditorBadge
-                        key={tag.id}
-                        tag={tag}
-                        removeLabel={config.labels?.removeTag || "Remove tag"}
-                        onRemove={() =>
-                          removeTagFromThread(tagDialogThread, tag.id)
-                        }
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {allTags.length > 0 && (
-                <div className="space-y-2">
-                  <div className="text-sm font-medium">
-                    {config.labels?.addTag || "Add tag"}
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {allTags.map((tag) => {
-                      const assigned = (tagDialogThread.tags ?? []).some(
-                        (threadTag) => threadTag.id === tag.id
-                      );
-                      return (
-                        <ThreadTagOptionButton
-                          key={tag.id}
-                          tag={tag}
-                          assigned={assigned}
-                          onClick={() => addTagToThread(tagDialogThread, tag)}
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {threadTagsConfig?.allowCreate !== false && (
-                <div className="flex gap-2">
-                  <Input
-                    value={newTagName}
-                    onChange={(event) => setNewTagName(event.target.value)}
-                    placeholder={
-                      config.labels?.tagNamePlaceholder || "Tag name"
-                    }
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        handleCreateTag();
-                      }
-                    }}
-                  />
-                  <Button
-                    type="button"
-                    onClick={handleCreateTag}
-                    disabled={!newTagName.trim()}
-                  >
-                    {config.labels?.addTag || "Add tag"}
-                  </Button>
-                </div>
-              )}
-            </div>
-          </DialogContent>
+          <SpacePickerDialog
+            config={config}
+            thread={pickerThread}
+            spaces={activeSpaces}
+            allowCreate={spacesConfig?.allowCreate !== false}
+            onMove={onMoveThreadToSpace!}
+            onCreate={onCreateSpace}
+            onClose={() => setSpacePickerThreadId(null)}
+          />
         </Dialog>
       )}
 
-      {/* Delete confirmation dialog - only render when needed to avoid Radix focus conflicts */}
       {deleteThreadId && (
         <AlertDialog
           open={!!deleteThreadId}
@@ -1118,13 +937,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel>
-                {config.labels?.cancel || "Cancel"}
-              </AlertDialogCancel>
+              <AlertDialogCancel>{config.labels?.cancel || "Cancel"}</AlertDialogCancel>
               <AlertDialogAction
-                onClick={() =>
-                  deleteThreadId && handleDeleteThread(deleteThreadId)
-                }
+                onClick={() => deleteThreadId && handleDeleteThread(deleteThreadId)}
                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               >
                 {config.labels?.deleteThread || "Delete"}
