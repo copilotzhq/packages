@@ -113,7 +113,7 @@ export async function waitForRegistry(packages, {
   lookup = registryPackage,
   sleep = setTimeout,
   now = Date.now,
-  timeoutMs = 300_000,
+  timeoutMs = 900_000,
 } = {}) {
   const deadline = now() + timeoutMs;
   let pending = packages;

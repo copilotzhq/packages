@@ -1,8 +1,8 @@
 import { createCopilotz } from "@copilotz/copilotz";
 import { openManagedOminipgDatabase } from "@copilotz/copilotz/persistence";
 import { type CopilotzPlugin, definePlugin } from "@copilotz/copilotz/plugins";
-import { createServerPlugin } from "@copilotz/copilotz/server";
-import { createCoreServerPlugin } from "@copilotz/copilotz/core/server";
+import { defineServerFacade, serverPlugin } from "@copilotz/copilotz/server";
+import { coreHttpPlugin } from "@copilotz/copilotz/core/server";
 import { corePlugin } from "@copilotz/copilotz/core";
 import type { LlmAdapter } from "@copilotz/copilotz/llm";
 
@@ -43,10 +43,27 @@ export async function createHttpFixture(
     database: database.database,
     namespace: "tenant",
     databaseSchema: "core_http_contract",
+    resources: {
+      server: {
+        default: defineServerFacade({
+          authenticate(request) {
+            return {
+              namespace: "tenant",
+              actor: { id: request.headers.get("x-user") ?? "person" },
+            };
+          },
+          authorize(_request, context) {
+            return {
+              operations: { metadata: { actorId: context.scope.actor!.id } },
+            };
+          },
+        }),
+      },
+    },
     engine: { retryBaseMs: 0, random: () => 0 },
     plugins: [
       corePlugin,
-      createCoreServerPlugin(),
+      coreHttpPlugin,
       modelPlugin ?? definePlugin({
         id: "test.model",
         version: "1",
@@ -66,19 +83,7 @@ export async function createHttpFixture(
         adapters: { llm: { test: adapter } },
       }),
       ...extraPlugins,
-      createServerPlugin({
-        authenticate(request) {
-          return {
-            namespace: "tenant",
-            actor: { id: request.headers.get("x-user") ?? "person" },
-          };
-        },
-        authorize(_request, context) {
-          return {
-            operations: { metadata: { actorId: context.scope.actor!.id } },
-          };
-        },
-      }),
+      serverPlugin,
     ],
   };
   const transport = {

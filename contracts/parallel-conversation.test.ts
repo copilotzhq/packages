@@ -8,7 +8,7 @@ import type {
   LlmToolCall,
 } from "@copilotz/copilotz/llm";
 import { definePlugin } from "@copilotz/copilotz/plugins";
-import { defineTool } from "@copilotz/copilotz/tools";
+import { defineTool } from "@copilotz/copilotz/core";
 import { createChatController } from "@copilotz/chat-adapter/controller";
 import { createHttpFixture } from "./http-fixture.ts";
 

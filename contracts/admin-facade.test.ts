@@ -3,7 +3,7 @@ import { createCopilotzClient } from "@copilotz/copilotz/client";
 import { usageCollection } from "@copilotz/copilotz/usage";
 import { assertEquals } from "@std/assert";
 import { createAdminClient } from "@copilotz/admin/client";
-import { createAdminPlugin } from "@copilotz/copilotz/admin";
+import { adminPlugin } from "@copilotz/copilotz/admin";
 import { definePlugin } from "@copilotz/copilotz/plugins";
 import { createHttpAdapter } from "@copilotz/copilotz/server";
 import { createHttpFixture } from "./http-fixture.ts";
@@ -99,7 +99,7 @@ Deno.test(
   "published Admin client follows the compiled Admin and Core facade contracts",
   async () => {
     const app = await createHttpFixture(undefined, [
-      createAdminPlugin(),
+      adminPlugin,
       adminHttpPlugin,
     ]);
     const fetch = globalThis.fetch;

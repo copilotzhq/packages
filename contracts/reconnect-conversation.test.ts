@@ -4,7 +4,7 @@ import { createCoreClient } from "@copilotz/copilotz/core/client";
 import { decodeOperationReplayCursor } from "@copilotz/copilotz/streams";
 import { definePlugin } from "@copilotz/copilotz/plugins";
 import { defineAction } from "@copilotz/copilotz/actions";
-import { defineTool } from "@copilotz/copilotz/tools";
+import { defineTool } from "@copilotz/copilotz/core";
 import { createChatController } from "@copilotz/chat-adapter/controller";
 import { createHttpFixture } from "./http-fixture.ts";
 Deno.test("refresh restores one current snapshot, retries interrupted prefixes, and pages older history", async () => {
