@@ -1,5 +1,9 @@
 # @copilotz/admin
 
+## 0.75.0 — 2026-09-16
+
+Synchronize the admin package release with Copilotz 0.75.0.
+
 ## 0.70.1 — 2026-09-09
 
 Synchronize the frontend package suite with Copilotz 0.70.1.

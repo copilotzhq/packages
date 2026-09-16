@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createChatController } from '../src/controller.ts';
 import type { CoreClient } from '@copilotz/copilotz/core/client';
+import type { ControllerOptions } from '../src/controller.ts';
 const deferred = <T>() => {
   let resolve!: (value: T) => void;
   let reject!: (error: unknown) => void;
@@ -59,8 +60,11 @@ function fixture() {
     core,
     observations,
     cancellations,
-    controller: () =>
-      createChatController(core as unknown as CoreClient, { userId: 'owner' })
+    controller: (options: Partial<ControllerOptions> = {}) =>
+      createChatController(core as unknown as CoreClient, {
+        userId: 'owner',
+        ...options
+      })
   };
 }
 
@@ -507,5 +511,230 @@ test('simultaneous navigation cannot publish or fetch the superseded thread', as
   await Promise.all([c.openThread('old'), c.openThread('selected')]);
   assert.deepEqual(reads, ['selected']);
   assert.equal(seen.includes('old'), false);
+  c.dispose();
+});
+
+const listedThread = {
+  id: 'thread-a',
+  name: 'Thread A',
+  createdAt: new Date(0).toISOString(),
+  updatedAt: new Date(0).toISOString(),
+  status: 'active',
+  metadata: {},
+  participants: []
+};
+
+test('Space move is optimistic and restores the confirmed placement after a rejected move', async () => {
+  const f = fixture();
+  f.core.threads.list = async () => ({
+    data: [listedThread],
+    pageInfo: { hasMore: false }
+  });
+  const failure = deferred<void>();
+  const c = f.controller({
+    spaceService: {
+      list: async () => [{ id: 'research', name: 'Research' }],
+      create: async (name) => ({ id: 'new', name }),
+      move: async () => failure.promise
+    }
+  });
+  await c.start();
+  const moving = c.moveThreadToSpace('thread-a', 'research');
+  assert.equal(c.getSnapshot().threads[0].spaceId, 'research');
+  failure.reject(new Error('Forbidden'));
+  assert.equal(await moving, false);
+  assert.equal(c.getSnapshot().threads[0].spaceId, null);
+  assert.match(String(c.getSnapshot().error), /Forbidden/);
+  c.dispose();
+});
+
+test('Space moves for one thread are serialized so an older failure cannot roll back a newer placement', async () => {
+  const f = fixture();
+  f.core.threads.list = async () => ({
+    data: [listedThread],
+    pageInfo: { hasMore: false }
+  });
+  const first = deferred<void>();
+  const second = deferred<void>();
+  const calls: string[] = [];
+  let spaces = [
+    { id: 'one', name: 'One', threadIds: [] as string[] },
+    { id: 'two', name: 'Two', threadIds: [] as string[] }
+  ];
+  const c = f.controller({
+    spaceService: {
+      list: async () => spaces,
+      create: async (name) => ({ id: name, name }),
+      move: async (_id, spaceId) => {
+        calls.push(spaceId!);
+        if (spaceId === 'one') {
+          await first.promise;
+          spaces = [
+            { id: 'one', name: 'One', threadIds: ['thread-a'] },
+            { id: 'two', name: 'Two', threadIds: [] }
+          ];
+          return;
+        }
+        return second.promise;
+      }
+    }
+  });
+  await c.start();
+  const movingOne = c.moveThreadToSpace('thread-a', 'one');
+  const movingTwo = c.moveThreadToSpace('thread-a', 'two');
+  assert.deepEqual(calls, ['one']);
+  first.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls, ['one', 'two']);
+  second.reject(new Error('Forbidden'));
+  assert.equal(await movingOne, true);
+  assert.equal(await movingTwo, false);
+  assert.equal(c.getSnapshot().threads[0].spaceId, 'one');
+  c.dispose();
+});
+
+test('two rejected queued Space moves restore the initial placement', async () => {
+  const f = fixture();
+  f.core.threads.list = async () => ({
+    data: [listedThread],
+    pageInfo: { hasMore: false }
+  });
+  const first = deferred<void>();
+  const second = deferred<void>();
+  const calls: string[] = [];
+  const c = f.controller({
+    spaceService: {
+      list: async () => [],
+      create: async (name) => ({ id: name, name }),
+      move: async (_id, spaceId) => {
+        calls.push(spaceId!);
+        return (spaceId === 'one' ? first : second).promise;
+      }
+    }
+  });
+  await c.start();
+  const movingOne = c.moveThreadToSpace('thread-a', 'one');
+  const movingTwo = c.moveThreadToSpace('thread-a', 'two');
+  first.reject(new Error('first move denied'));
+  await new Promise((resolve) => setImmediate(resolve));
+  second.reject(new Error('second move denied'));
+  assert.equal(await movingOne, false);
+  assert.equal(await movingTwo, false);
+  assert.deepEqual(calls, ['one', 'two']);
+  assert.equal(c.getSnapshot().threads[0].spaceId, null);
+  c.dispose();
+});
+
+test('a successful Space read can confirm reassignment and remote detach', async () => {
+  const f = fixture();
+  f.core.threads.list = async () => ({
+    data: [listedThread],
+    pageInfo: { hasMore: false }
+  });
+  let spaces: Array<{ id: string; name: string; threadIds?: string[] }> = [
+    { id: 'one', name: 'One' }
+  ];
+  const c = f.controller({
+    spaceService: {
+      list: async () => spaces,
+      create: async (name) => ({ id: 'new', name }),
+      move: async () => undefined
+    }
+  });
+  await c.start();
+  spaces = [{ id: 'one', name: 'One', threadIds: ['thread-a'] }];
+  assert.equal(await c.moveThreadToSpace('thread-a', 'one'), true);
+  assert.equal(c.getSnapshot().threads[0].spaceId, 'one');
+
+  spaces = [{ id: 'two', name: 'Two', threadIds: ['thread-a'] }];
+  await c.refreshThreads();
+  assert.equal(c.getSnapshot().threads[0].spaceId, 'two');
+
+  spaces = [{ id: 'two', name: 'Two', threadIds: [] }];
+  await c.refreshThreads();
+  assert.equal(c.getSnapshot().threads[0].spaceId, null);
+
+  const list = c.getSnapshot().spaces;
+  c.updateOptions({
+    userId: 'owner',
+    spaceService: {
+      list: async () => {
+        throw new Error('Space service unavailable');
+      },
+      create: async (name) => ({ id: 'new', name }),
+      move: async () => undefined
+    }
+  });
+  await c.refreshThreads();
+  assert.deepEqual(c.getSnapshot().spaces, list);
+  assert.equal(c.getSnapshot().threads[0].spaceId, null);
+  c.dispose();
+});
+
+test('failed Space creation reports an error while retaining conversation navigation', async () => {
+  const f = fixture();
+  const c = f.controller({
+    spaceService: {
+      list: async () => [],
+      create: async () => {
+        throw new Error('Space creation denied');
+      },
+      move: async () => undefined
+    }
+  });
+  await c.start();
+  assert.equal(await c.createSpace('Research'), undefined);
+  assert.match(String(c.getSnapshot().error), /Space creation denied/);
+  assert.deepEqual(c.getSnapshot().threads, []);
+  c.dispose();
+});
+
+test('Space creation returns the host record and refreshes the Space snapshot', async () => {
+  const f = fixture();
+  let spaces: Array<{ id: string; name: string }> = [];
+  let requestedName = '';
+  const c = f.controller({
+    spaceService: {
+      list: async () => spaces,
+      create: async (name) => {
+        requestedName = name;
+        const created = { id: 'research', name };
+        spaces = [created];
+        return created;
+      },
+      move: async () => undefined
+    }
+  });
+  await c.start();
+  const created = await c.createSpace('  Research  ');
+  assert.deepEqual(created, { id: 'research', name: 'Research' });
+  assert.equal(requestedName, 'Research');
+  assert.deepEqual(c.getSnapshot().spaces, [created]);
+  c.dispose();
+});
+
+test('a committed Space move survives a failed thread refresh', async () => {
+  const f = fixture();
+  f.core.threads.list = async () => ({
+    data: [listedThread],
+    pageInfo: { hasMore: false }
+  });
+  let failRefresh = false;
+  const c = f.controller({
+    spaceService: {
+      list: async () => [{ id: 'research', name: 'Research' }],
+      create: async (name) => ({ id: 'new', name }),
+      move: async () => undefined
+    }
+  });
+  await c.start();
+  f.core.threads.list = async () => {
+    if (failRefresh) throw new Error('thread refresh unavailable');
+    return { data: [listedThread], pageInfo: { hasMore: false } };
+  };
+  failRefresh = true;
+  assert.equal(await c.moveThreadToSpace('thread-a', 'research'), true);
+  assert.equal(c.getSnapshot().threads[0].spaceId, 'research');
+  assert.match(String(c.getSnapshot().error), /thread refresh unavailable/);
   c.dispose();
 });

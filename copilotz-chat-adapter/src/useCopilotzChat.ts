@@ -23,6 +23,7 @@ export type UseCopilotzChatOptions = ControllerOptions & {
 const idle: ChatSnapshot = {
   messages: [],
   threads: [],
+  spaces: [],
   currentThreadId: null,
   isMessagesLoading: false,
   isLoadingOlderMessages: false,
@@ -113,10 +114,9 @@ export function useCopilotzChat(options: UseCopilotzChatOptions) {
     renameThread: (id: string, name: string) =>
       controller?.renameThread(id, name),
     archiveThread: (id: string) => controller?.archiveThread(id),
-    updateThreadTags: (
-      id: string,
-      tags: Parameters<ChatController['updateThreadTags']>[1]
-    ) => controller?.updateThreadTags(id, tags),
+    createSpace: (name: string) => controller?.createSpace(name),
+    moveThreadToSpace: (id: string, spaceId: string | null) =>
+      controller?.moveThreadToSpace(id, spaceId),
     editMessage: (id: string, content: string) =>
       controller?.editMessage(id, content),
     deleteThread: (id: string) => controller?.deleteThread(id),

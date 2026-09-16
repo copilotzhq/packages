@@ -224,13 +224,16 @@ export interface ChatMessage {
   sender?: ChatSender;
 }
 
-// Thread Management
-export interface ChatThreadTag {
+// Shared Space navigation
+export interface ChatSpace {
   id: string;
   name: string;
-  color?: string;
+  status?: "active" | "archived";
+  /** Optional server-projected attachment index used by host adapters. */
+  threadIds?: readonly string[];
 }
 
+// Thread Management
 export interface ChatThread {
   id: string;
   title: string;
@@ -238,7 +241,8 @@ export interface ChatThread {
   updatedAt: number;
   messageCount: number;
   isArchived?: boolean;
-  tags?: ChatThreadTag[];
+  /** The optional durable Space attachment for this conversation. */
+  spaceId?: string | null;
   metadata?: Record<string, any>;
 }
 
@@ -330,15 +334,17 @@ export interface ChatConfig {
     renameThread?: string;
     archiveThread?: string;
     unarchiveThread?: string;
-    manageTags?: string;
-    tags?: string;
-    addTag?: string;
-    removeTag?: string;
-    tagNamePlaceholder?: string;
-    untagged?: string;
     groupBy?: string;
     groupByDate?: string;
-    groupByTag?: string;
+    groupBySpaces?: string;
+    spaces?: string;
+    noSpace?: string;
+    selectSpace?: string;
+    moveToSpace?: string;
+    removeFromSpace?: string;
+    createSpace?: string;
+    spaceNamePlaceholder?: string;
+    searchSpaces?: string;
     today?: string;
     yesterday?: string;
     createNewThread?: string;
@@ -374,10 +380,10 @@ export interface ChatConfig {
     enableRegeneration?: boolean;
     showActivity?: boolean;
     showActivityDetails?: boolean;
-    threadTags?: {
+    spaces?: {
       enabled?: boolean;
       groupingEnabled?: boolean;
-      defaultGroupBy?: "date" | "tag";
+      defaultGroupBy?: "date" | "space";
       allowCreate?: boolean;
       allowDrag?: boolean;
     };
@@ -498,11 +504,15 @@ export interface ChatCallbacks {
     threadId: string,
     callback?: StateCallback<ChatState>
   ) => void;
-  onUpdateThreadTags?: (
-    threadId: string,
-    tags: ChatThreadTag[],
+  onCreateSpace?: (
+    name: string,
     callback?: StateCallback<ChatState>
-  ) => void;
+  ) => ChatSpace | void | Promise<ChatSpace | void>;
+  onMoveThreadToSpace?: (
+    threadId: string,
+    spaceId: string | null,
+    callback?: StateCallback<ChatState>
+  ) => void | Promise<unknown>;
   onCopyMessage?: (
     messageId: string,
     content: string,
@@ -533,6 +543,7 @@ export interface ChatV2Props {
   // Core Data
   messages?: ChatMessage[];
   threads?: ChatThread[];
+  spaces?: readonly ChatSpace[];
   currentThreadId?: string | null;
 
   // Customization

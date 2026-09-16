@@ -83,15 +83,17 @@ export const defaultChatConfig: Required<ChatConfig> = {
     renameThread: "Rename",
     archiveThread: "Archive",
     unarchiveThread: "Unarchive",
-    manageTags: "Manage tags",
-    tags: "Tags",
-    addTag: "Add tag",
-    removeTag: "Remove tag",
-    tagNamePlaceholder: "Tag name",
-    untagged: "No tag",
     groupBy: "Group by",
     groupByDate: "Date",
-    groupByTag: "Tag",
+    groupBySpaces: "Spaces",
+    spaces: "Spaces",
+    noSpace: "No Space",
+    selectSpace: "Select Space",
+    moveToSpace: "Move to Space",
+    removeFromSpace: "Remove from Space",
+    createSpace: "Create Space",
+    spaceNamePlaceholder: "Space name",
+    searchSpaces: "Search Spaces",
     today: "Today",
     yesterday: "Yesterday",
     createNewThread: "Create New Conversation",
@@ -128,7 +130,7 @@ export const defaultChatConfig: Required<ChatConfig> = {
     enableRegeneration: true,
     showActivity: true,
     showActivityDetails: true,
-    threadTags: {
+    spaces: {
       enabled: true,
       groupingEnabled: true,
       defaultGroupBy: "date",
@@ -193,9 +195,9 @@ export function mergeConfig(
     features: {
       ...defaultChatConfig.features,
       ...userConfig.features,
-      threadTags: {
-        ...defaultChatConfig.features.threadTags,
-        ...userConfig.features?.threadTags,
+      spaces: {
+        ...defaultChatConfig.features.spaces,
+        ...userConfig.features?.spaces,
       },
     },
     ui: {

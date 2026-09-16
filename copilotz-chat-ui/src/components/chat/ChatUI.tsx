@@ -42,6 +42,7 @@ import {
 export const ChatUI: React.FC<ChatV2Props> = ({
   messages = [],
   threads = [],
+  spaces = [],
   currentThreadId = null,
   config: userConfig,
   sidebar: _sidebar,
@@ -522,17 +523,6 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     [callbacks, createStateCallback]
   );
 
-  const handleUpdateThreadTags = useCallback(
-    (threadId: string, tags: ChatThread["tags"]) => {
-      callbacks.onUpdateThreadTags?.(
-        threadId,
-        tags ?? [],
-        createStateCallback()
-      );
-    },
-    [callbacks, createStateCallback]
-  );
-
   // Close sidebar handler
   const closeSidebar = useCallback(() => {
     setState((prev) => ({ ...prev, showSidebar: false }));
@@ -779,6 +769,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
         >
           <Sidebar
             threads={threads}
+            spaces={spaces}
             currentThreadId={state.selectedThreadId}
             config={config}
             onCreateThread={handleCreateThread}
@@ -786,7 +777,22 @@ export const ChatUI: React.FC<ChatV2Props> = ({
             onRenameThread={handleRenameThread}
             onDeleteThread={handleDeleteThread}
             onArchiveThread={handleArchiveThread}
-            onUpdateThreadTags={handleUpdateThreadTags}
+            onCreateSpace={
+              callbacks.onCreateSpace
+                ? (name, callback) =>
+                    callbacks.onCreateSpace?.(name, callback)
+                : undefined
+            }
+            onMoveThreadToSpace={
+              callbacks.onMoveThreadToSpace
+                ? (threadId, spaceId, callback) =>
+                    callbacks.onMoveThreadToSpace?.(
+                      threadId,
+                      spaceId,
+                      callback
+                    )
+                : undefined
+            }
             // User menu props
             user={sidebarUser}
             userMenuCallbacks={sidebarUserMenuCallbacks}

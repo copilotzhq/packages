@@ -26,6 +26,7 @@ export type {
   ChatMessage,
   ChatSender,
   ChatThread,
+  ChatSpace,
   MediaAttachment,
   MemoryItem,
   VoiceComposerState,
@@ -44,3 +45,4 @@ export type {
   ToolRendererProps,
   ToolRendererStatus
 } from '@copilotz/chat-ui';
+export type { ChatSpaceService, SpaceReadOptions, SpaceWriteOptions } from './controller';

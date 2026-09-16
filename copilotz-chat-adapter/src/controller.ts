@@ -7,6 +7,7 @@ import type { ObservationFrame } from '@copilotz/copilotz/client';
 import type {
   AgentOption,
   ChatMessage,
+  ChatSpace,
   ChatThread,
   ChatUserContext,
   MediaAttachment
@@ -39,6 +40,8 @@ export type ControllerOptions = {
   targetAgentName?: string | null;
   initialContext?: ChatUserContext;
   defaultThreadName?: string;
+  /** Host-owned Space endpoints. They must enforce actor and membership access. */
+  spaceService?: ChatSpaceService;
   bootstrap?: {
     initialMessage?: string;
   };
@@ -46,9 +49,24 @@ export type ControllerOptions = {
   eventInterceptor?: EventInterceptor;
   runErrorInterceptor?: RunErrorInterceptor;
 };
+export type SpaceReadOptions = Readonly<{ signal?: AbortSignal }>;
+export type SpaceWriteOptions = Readonly<{ signal?: AbortSignal }>;
+export type ChatSpaceService = Readonly<{
+  list(options?: SpaceReadOptions): Promise<readonly ChatSpace[]>;
+  create(
+    name: string,
+    options?: SpaceWriteOptions,
+  ): Promise<ChatSpace>;
+  move(
+    threadId: string,
+    spaceId: string | null,
+    options?: SpaceWriteOptions,
+  ): Promise<unknown>;
+}>;
 export type ChatSnapshot = {
   messages: ChatMessage[];
   threads: ChatThread[];
+  spaces: ChatSpace[];
   currentThreadId: string | null;
   isMessagesLoading: boolean;
   isLoadingOlderMessages: boolean;
@@ -96,6 +114,7 @@ export function createChatController(
   let snapshot: ChatSnapshot = {
     messages: [],
     threads: [],
+    spaces: [],
     currentThreadId: null,
     isMessagesLoading: false,
     isLoadingOlderMessages: false,
@@ -120,6 +139,12 @@ export function createChatController(
   let checkpoint: string | undefined;
   let frameRecoveryFailures = 0;
   let frameRecoveryNotice: unknown;
+  const spaceMoveChains = new Map<string, Promise<boolean>>();
+  const pendingSpaceMoves = new Map<
+    string,
+    { spaceId: string | null; originalSpaceId: string | null }
+  >();
+  const confirmedSpaceIds = new Map<string, string | null>();
   const stoppingOperations = new Map<string, number>();
   const preparingByOperation = new Map<string, string>();
   const submissions = new Set<{
@@ -292,7 +317,29 @@ export function createChatController(
       { order: 'desc' },
       { signal: lifetime.signal }
     );
+    let spaces = snapshot.spaces;
+    let spaceListSucceeded = false;
+    if (options.spaceService) {
+      try {
+        spaces = [...await options.spaceService.list({ signal: lifetime.signal })];
+        spaceListSucceeded = true;
+      } catch (error) {
+        // Space discovery is additive to conversation history. Keep Date
+        // navigation and the last known Space projection when it is down.
+        if (!disposed) report(error);
+      }
+    } else {
+      spaces = [];
+      confirmedSpaceIds.clear();
+    }
+    const threadSpaceIds = new Map<string, string>();
+    for (const space of spaces) {
+      for (const threadId of space.threadIds ?? []) {
+        if (!threadSpaceIds.has(threadId)) threadSpaceIds.set(threadId, space.id);
+      }
+    }
     publish({
+      spaces,
       threads: page.data.map((thread) => ({
         id: thread.id,
         title: thread.name ?? options.defaultThreadName ?? 'Conversation',
@@ -300,10 +347,33 @@ export function createChatController(
         updatedAt: Date.parse(thread.updatedAt),
         messageCount: 0,
         isArchived: thread.status === 'archived',
-        metadata: thread.metadata,
-        tags: (
-          thread.metadata.public as { tags?: ChatThread['tags'] } | undefined
-        )?.tags
+        spaceId: (() => {
+          const pending = pendingSpaceMoves.get(thread.id);
+          if (pending) return pending.spaceId;
+          const projected = (thread as { spaceId?: unknown }).spaceId;
+          if (projected === null) {
+            if (spaceListSucceeded) confirmedSpaceIds.delete(thread.id);
+            return null;
+          }
+          if (typeof projected === 'string' && projected) {
+            if (spaceListSucceeded) confirmedSpaceIds.set(thread.id, projected);
+            return projected;
+          }
+          if (threadSpaceIds.has(thread.id)) {
+            const spaceId = threadSpaceIds.get(thread.id)!;
+            if (spaceListSucceeded) confirmedSpaceIds.set(thread.id, spaceId);
+            return spaceId;
+          }
+          if (spaceListSucceeded) {
+            // A successful Space read is authoritative. Do not let a cached
+            // local projection resurrect a remote detach.
+            confirmedSpaceIds.delete(thread.id);
+            return null;
+          }
+          if (confirmedSpaceIds.has(thread.id)) return confirmedSpaceIds.get(thread.id)!;
+          return null;
+        })(),
+        metadata: thread.metadata
       }))
     });
   };
@@ -1002,7 +1072,61 @@ export function createChatController(
       return false;
     }
   };
-  return Object.freeze({
+  const performMoveThreadToSpace = async (
+    id: string,
+    spaceId: string | null
+  ): Promise<boolean> => {
+    const service = options.spaceService;
+    if (!service) return false;
+    const current = snapshot.threads.find((thread) => thread.id === id);
+    if (!current) return false;
+    const originalSpaceId = current.spaceId ?? null;
+    if (originalSpaceId === spaceId) return true;
+    pendingSpaceMoves.set(id, { spaceId, originalSpaceId });
+    publish({
+      threads: snapshot.threads.map((thread) =>
+        thread.id === id ? { ...thread, spaceId } : thread
+      )
+    });
+    try {
+      await service.move(id, spaceId, { signal: lifetime.signal });
+    } catch (error) {
+      if (pendingSpaceMoves.get(id)?.spaceId === spaceId) {
+        pendingSpaceMoves.delete(id);
+        publish({
+          threads: snapshot.threads.map((thread) =>
+            thread.id === id
+              ? { ...thread, spaceId: originalSpaceId }
+              : thread
+          )
+        });
+        if (!disposed) report(error);
+      }
+      return false;
+    }
+    pendingSpaceMoves.delete(id);
+    confirmedSpaceIds.set(id, spaceId);
+    try {
+      await refreshThreads();
+    } catch (error) {
+      // The move is already committed. Keep its confirmed projection while
+      // reporting a refresh failure so Date navigation remains usable.
+      if (!disposed) report(error);
+    }
+    return true;
+  };
+  const moveThreadToSpace = (id: string, spaceId: string | null) => {
+    const previous = spaceMoveChains.get(id);
+    const next = previous
+      ? previous.then(() => performMoveThreadToSpace(id, spaceId))
+      : performMoveThreadToSpace(id, spaceId);
+    spaceMoveChains.set(id, next);
+    void next.then(() => {
+      if (spaceMoveChains.get(id) === next) spaceMoveChains.delete(id);
+    });
+    return next;
+  };
+  return {
     getSnapshot: () => snapshot,
     subscribe(listener: () => void) {
       listeners.add(listener);
@@ -1067,18 +1191,26 @@ export function createChatController(
         )
       );
     },
-    updateThreadTags(
-      id: string,
-      tags: { id: string; name: string; color?: string }[]
-    ) {
-      return mutate(
-        core.threads.update(
-          id,
-          { tags },
-          { idempotencyKey: crypto.randomUUID() }
-        )
-      );
+    async createSpace(name: string) {
+      const service = options.spaceService;
+      const trimmed = name.trim();
+      if (!service || !trimmed) return undefined;
+      try {
+        const space = await service.create(trimmed, {
+          signal: lifetime.signal
+        });
+        try {
+          await refreshThreads();
+        } catch (error) {
+          if (!disposed) report(error);
+        }
+        return space;
+      } catch (error) {
+        if (!disposed) report(error);
+        return undefined;
+      }
     },
+    moveThreadToSpace,
     archiveThread(id: string) {
       return mutate(
         core.threads.update(
@@ -1092,6 +1224,7 @@ export function createChatController(
       const deleted = await mutate(
         core.threads.delete(id, { idempotencyKey: crypto.randomUUID() })
       );
+      if (deleted) confirmedSpaceIds.delete(id);
       if (deleted && snapshot.currentThreadId === id) this.createThread();
     },
     async editMessage(messageId: string, content: string) {
@@ -1162,11 +1295,13 @@ export function createChatController(
       observation?.close();
       for (const submission of submissions) submission.controller.abort();
       stoppingOperations.clear();
+      spaceMoveChains.clear();
+      pendingSpaceMoves.clear();
       bootstrap.clear();
       history.clear();
       listeners.clear();
       toolCallDraftSource.clear();
     }
-  });
+  };
 }
 export type ChatController = ReturnType<typeof createChatController>;

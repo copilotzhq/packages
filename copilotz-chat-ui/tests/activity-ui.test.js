@@ -19,41 +19,41 @@ test('mergeConfig enables activity timeline by default', () => {
   assert.equal(config.features.showActivityDetails, true);
 });
 
-test('mergeConfig enables thread tags by default', () => {
+test('mergeConfig enables Spaces navigation by default', () => {
   const config = mergeConfig(defaultChatConfig, undefined);
-  assert.equal(config.features.threadTags.enabled, true);
-  assert.equal(config.features.threadTags.groupingEnabled, true);
-  assert.equal(config.features.threadTags.allowCreate, true);
-  assert.equal(config.features.threadTags.allowDrag, true);
+  assert.equal(config.features.spaces.enabled, true);
+  assert.equal(config.features.spaces.groupingEnabled, true);
+  assert.equal(config.features.spaces.allowCreate, true);
+  assert.equal(config.features.spaces.allowDrag, true);
 });
 
-test('mergeConfig preserves thread tag defaults for partial overrides', () => {
+test('mergeConfig preserves Space defaults for partial overrides', () => {
   const config = mergeConfig(defaultChatConfig, {
     features: {
-      threadTags: {
-        defaultGroupBy: 'tag',
+      spaces: {
+        defaultGroupBy: 'space',
       },
     },
   });
 
-  assert.equal(config.features.threadTags.enabled, true);
-  assert.equal(config.features.threadTags.groupingEnabled, true);
-  assert.equal(config.features.threadTags.defaultGroupBy, 'tag');
-  assert.equal(config.features.threadTags.allowCreate, true);
-  assert.equal(config.features.threadTags.allowDrag, true);
+  assert.equal(config.features.spaces.enabled, true);
+  assert.equal(config.features.spaces.groupingEnabled, true);
+  assert.equal(config.features.spaces.defaultGroupBy, 'space');
+  assert.equal(config.features.spaces.allowCreate, true);
+  assert.equal(config.features.spaces.allowDrag, true);
 });
 
-test('mergeConfig allows consumers to disable thread tags', () => {
+test('mergeConfig allows consumers to disable Spaces navigation', () => {
   const config = mergeConfig(defaultChatConfig, {
     features: {
-      threadTags: {
+      spaces: {
         enabled: false,
       },
     },
   });
 
-  assert.equal(config.features.threadTags.enabled, false);
-  assert.equal(config.features.threadTags.groupingEnabled, true);
+  assert.equal(config.features.spaces.enabled, false);
+  assert.equal(config.features.spaces.groupingEnabled, true);
 });
 
 test('AssistantActivity renders generic timeline labels', () => {
