@@ -122,9 +122,23 @@ Deno.test("reasoning failure recovers through the real facade and controller wit
     );
     assert(!JSON.stringify(messages).includes("discarded candidate"));
     await controller.openThread(controller.getSnapshot().currentThreadId!);
+    const expectedIds = messages.map((message) => message.id);
+    const hasExpectedIds = () => {
+      const actualIds = controller.getSnapshot().messages.map((message) =>
+        message.id
+      );
+      return actualIds.length === expectedIds.length &&
+        actualIds.every((id, index) => id === expectedIds[index]);
+    };
+    for (let index = 0; index < 1000 && !hasExpectedIds(); index++) {
+      if (index === 999) {
+        throw new Error("Canonical history reconciliation did not settle");
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     assertEquals(
       controller.getSnapshot().messages.map((message) => message.id),
-      messages.map((message) => message.id),
+      expectedIds,
     );
   } finally {
     release();
