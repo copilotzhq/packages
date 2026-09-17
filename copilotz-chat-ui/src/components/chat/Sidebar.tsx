@@ -8,7 +8,6 @@ import {
 } from "../../types/chatTypes";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Badge } from "../ui/badge";
 import {
   Collapsible,
   CollapsibleContent,
@@ -57,13 +56,11 @@ import {
 } from "../ui/dropdown-menu";
 import {
   Archive,
+  ArrowRightLeft,
   Bot,
-  Calendar,
   ChevronRight,
   Edit2,
   Filter,
-  Folder,
-  FolderPlus,
   MoreHorizontal,
   Plus,
   Search,
@@ -235,6 +232,40 @@ const ThreadInitialsIcon = ({ title }: { title: string }) => {
   );
 };
 
+const SPACE_COLORS = [
+  "bg-sky-500",
+  "bg-violet-500",
+  "bg-emerald-500",
+  "bg-amber-500",
+  "bg-rose-500",
+  "bg-cyan-500",
+];
+
+function spaceColor(name: string): string {
+  let hash = 0;
+  for (const char of name) hash = (hash * 31 + char.charCodeAt(0)) | 0;
+  return SPACE_COLORS[Math.abs(hash) % SPACE_COLORS.length];
+}
+
+function initials(value: string): string {
+  return value.split(" ").filter(Boolean).map((word) => word[0]).slice(0, 2)
+    .join("").toUpperCase() || "?";
+}
+
+function SpaceAvatar({ space, className = "" }: {
+  space: ChatSpace;
+  className?: string;
+}) {
+  return (
+    <span
+      aria-label={`${space.name || space.id} Space`}
+      className={`flex h-5 w-5 shrink-0 items-center justify-center rounded text-[9px] font-semibold text-white ${spaceColor(space.name || space.id)} ${className}`}
+    >
+      {initials(space.name || space.id)}
+    </span>
+  );
+}
+
 type ThreadGroup = {
   key: string;
   label: string;
@@ -358,7 +389,7 @@ const SpacePickerDialog: React.FC<{
               disabled={working || thread.spaceId === space.id}
               onClick={() => void move(space.id)}
             >
-              <Folder className="mr-2 h-4 w-4" />
+              <SpaceAvatar space={space} className="mr-2" />
               <span className="truncate">{space.name || space.id}</span>
             </Button>
           ))}
@@ -431,10 +462,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
   );
   const [draggingThreadId, setDraggingThreadId] = useState<string | null>(null);
   const [dragOverSpaceId, setDragOverSpaceId] = useState<string | null>(null);
+  const [isCreatingSpace, setIsCreatingSpace] = useState(false);
+  const [newSpaceName, setNewSpaceName] = useState("");
+  const [spaceCreateError, setSpaceCreateError] = useState<string | null>(null);
+  const [isCreatingSpaceRequest, setIsCreatingSpaceRequest] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<
     Record<string, boolean>
   >({});
   const inputRef = useRef<HTMLInputElement>(null);
+  const spaceCreateInputRef = useRef<HTMLInputElement>(null);
   const { setOpen } = useSidebar();
   const spacesConfig = config.features?.spaces;
   const spacesEnabled =
@@ -452,6 +488,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       inputRef.current.select();
     }
   }, [editingThreadId]);
+
+  useEffect(() => {
+    if (isCreatingSpace) spaceCreateInputRef.current?.focus();
+  }, [isCreatingSpace]);
 
   const activeSpaces = useMemo(
     () => spaces.filter((space) => space.status !== "archived"),
@@ -563,6 +603,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const toggleGroup = (groupKey: string, open: boolean) => {
     setCollapsedGroups((current) => ({ ...current, [groupKey]: !open }));
   };
+  const cancelSpaceCreation = () => {
+    if (isCreatingSpaceRequest) return;
+    setNewSpaceName("");
+    setSpaceCreateError(null);
+    setIsCreatingSpace(false);
+  };
+  const createSpace = async () => {
+    const name = newSpaceName.trim();
+    if (!name || !onCreateSpace || isCreatingSpaceRequest) return;
+    setIsCreatingSpaceRequest(true);
+    setSpaceCreateError(null);
+    try {
+      const created = await onCreateSpace(name);
+      if (!created?.id) throw new Error("The Space could not be created.");
+      setNewSpaceName("");
+      setIsCreatingSpace(false);
+    } catch (cause) {
+      setSpaceCreateError(
+        cause instanceof Error ? cause.message : "The Space could not be created.",
+      );
+    } finally {
+      setIsCreatingSpaceRequest(false);
+    }
+  };
 
   return (
     <ShadcnSidebar collapsible="icon" {...props}>
@@ -625,46 +689,94 @@ export const Sidebar: React.FC<SidebarProps> = ({
             />
           </div>
           {spacesEnabled && spacesConfig?.groupingEnabled !== false && (
-            <div className="grid grid-cols-2 gap-1 rounded-xl border border-sidebar-border/60 bg-sidebar-accent/70 p-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setGroupBy("date")}
-                className={`h-8 rounded-lg px-2 text-xs font-semibold transition-colors ${
-                  groupBy === "date"
-                    ? "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar"
-                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
-                }`}
-              >
-                {config.labels?.groupByDate || "Date"}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setGroupBy("space")}
-                className={`h-8 rounded-lg px-2 text-xs font-semibold transition-colors ${
-                  groupBy === "space"
-                    ? "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar"
-                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
-                }`}
-              >
-                {config.labels?.groupBySpaces || config.labels?.spaces || "Spaces"}
-              </Button>
-            </div>
-          )}
-          {currentThreadId && canMoveSpaces && (
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full justify-start rounded-xl"
-              onClick={() => setSpacePickerThreadId(currentThreadId)}
-            >
-              <Folder className="mr-2 h-4 w-4" />
-              {threadSpace(
-                threads.find((thread) => thread.id === currentThreadId) ||
-                  ({ spaceId: null } as ChatThread)
-              )?.name || config.labels?.selectSpace || "Select Space"}
-            </Button>
+            <>
+              <div className="grid grid-cols-2 gap-1 rounded-xl border border-sidebar-border/60 bg-sidebar-accent/70 p-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setGroupBy("date")}
+                  className={`h-8 rounded-lg px-2 text-xs font-semibold transition-colors ${
+                    groupBy === "date"
+                      ? "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar"
+                      : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                  }`}
+                >
+                  {config.labels?.groupByDate || "Date"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setGroupBy("space")}
+                  className={`h-8 rounded-lg px-2 text-xs font-semibold transition-colors ${
+                    groupBy === "space"
+                      ? "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar"
+                      : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                  }`}
+                >
+                  {config.labels?.groupBySpaces || config.labels?.spaces || "Spaces"}
+                </Button>
+              </div>
+              {groupBy === "space" && onCreateSpace && spacesConfig?.allowCreate !== false && (
+                <div className="min-h-9">
+                  {isCreatingSpace ? (
+                    <div className="flex gap-1 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1">
+                      <Input
+                        ref={spaceCreateInputRef}
+                        value={newSpaceName}
+                        onChange={(event) => setNewSpaceName(event.target.value)}
+                        aria-label={config.labels?.spaceNamePlaceholder || "Space name"}
+                        placeholder={config.labels?.spaceNamePlaceholder || "Space name"}
+                        className="h-9"
+                        disabled={isCreatingSpaceRequest}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            void createSpace();
+                          }
+                          if (event.key === "Escape") cancelSpaceCreation();
+                        }}
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="h-9"
+                        disabled={!newSpaceName.trim() || isCreatingSpaceRequest}
+                        onClick={() => void createSpace()}
+                      >
+                        {config.labels?.create || "Create"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-9 w-9"
+                        aria-label={config.labels?.cancel || "Cancel"}
+                        disabled={isCreatingSpaceRequest}
+                        onClick={cancelSpaceCreation}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-9 w-full justify-start text-muted-foreground"
+                      onClick={() => setIsCreatingSpace(true)}
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      {config.labels?.createSpace || "Create Space"}
+                    </Button>
+                  )}
+                  {spaceCreateError && (
+                    <p role="alert" className="mt-1 text-xs text-destructive">
+                      {spaceCreateError}
+                    </p>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </div>
         <div className="hidden justify-center group-data-[collapsible=icon]:flex">
@@ -760,14 +872,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           isOpen ? "rotate-90" : ""
                         }`}
                       />
-                      {groupBy === "space" ? (
-                        group.space ? (
-                          <Folder className="mr-1 h-3.5 w-3.5" />
-                        ) : (
-                          <FolderPlus className="mr-1 h-3.5 w-3.5 opacity-50" />
-                        )
-                      ) : (
-                        <Calendar className="mr-1 h-3.5 w-3.5 opacity-50" />
+                      {groupBy === "space" && group.space && (
+                        <SpaceAvatar space={group.space} className="mr-1" />
                       )}
                       <span
                         className={`min-w-0 flex-1 truncate ${
@@ -776,9 +882,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       >
                         {group.label}
                       </span>
-                      <span className="ml-auto rounded px-1.5 text-[10px] text-muted-foreground">
-                        {group.threads.length}
-                      </span>
+                      {!isOpen && (
+                        <span className="ml-auto px-1.5 text-[10px] text-muted-foreground">
+                          {group.threads.length}
+                        </span>
+                      )}
                     </CollapsibleTrigger>
                   </SidebarGroupLabel>
                   <CollapsibleContent>
@@ -813,21 +921,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                   setDragOverSpaceId(null);
                                 }}
                               >
-                                <ThreadInitialsIcon title={thread.title || "?"} />
-                                <div className="flex min-w-0 flex-1 flex-col items-start gap-1 group-data-[collapsible=icon]:hidden">
-                                  <span className="w-full truncate leading-5">
+                                {groupBy === "space" && group.space
+                                  ? <SpaceAvatar space={group.space} />
+                                  : <ThreadInitialsIcon title={thread.title || "?"} />}
+                                <div className="flex min-w-0 flex-1 items-center gap-1 group-data-[collapsible=icon]:hidden">
+                                  <span className="min-w-0 flex-1 truncate leading-5">
                                     {thread.title || "New Chat"}
                                   </span>
                                   {groupBy === "date" && threadSpace(thread) && (
-                                    <Badge
-                                      variant="secondary"
-                                      className="h-4 max-w-28 gap-1 rounded border px-1.5 py-0 text-[10px] font-normal text-muted-foreground"
-                                    >
-                                      <Folder className="h-2.5 w-2.5" />
-                                      <span className="truncate">
-                                        {threadSpace(thread)!.name}
-                                      </span>
-                                    </Badge>
+                                    <span
+                                      aria-label={`Space: ${threadSpace(thread)!.name}`}
+                                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${spaceColor(threadSpace(thread)!.name)}`}
+                                      title={threadSpace(thread)!.name}
+                                    />
                                   )}
                                 </div>
                                 {thread.isArchived && (
@@ -864,7 +970,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                     <DropdownMenuItem
                                       onClick={() => setSpacePickerThreadId(thread.id)}
                                     >
-                                      <Folder className="mr-2 h-4 w-4" />
+                                      <ArrowRightLeft className="mr-2 h-4 w-4" />
                                       <span>{config.labels?.moveToSpace || "Move to Space"}</span>
                                     </DropdownMenuItem>
                                   )}
@@ -913,7 +1019,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             config={config}
             thread={pickerThread}
             spaces={activeSpaces}
-            allowCreate={spacesConfig?.allowCreate !== false}
+            allowCreate={false}
             onMove={onMoveThreadToSpace!}
             onCreate={onCreateSpace}
             onClose={() => setSpacePickerThreadId(null)}
