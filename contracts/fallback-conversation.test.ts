@@ -20,7 +20,12 @@ Deno.test("reasoning failure recovers through the real facade and controller wit
           name: "Support",
           role: "support",
           instructions: "Reply",
-          models: { generate: [{ connection: "primary", model: "primary" }, { connection: "backup", model: "backup" }] },
+          models: {
+            generate: [{ connection: "primary", model: "primary" }, {
+              connection: "backup",
+              model: "backup",
+            }],
+          },
           capabilities: { tools: [] },
         },
       },
@@ -89,7 +94,9 @@ Deno.test("reasoning failure recovers through the real facade and controller wit
   let sawReasoning = false;
   let sawFailure = false;
   controller.subscribe(() => {
-    sawFailure ||= controller.getSnapshot().messages.some(message => message.activity?.items.some(item => item.status === "failed"));
+    sawFailure ||= controller.getSnapshot().messages.some((message) =>
+      message.activity?.items.some((item) => item.status === "failed")
+    );
     if (
       JSON.stringify(controller.getSnapshot().messages).includes(
         "discarded candidate",
@@ -130,12 +137,29 @@ Deno.test("reasoning failure recovers through the real facade and controller wit
       return actualIds.length === expectedIds.length &&
         actualIds.every((id, index) => id === expectedIds[index]);
     };
-    for (let index = 0; index < 1000 && !hasExpectedIds(); index++) {
-      if (index === 999) {
-        throw new Error("Canonical history reconciliation did not settle");
-      }
-      await new Promise((resolve) => setTimeout(resolve, 25));
-    }
+    await new Promise<void>((resolve, reject) => {
+      let done = false;
+      let unsubscribe = () => {};
+      const finish = (error?: Error) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timeout);
+        unsubscribe();
+        if (error) reject(error);
+        else resolve();
+      };
+      const timeout = setTimeout(
+        () =>
+          finish(new Error("Canonical history reconciliation did not settle")),
+        60_000,
+      );
+      const check = () => {
+        if (hasExpectedIds()) finish();
+      };
+      unsubscribe = controller.subscribe(check);
+      check();
+      if (done) unsubscribe();
+    });
     assertEquals(
       controller.getSnapshot().messages.map((message) => message.id),
       expectedIds,
