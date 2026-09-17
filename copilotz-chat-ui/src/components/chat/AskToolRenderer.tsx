@@ -70,6 +70,6 @@ export const AskToolRenderer = memo(function AskToolRenderer({
   );
 });
 
-export const builtInToolRenderers: ToolRendererMap = Object.freeze({
+export const builtInToolRenderers: ToolRendererMap = {
   ask: AskToolRenderer,
-});
+};

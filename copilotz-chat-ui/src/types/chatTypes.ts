@@ -228,6 +228,7 @@ export interface ChatMessage {
 export interface ChatSpace {
   id: string;
   name: string;
+  description?: string;
   status?: "active" | "archived";
   /** Optional server-projected attachment index used by host adapters. */
   threadIds?: readonly string[];
