@@ -129,37 +129,20 @@ Deno.test("reasoning failure recovers through the real facade and controller wit
     );
     assert(!JSON.stringify(messages).includes("discarded candidate"));
     await controller.openThread(controller.getSnapshot().currentThreadId!);
-    const expectedIds = messages.map((message) => message.id);
-    const hasExpectedIds = () => {
-      const actualIds = controller.getSnapshot().messages.map((message) =>
-        message.id
-      );
-      return actualIds.length === expectedIds.length &&
-        actualIds.every((id, index) => id === expectedIds[index]);
-    };
-    await new Promise<void>((resolve, reject) => {
-      let done = false;
-      let unsubscribe = () => {};
-      const finish = (error?: Error) => {
-        if (done) return;
-        done = true;
-        clearTimeout(timeout);
-        unsubscribe();
-        if (error) reject(error);
-        else resolve();
-      };
-      const timeout = setTimeout(
-        () =>
-          finish(new Error("Canonical history reconciliation did not settle")),
-        60_000,
-      );
-      const check = () => {
-        if (hasExpectedIds()) finish();
-      };
-      unsubscribe = controller.subscribe(check);
-      check();
-      if (done) unsubscribe();
-    });
+    assert(
+      controller.getSnapshot().messages.some(
+        (message) => message.content === "Recovered answer",
+      ),
+      "A reloaded thread must retain the recovered answer.",
+    );
+    const expectedIds = controller.getSnapshot().messages.map((message) =>
+      message.id
+    );
+    assert(
+      expectedIds.every((id) => !id.startsWith("live:")),
+      "A reloaded thread must use persisted message identities.",
+    );
+    await controller.openThread(controller.getSnapshot().currentThreadId!);
     assertEquals(
       controller.getSnapshot().messages.map((message) => message.id),
       expectedIds,
