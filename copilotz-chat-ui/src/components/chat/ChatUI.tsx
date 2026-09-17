@@ -783,6 +783,12 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                     callbacks.onCreateSpace?.(name, callback)
                 : undefined
             }
+            onManageSpace={
+              callbacks.onManageSpace
+                ? (request, callback) =>
+                    callbacks.onManageSpace?.(request, callback)
+                : undefined
+            }
             onMoveThreadToSpace={
               callbacks.onMoveThreadToSpace
                 ? (threadId, spaceId, callback) =>

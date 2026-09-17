@@ -377,6 +377,18 @@ export function createChatController(
       }))
     });
   };
+  const refreshSpaces = async () => {
+    const service = options.spaceService;
+    if (!service) return false;
+    try {
+      const spaces = [...await service.list({ signal: lifetime.signal })];
+      publish({ spaces });
+      return true;
+    } catch (error) {
+      if (!disposed) report(error);
+      return false;
+    }
+  };
   const hasStoppingForGeneration = (generation: number) =>
     [...stoppingOperations.values()].some((value) => value === generation) ||
     [...submissions].some(
@@ -1138,6 +1150,7 @@ export function createChatController(
       options = value;
     },
     refreshThreads,
+    refreshSpaces,
     openThread,
     recover,
     send,

@@ -713,6 +713,34 @@ test('Space creation returns the host record and refreshes the Space snapshot', 
   c.dispose();
 });
 
+test('refreshSpaces updates only the Space snapshot', async () => {
+  const f = fixture();
+  let threadListCalls = 0;
+  let spaces: Array<{ id: string; name: string }> = [
+    { id: 'research', name: 'Research' }
+  ];
+  f.core.threads.list = async () => {
+    threadListCalls++;
+    return { data: [listedThread], pageInfo: { hasMore: false } };
+  };
+  const c = f.controller({
+    spaceService: {
+      list: async () => spaces,
+      create: async (name) => ({ id: name, name }),
+      move: async () => undefined
+    }
+  });
+  await c.start();
+  const threadSnapshot = c.getSnapshot().threads;
+  spaces = [{ id: 'planning', name: 'Planning' }];
+
+  assert.equal(await c.refreshSpaces(), true);
+  assert.equal(threadListCalls, 1);
+  assert.deepEqual(c.getSnapshot().spaces, spaces);
+  assert.equal(c.getSnapshot().threads, threadSnapshot);
+  c.dispose();
+});
+
 test('a committed Space move survives a failed thread refresh', async () => {
   const f = fixture();
   f.core.threads.list = async () => ({

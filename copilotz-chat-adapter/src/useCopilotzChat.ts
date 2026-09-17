@@ -115,6 +115,7 @@ export function useCopilotzChat(options: UseCopilotzChatOptions) {
       controller?.renameThread(id, name),
     archiveThread: (id: string) => controller?.archiveThread(id),
     createSpace: (name: string) => controller?.createSpace(name),
+    refreshSpaces: () => controller?.refreshSpaces(),
     moveThreadToSpace: (id: string, spaceId: string | null) =>
       controller?.moveThreadToSpace(id, spaceId),
     editMessage: (id: string, content: string) =>

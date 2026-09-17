@@ -4,6 +4,7 @@ import type {
   AgentOption,
   ChatCallbacks,
   ChatConfig,
+  ChatSpaceManagementRequest,
   ChatUserContext,
   ChatUserMenuSection,
   MemoryItem,
@@ -18,6 +19,7 @@ import type {
 } from './specialState';
 import type { RequestHeadersProvider } from './useCopilotzChat';
 import type { ChatSpaceService } from './controller';
+import { invokeSpaceManagement } from './spaceManagement';
 
 type ChatRenderBoundaryProps = {
   children: React.ReactNode;
@@ -230,6 +232,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     renameThread,
     archiveThread,
     createSpace,
+    refreshSpaces,
     moveThreadToSpace,
     editMessage,
     deleteThread,
@@ -270,9 +273,10 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
       onArchiveThread: _6,
       onDeleteThread: _7,
       onCreateSpace: _8,
-      onMoveThreadToSpace: _9,
-      onCopyMessage: _10,
-      onEditMessage: _11,
+      onManageSpace: _9,
+      onMoveThreadToSpace: _10,
+      onCopyMessage: _11,
+      onEditMessage: _12,
       ...restUserCallbacks
     } = userCallbacks || {};
 
@@ -321,6 +325,21 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
             }
           }
         : {}),
+      ...(userCallbacks?.onManageSpace
+        ? {
+            onManageSpace: async (
+              request: ChatSpaceManagementRequest,
+              callback?: Parameters<NonNullable<ChatCallbacks['onManageSpace']>>[1]
+            ) => {
+              return invokeSpaceManagement(
+                userCallbacks.onManageSpace!,
+                request,
+                callback,
+                spaceService ? refreshSpaces : undefined
+              );
+            }
+          }
+        : {}),
       onDeleteThread: (threadId: string) => {
         void deleteThread(threadId);
         userCallbacks?.onDeleteThread?.(threadId);
@@ -343,6 +362,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     renameThread,
     archiveThread,
     createSpace,
+    refreshSpaces,
     moveThreadToSpace,
     editMessage,
     deleteThread,

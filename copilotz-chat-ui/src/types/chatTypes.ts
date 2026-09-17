@@ -230,6 +230,7 @@ export interface ChatSpace {
   name: string;
   description?: string;
   status?: "active" | "archived";
+  deletable?: boolean;
   /** Optional server-projected attachment index used by host adapters. */
   threadIds?: readonly string[];
 }
@@ -464,6 +465,11 @@ export interface StateCallback<T = unknown> {
   getState: () => T;
 }
 
+export type ChatSpaceManagementHandler = (
+  request: ChatSpaceManagementRequest,
+  callback?: StateCallback<ChatState>
+) => unknown | Promise<unknown>;
+
 export interface ChatCallbacks {
   onSendMessage?: (
     content: string,
@@ -509,6 +515,7 @@ export interface ChatCallbacks {
     name: string,
     callback?: StateCallback<ChatState>
   ) => ChatSpace | void | Promise<ChatSpace | void>;
+  onManageSpace?: ChatSpaceManagementHandler;
   onMoveThreadToSpace?: (
     threadId: string,
     spaceId: string | null,
@@ -529,6 +536,10 @@ export interface ChatCallbacks {
   onThemeChange?: (theme: "light" | "dark" | "system") => void;
   onLogout?: () => void;
 }
+
+export type ChatSpaceManagementRequest =
+  | { action: "create" }
+  | { action: "edit" | "delete"; space: ChatSpace };
 
 export interface ChatActivityNotice {
   tone: "info" | "error";

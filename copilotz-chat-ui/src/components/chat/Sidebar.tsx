@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChatSpace,
+  ChatSpaceManagementHandler,
   ChatState,
   StateCallback,
   ChatThread,
@@ -136,6 +137,7 @@ type SpaceCreateHandler = (
   name: string,
   callback?: StateCallback<ChatState>
 ) => ChatSpace | void | Promise<ChatSpace | void>;
+type SpaceManagementHandler = ChatSpaceManagementHandler;
 
 export interface SidebarProps
   extends React.ComponentProps<typeof ShadcnSidebar> {
@@ -149,6 +151,7 @@ export interface SidebarProps
   onDeleteThread?: (threadId: string) => void;
   onArchiveThread?: (threadId: string) => void;
   onCreateSpace?: SpaceCreateHandler;
+  onManageSpace?: SpaceManagementHandler;
   onMoveThreadToSpace?: SpaceMoveHandler;
   // User menu props
   user?: UserMenuUser | null;
@@ -443,6 +446,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onDeleteThread,
   onArchiveThread,
   onCreateSpace,
+  onManageSpace,
   onMoveThreadToSpace,
   user,
   userMenuCallbacks,
@@ -475,7 +479,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const spacesConfig = config.features?.spaces;
   const spacesEnabled =
     spacesConfig?.enabled !== false &&
-    (spaces.length > 0 || !!onMoveThreadToSpace);
+    (spaces.length > 0 || !!onMoveThreadToSpace || !!onManageSpace);
   const canMoveSpaces = spacesEnabled && !!onMoveThreadToSpace;
   const canDragSpaces = canMoveSpaces && spacesConfig?.allowDrag !== false;
   const [groupBy, setGroupBy] = useState<"date" | "space">(
@@ -716,9 +720,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   {config.labels?.groupBySpaces || config.labels?.spaces || "Spaces"}
                 </Button>
               </div>
-              {groupBy === "space" && onCreateSpace && spacesConfig?.allowCreate !== false && (
+              {groupBy === "space" &&
+                (onManageSpace || onCreateSpace) &&
+                spacesConfig?.allowCreate !== false && (
                 <div className="min-h-9">
-                  {isCreatingSpace ? (
+                  {!onManageSpace && isCreatingSpace ? (
                     <div className="flex gap-1 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1">
                       <Input
                         ref={spaceCreateInputRef}
@@ -763,7 +769,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       variant="ghost"
                       size="sm"
                       className="h-9 w-full justify-start text-muted-foreground"
-                      onClick={() => setIsCreatingSpace(true)}
+                      onClick={() => {
+                        if (onManageSpace) {
+                          void onManageSpace({ action: "create" });
+                        } else {
+                          setIsCreatingSpace(true);
+                        }
+                      }}
                     >
                       <Plus className="mr-2 h-4 w-4" />
                       {config.labels?.createSpace || "Create Space"}
@@ -859,14 +871,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   }}
                 >
                   <SidebarGroupLabel
-                    asChild
-                    className={`h-7 group-data-[collapsible=icon]:hidden ${
+                    className={`h-7 justify-start bg-transparent px-2 hover:bg-transparent group-data-[collapsible=icon]:hidden ${
                       dragOverSpaceId === group.spaceId
-                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                        ? "bg-sidebar-accent/50 text-sidebar-accent-foreground"
                         : ""
                     }`}
                   >
-                    <CollapsibleTrigger className="group/trigger w-full">
+                    <CollapsibleTrigger className="group/trigger flex min-w-0 flex-1 items-center justify-start bg-transparent p-0 text-left hover:bg-transparent">
                       <ChevronRight
                         className={`mr-1 h-3.5 w-3.5 transition-transform ${
                           isOpen ? "rotate-90" : ""
@@ -882,15 +893,79 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       >
                         {group.label}
                       </span>
-                      {!isOpen && (
+                      {!isOpen && (!group.space || !onManageSpace) && (
                         <span className="ml-auto px-1.5 text-[10px] text-muted-foreground">
                           {group.threads.length}
                         </span>
                       )}
                     </CollapsibleTrigger>
+                    {group.space && onManageSpace && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            aria-label={`Manage ${group.space.name || group.space.id} Space`}
+                            className="ml-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-sidebar-foreground/70 outline-hidden transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            <MoreHorizontal className="h-4 w-4" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent
+                          className="w-40"
+                          side="right"
+                          align="start"
+                        >
+                          <DropdownMenuItem
+                            onClick={() =>
+                              void onManageSpace({
+                                action: "edit",
+                                space: group.space!,
+                              })
+                            }
+                          >
+                            <Edit2 className="mr-2 h-4 w-4" />
+                            <span>Edit Space</span>
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={group.space.deletable !== true}
+                            onClick={() =>
+                              void onManageSpace({
+                                action: "delete",
+                                space: group.space!,
+                              })
+                            }
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            <span>Delete Space</span>
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
                   </SidebarGroupLabel>
-                  <CollapsibleContent>
-                    <SidebarGroupContent>
+                  {groupBy === "space" &&
+                    group.space &&
+                    group.space.status !== "archived" && (
+                    <button
+                      type="button"
+                      aria-label={`Open ${group.space.name || group.space.id} Space group`}
+                      className="hidden h-8 w-8 items-center justify-center rounded-md outline-hidden hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring group-data-[collapsible=icon]:flex"
+                      onClick={() => setOpen(true)}
+                    >
+                      <SpaceAvatar space={group.space} />
+                    </button>
+                  )}
+                  <CollapsibleContent
+                    className={
+                      groupBy === "space"
+                        ? "group-data-[collapsible=icon]:hidden"
+                        : undefined
+                    }
+                  >
+                    <SidebarGroupContent
+                      className={groupBy === "space" ? "pl-4" : undefined}
+                    >
                       <SidebarMenu>
                         {group.threads.map((thread) => (
                           <SidebarMenuItem key={thread.id}>
@@ -921,9 +996,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                   setDragOverSpaceId(null);
                                 }}
                               >
-                                {groupBy === "space" && group.space
-                                  ? <SpaceAvatar space={group.space} />
-                                  : <ThreadInitialsIcon title={thread.title || "?"} />}
+                                <ThreadInitialsIcon title={thread.title || "?"} />
                                 <div className="flex min-w-0 flex-1 items-center gap-1 group-data-[collapsible=icon]:hidden">
                                   <span className="min-w-0 flex-1 truncate leading-5">
                                     {thread.title || "New Chat"}
