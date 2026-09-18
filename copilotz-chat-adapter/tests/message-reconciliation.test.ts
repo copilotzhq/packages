@@ -29,9 +29,12 @@ test('persisted refresh replaces optimistic turn messages by stable correlations
     message('optimistic-user', 'user', 'Hello', 2, {
       [CLIENT_MESSAGE_ID_METADATA_KEY]: 'optimistic-user',
     }),
-    message('optimistic-assistant', 'assistant', 'Hi there', 3, {
-      [LLM_ATTEMPT_ID_METADATA_KEY]: 'attempt-1',
-    }),
+    {
+      ...message('optimistic-assistant', 'assistant', 'Hi there', 3, {
+        [LLM_ATTEMPT_ID_METADATA_KEY]: 'attempt-1',
+      }),
+      isStreaming: false,
+    },
   ];
   const fresh = [
     message('history-1', 'assistant', 'Earlier', 1),

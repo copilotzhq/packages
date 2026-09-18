@@ -250,25 +250,60 @@ export function projectFrame(
   const lane = { ...current };
   state.lanes.set(frame.streamId, lane);
   const messageId = `live:${lane.operationId}:${lane.attemptId}`;
+  const attemptFor = (message: ChatMessage) =>
+    getCanonicalLlmAttemptId(message) ?? message.metadata?.llmAttemptId;
+  const attemptMessages = () =>
+    state.messages.filter(
+      (message) =>
+        message.role === 'assistant' &&
+        (message.id === messageId || attemptFor(message) === lane.attemptId)
+    );
+  const findAnyAttemptMessage = () => {
+    const messages = attemptMessages();
+    return (
+      messages.find((message) => message.id === messageId) ??
+      messages.find((message) => typeof message.metadata?.operationId === 'string') ??
+      messages[0]
+    );
+  };
+  const findActiveAttemptMessage = () =>
+    attemptMessages().find(
+      (message) =>
+        message.isStreaming === true
+    );
   // Keep one logical response, replacing only provisional output when its next
   // model candidate appears. Retained stream lanes keep their own replay offsets.
-  const candidate = state.messages.find((message) => message.id === messageId)
-    ?.metadata?.providerAttemptIndex;
+  const candidateMessage = findActiveAttemptMessage();
+  const candidate = candidateMessage?.metadata?.providerAttemptIndex;
   if (typeof candidate === 'number' && candidate > lane.candidateIndex)
     return { state, drafts, refresh };
-  if (typeof candidate === 'number' && candidate < lane.candidateIndex)
-    state.messages = state.messages.filter(
-      (message) => message.id !== messageId
+  if (
+    typeof candidate === 'number' &&
+    candidate < lane.candidateIndex &&
+    candidateMessage
+  ) {
+    const { attachments: _attachments, activity: _activity, ...base } =
+      candidateMessage;
+    state.messages = state.messages.map((message) =>
+      message.id === candidateMessage.id
+        ? {
+            ...base,
+            content: '',
+            isStreaming: true,
+            isComplete: false,
+            ...(lane.sender ? { sender: lane.sender } : {}),
+            metadata: {
+              ...(candidateMessage.metadata ?? {}),
+              operationId: lane.operationId,
+              llmAttemptId: lane.attemptId,
+              providerAttemptIndex: lane.candidateIndex
+            }
+          }
+        : message
     );
+  }
   const ensureMessage = () => {
-    if (
-      !state.messages.some(
-        (message) =>
-          message.id === messageId ||
-          (getCanonicalLlmAttemptId(message) ??
-            message.metadata?.llmAttemptId) === lane.attemptId
-      )
-    ) {
+    if (!findAnyAttemptMessage()) {
       state.messages = [
         ...state.messages,
         {
@@ -287,11 +322,32 @@ export function projectFrame(
       ];
     }
   };
-  const updateMessage = (update: (message: ChatMessage) => ChatMessage) => {
-    state.messages = state.messages.map((message) =>
-      message.id === messageId ? update(message) : message
+  const bindCandidate = () => {
+    const message = findActiveAttemptMessage();
+    if (!message || message.metadata?.providerAttemptIndex !== undefined)
+      return;
+    state.messages = state.messages.map((current) =>
+      current.id === message.id
+        ? {
+            ...current,
+            metadata: {
+              ...(current.metadata ?? {}),
+              operationId: lane.operationId,
+              llmAttemptId: lane.attemptId,
+              providerAttemptIndex: lane.candidateIndex
+            }
+          }
+        : current
     );
   };
+  const updateMessage = (update: (message: ChatMessage) => ChatMessage) => {
+    const active = findActiveAttemptMessage();
+    if (!active) return;
+    state.messages = state.messages.map((message) =>
+      message.id === active.id ? update(message) : message
+    );
+  };
+  bindCandidate();
   if (frame.kind === 'stream-chunk') {
     if (frame.offset + frame.bytes.length <= lane.offset)
       return { state, drafts, refresh };

@@ -33,6 +33,44 @@ export function projectAgentInvocation(
     typeof metadata.agentId !== 'string'
   )
     return messages;
+
+  // A send may have already rendered a preparation entry before the
+  // operation receipt arrived. Keep that entry as the presentation identity
+  // for the whole attempt and enrich it in place when invocation is observed.
+  const preparationIndex = messages.findIndex(
+    (message) =>
+      message.role === 'assistant' &&
+      message.isStreaming === true &&
+      message.metadata?.operationId === operationId &&
+      !getCanonicalLlmAttemptId(message) &&
+      typeof message.metadata?.llmAttemptId !== 'string' &&
+      typeof message.metadata?.contextCompactionRunId !== 'string'
+  );
+  if (preparationIndex !== -1) {
+    return messages.map((message, index) =>
+      index === preparationIndex
+        ? {
+            ...message,
+            sender: {
+              type: 'agent',
+              id: metadata.agentId as string,
+              agentId: metadata.agentId as string,
+              name:
+                message.sender?.agentId === metadata.agentId &&
+                  message.sender.name
+                  ? message.sender.name
+                  : metadata.agentId as string
+            },
+            metadata: {
+              ...(message.metadata ?? {}),
+              operationId,
+              llmAttemptId: run
+            }
+          }
+        : message
+    );
+  }
+
   return [
     ...messages,
     {
