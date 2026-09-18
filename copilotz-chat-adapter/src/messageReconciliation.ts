@@ -42,6 +42,11 @@ const getMetadataString = (
     : null;
 };
 
+const getClientMessageId = (
+  message: InternalChatMessage
+): string | null =>
+  getMetadataString(message, CLIENT_MESSAGE_ID_METADATA_KEY);
+
 export const getCanonicalLlmAttemptId = (
   message: InternalChatMessage
 ): string | null => {
@@ -59,10 +64,7 @@ const getMessageAttemptId = (
   getMetadataString(message, LLM_ATTEMPT_ID_METADATA_KEY);
 
 const getCorrelationKeys = (message: InternalChatMessage): string[] => {
-  const clientMessageId = getMetadataString(
-    message,
-    CLIENT_MESSAGE_ID_METADATA_KEY
-  );
+  const clientMessageId = getClientMessageId(message);
   const llmAttemptId = getMessageAttemptId(message);
 
   return [
@@ -72,6 +74,16 @@ const getCorrelationKeys = (message: InternalChatMessage): string[] => {
     ...(llmAttemptId ? [`llm-attempt:${message.role}:${llmAttemptId}`] : [])
   ];
 };
+
+const hasLocalAssistantForClientMessage = (
+  messages: InternalChatMessage[],
+  clientMessageId: string
+): boolean =>
+  messages.some(
+    (message) =>
+      message.role === 'assistant' &&
+      getClientMessageId(message) === clientMessageId
+  );
 
 const indexUniqueFreshCorrelations = (
   freshMessages: InternalChatMessage[]
@@ -130,6 +142,20 @@ export const reconcileThreadMessages = (
     }
 
     seen.add(fresh.id);
+
+    // Keep the optimistic user beside its local assistant until that assistant
+    // becomes canonical. Otherwise a refresh can sort the server-timestamped
+    // user after the local reply, making the UI group it with the preceding
+    // assistant message.
+    const clientMessageId = getClientMessageId(message);
+    if (
+      message.role === 'user' &&
+      clientMessageId !== null &&
+      fresh.id !== message.id &&
+      hasLocalAssistantForClientMessage(currentMessages, clientMessageId)
+    ) {
+      return [message];
+    }
 
     // An active local attempt owns the presentation while its stream is live.
     // Consume the durable counterpart so it is not appended, but retain the
