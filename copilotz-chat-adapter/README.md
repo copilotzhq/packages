@@ -21,6 +21,29 @@ import '@copilotz/chat-ui/styles.css';
 />;
 ```
 
+Hosts that already own a configured Core client can inject it through
+`coreClient` on `CopilotzChat` or `useCopilotzChat`. The adapter reuses that
+client for the controller lifetime; when omitted, it keeps constructing the
+browser client from `baseUrl` and `getRequestHeaders` as before.
+
+```tsx
+<CopilotzChat userId="signed-in-user" coreClient={coreClient} />
+```
+
+The same host lifecycle hooks are available on `CopilotzChat` and
+`useCopilotzChat`:
+
+- `onSendStart(idempotencyKey)` runs before attachment uploads and the Core
+  submission, so host state can be captured for that send.
+- `onSendSettled(idempotencyKey)` runs from the send cleanup path, including
+  upload failures, cancellation, and other rejected sends.
+- `onObservationFrame(threadId, frame)` runs when an observation frame is read
+  for the active thread, before the adapter applies it.
+
+These hooks also work with an injected `coreClient`; the adapter keeps owning
+controller lifetime and invokes them for sends and observations performed
+through that client.
+
 `userId` and presentation options select local UI state. The authenticated server
 supplies executable sender identity, namespace and database scope. Request headers
 come from the application; this package does not read credentials from build-time

@@ -268,6 +268,8 @@ export interface ChatConfig {
     hideIfSingle?: boolean;
     /** 'single' = classic single-agent dropdown (default). 'multi' = participants + target selectors. */
     mode?: "single" | "multi";
+    /** Optional host renderer for the header participant control in multi-agent mode. */
+    renderParticipants?: ParticipantSelectorRenderer;
   };
   labels?: {
     inputPlaceholder?: string;
@@ -656,6 +658,18 @@ export interface AgentOption {
   /** Custom color for multi-agent display. Auto-assigned if not provided. */
   color?: string;
 }
+
+/** State and callbacks supplied to a host-owned header participant renderer. */
+export interface ParticipantSelectorRenderContext {
+  agents: readonly AgentOption[];
+  participantIds: readonly string[];
+  onParticipantsChange: (ids: string[]) => void;
+}
+
+/** Replaces the built-in participant selector in the header multi-agent slot. */
+export type ParticipantSelectorRenderer = (
+  context: ParticipantSelectorRenderContext
+) => ReactNode;
 
 // Message Actions
 export type MessageAction = "copy" | "edit" | "delete" | "regenerate" | "retry";

@@ -46,6 +46,12 @@ export type ControllerOptions = {
     initialMessage?: string;
   };
   onToolOutput?: (value: Record<string, unknown>) => void;
+  /** Called for frames observed for the active thread. Host code may use this to refresh thread metadata. */
+  onObservationFrame?: (threadId: string, frame: ObservationFrame) => void;
+  /** Called immediately before attachment work and the Core send begin. */
+  onSendStart?: (idempotencyKey: string) => void;
+  /** Called after a send settles, including cancellation and upload failure. */
+  onSendSettled?: (idempotencyKey: string) => void;
   eventInterceptor?: EventInterceptor;
   runErrorInterceptor?: RunErrorInterceptor;
 };
@@ -677,6 +683,11 @@ export function createChatController(
           signal,
           onFrame: async (frame) => {
             try {
+              try {
+                options.onObservationFrame?.(id, frame);
+              } catch {
+                // Host observation hooks must not poison the conversation stream.
+              }
               await apply(frame, generation, signal, token);
               progress();
             } catch (error) {
@@ -882,6 +893,7 @@ export function createChatController(
       });
     });
     try {
+      options.onSendStart?.(idempotencyKey);
       const content: unknown[] = text ? [text] : [];
       content.push(
         ...(await uploadAttachments(core.assets, attachments, {
@@ -1013,6 +1025,7 @@ export function createChatController(
         });
       }
       submissions.delete(submission);
+      options.onSendSettled?.(idempotencyKey);
       if (sendGeneration === epoch) {
         publish({
           messages: bootstrap.visible(projection).messages,

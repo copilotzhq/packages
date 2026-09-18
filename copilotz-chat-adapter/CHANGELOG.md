@@ -1,5 +1,12 @@
 # @copilotz/chat-adapter
 
+## 0.77.0 — 2026-09-18
+
+Support host-owned Core clients and lifecycle hooks for send start, send
+settlement, and observation frames. This lets an application apply its own
+thread-creation policy while retaining the adapter's standard conversation
+lifecycle.
+
 ## 0.75.0 — 2026-09-16
 
 Integrate host-owned Core Spaces into chat navigation, including Space discovery,

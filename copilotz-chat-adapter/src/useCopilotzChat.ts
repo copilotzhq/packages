@@ -6,7 +6,10 @@ import {
   useSyncExternalStore
 } from 'react';
 import { createCopilotzClient } from '@copilotz/copilotz/client';
-import { createCoreClient } from '@copilotz/copilotz/core/client';
+import {
+  createCoreClient,
+  type CoreClient
+} from '@copilotz/copilotz/core/client';
 import {
   createChatController,
   type ChatController,
@@ -17,6 +20,8 @@ import { useUrlState } from './useUrlState';
 
 export type RequestHeadersProvider = () => HeadersInit | Promise<HeadersInit>;
 export type UseCopilotzChatOptions = ControllerOptions & {
+  /** Optional host-owned Core client. The adapter creates one when omitted. */
+  coreClient?: CoreClient;
   baseUrl?: string;
   getRequestHeaders?: RequestHeadersProvider;
 };
@@ -45,13 +50,14 @@ export function useCopilotzChat(options: UseCopilotzChatOptions) {
   latest.current = options;
   const core = useMemo(
     () =>
+      options.coreClient ??
       createCoreClient(
         createCopilotzClient({
           baseUrl: options.baseUrl ?? '/api',
           getRequestHeaders: () => headers.current?.() ?? {}
         })
       ),
-    [options.baseUrl, options.userId]
+    [options.baseUrl, options.coreClient, options.userId]
   );
   const [controller, setController] = useState<ChatController>();
   const url = useUrlState((threadId) => {
@@ -65,7 +71,7 @@ export function useCopilotzChat(options: UseCopilotzChatOptions) {
     setController(next);
     void next.start(url.initialThreadId);
     return () => next.dispose();
-  }, [core]);
+  }, [core, options.userId]);
   useEffect(() => {
     controller?.updateOptions(options);
   }, [controller, options]);

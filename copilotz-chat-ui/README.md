@@ -145,6 +145,34 @@ const agents = [
 />
 ```
 
+In multi-agent mode, hosts can replace the header participant control while
+keeping the built-in participant state and callback contract. The composer’s
+`targetAgentId`/`onTargetAgentChange` recipient control remains independent.
+
+```tsx
+<ChatUI
+  config={{
+    agentSelector: {
+      enabled: true,
+      mode: 'multi',
+      renderParticipants: ({ agents, participantIds, onParticipantsChange }) => (
+        <TeamHeader
+          agents={agents}
+          selectedIds={participantIds}
+          onSelectedIdsChange={onParticipantsChange}
+        />
+      ),
+    },
+  }}
+  agentOptions={agents}
+  participantIds={['assistant', 'coder']}
+  onParticipantsChange={setParticipantIds}
+  targetAgentId={targetAgentId}
+  onTargetAgentChange={setTargetAgentId}
+  // ... other props
+/>
+```
+
 ---
 
 ## Configuration
