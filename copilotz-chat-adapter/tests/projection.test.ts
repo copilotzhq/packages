@@ -226,6 +226,105 @@ test('an early canonical refresh keeps a live attempt identity and incremental c
   assert.equal(p.state.messages[0].content, 'First second');
 });
 
+test('an early second-turn history refresh keeps the new reply after the user', () => {
+  const firstUser: ChatMessage = {
+    id: 'user-one',
+    role: 'user',
+    content: 'First',
+    timestamp: 100,
+    isComplete: true,
+  };
+  const firstAssistant: ChatMessage = {
+    id: 'assistant-one',
+    role: 'assistant',
+    content: 'First answer',
+    timestamp: 110,
+    isComplete: true,
+    sender: { type: 'agent', id: 'north', agentId: 'north', name: 'North' },
+    metadata: {
+      copilotzWorkflow: { kind: 'agent_output', llmAttemptId: 'run-one' },
+    },
+  };
+  const secondUser: ChatMessage = {
+    id: 'pending-user-two',
+    role: 'user',
+    content: 'Second',
+    timestamp: 200,
+    metadata: { clientMessageId: 'client-two' },
+  };
+  const preparation: ChatMessage = {
+    id: 'pending-preparation-two',
+    role: 'assistant',
+    content: '',
+    timestamp: 201,
+    isStreaming: true,
+    sender: { type: 'agent', id: 'north', agentId: 'north', name: 'North' },
+    metadata: {
+      clientMessageId: 'client-two',
+      operationId: 'operation-two',
+    },
+  };
+  let state = {
+    ...emptyProjection(),
+    messages: [firstUser, firstAssistant, secondUser, preparation],
+  };
+
+  state = projectFrame(
+    state,
+    {
+      kind: 'output',
+      checkpoint: 'invoked',
+      output: {
+        type: 'llm.call.invoked',
+        operationId: 'operation-two',
+        data: {
+          actionRunId: 'run-two',
+          metadata: {
+            schema: 'copilotz.core.llm-call.v1',
+            agentId: 'north',
+          },
+        },
+      },
+    },
+    210
+  ).state;
+  const liveId = state.messages[3].id;
+
+  const canonicalSecondUser: ChatMessage = {
+    ...secondUser,
+    id: 'durable-user-two',
+    timestamp: 220,
+    isComplete: true,
+  };
+  state.messages = reconcileThreadMessages(
+    state.messages,
+    [firstUser, firstAssistant, canonicalSecondUser]
+  ).messages;
+  assert.deepEqual(
+    state.messages.map((message) => message.id),
+    ['user-one', 'assistant-one', 'pending-user-two', liveId]
+  );
+
+  state = projectFrame(
+    state,
+    descriptor('second-answer', 'run-two'),
+    230
+  ).state;
+  state = projectFrame(
+    state,
+    chunk('second-answer', 'Second answer'),
+    231
+  ).state;
+
+  assert.deepEqual(
+    state.messages.map((message) => message.id),
+    ['user-one', 'assistant-one', 'pending-user-two', liveId]
+  );
+  assert.equal(state.messages[3].content, 'Second answer');
+  assert.equal(state.messages[3].isStreaming, true);
+  assert.equal(state.messages[3].metadata?.llmAttemptId, 'run-two');
+});
+
 test('tool drafts keep one live activity item across canonical reconciliation', () => {
   const p = projector();
   p.apply(
