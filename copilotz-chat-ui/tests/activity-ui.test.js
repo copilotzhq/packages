@@ -5,6 +5,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import {
   AssistantActivity,
   AskToolRenderer,
+  ChatUI,
+  ChatUserContextProvider,
   defaultChatConfig,
   formatToolDetailValue,
   mergeConfig,
@@ -17,6 +19,46 @@ test('mergeConfig enables activity timeline by default', () => {
   const config = mergeConfig(defaultChatConfig, undefined);
   assert.equal(config.features.showActivity, true);
   assert.equal(config.features.showActivityDetails, true);
+});
+
+test('header participant renderer receives participant state and callback', () => {
+  globalThis.window = { innerWidth: 1024 };
+  globalThis.document = {
+    cookie: '',
+    documentElement: { classList: { contains: () => false } },
+  };
+  let context;
+  const onParticipantsChange = (ids) => {
+    context.changedIds = ids;
+  };
+  const html = renderToStaticMarkup(
+    React.createElement(
+      ChatUserContextProvider,
+      { initial: {} },
+      React.createElement(ChatUI, {
+        config: {
+          agentSelector: {
+          enabled: true,
+          mode: 'multi',
+          hideIfSingle: false,
+            renderParticipants: (value) => {
+              context = value;
+              return React.createElement('button', { type: 'button' }, 'Team picker');
+            },
+          },
+        },
+        agentOptions: [{ id: 'north', name: 'North' }],
+        participantIds: ['north'],
+        onParticipantsChange,
+      }),
+    ),
+  );
+
+  assert.match(html, /Team picker/);
+  assert.deepEqual(context.agents.map((agent) => agent.id), ['north']);
+  assert.deepEqual([...context.participantIds], ['north']);
+  context.onParticipantsChange(['south']);
+  assert.deepEqual(context.changedIds, ['south']);
 });
 
 test('mergeConfig enables Spaces navigation by default', () => {

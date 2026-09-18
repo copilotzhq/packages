@@ -25,7 +25,11 @@ import {
 } from 'lucide-react';
 import { ReactNode } from 'react';
 import { SidebarTrigger } from '../ui/sidebar';
-import type { AgentOption, ChatHeaderMenuItem } from '../../types/chatTypes';
+import type {
+  AgentOption,
+  ChatHeaderMenuItem,
+  ParticipantSelectorRenderer,
+} from '../../types/chatTypes';
 import { ParticipantsSelector } from './AgentSelectors';
 
 export interface ChatHeaderConfig {
@@ -38,6 +42,7 @@ export interface ChatHeaderConfig {
     enabled?: boolean;
     label?: string;
     hideIfSingle?: boolean;
+    renderParticipants?: ParticipantSelectorRenderer;
   };
   labels?: {
     newThread?: string;
@@ -186,11 +191,19 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
 
             {/* Agent Selector */}
             {showAgentSelector && isMultiAgentMode && onParticipantsChange && (
-              <ParticipantsSelector
-                agents={agentOptions}
-                participantIds={participantIds ?? agentOptions.map(a => a.id)}
-                onParticipantsChange={onParticipantsChange}
-              />
+              config.agentSelector?.renderParticipants ? (
+                config.agentSelector.renderParticipants({
+                  agents: agentOptions,
+                  participantIds: participantIds ?? agentOptions.map(a => a.id),
+                  onParticipantsChange,
+                })
+              ) : (
+                <ParticipantsSelector
+                  agents={agentOptions}
+                  participantIds={participantIds ?? agentOptions.map(a => a.id)}
+                  onParticipantsChange={onParticipantsChange}
+                />
+              )
             )}
             {showAgentSelector && !isMultiAgentMode && (
               <DropdownMenu>

@@ -141,6 +141,33 @@ test('Stop before the submission receipt cancels that exact operation when the r
   c.dispose();
 });
 
+test('send start is reported before attachment upload and settled exactly once', async () => {
+  const f = fixture();
+  const events: string[] = [];
+  f.core.assets.upload = async () => {
+    events.push('upload');
+    return { data: { content: { assetId: 'uploaded' } } };
+  };
+  f.core.threads.send = async () => {
+    events.push('send');
+    return { operationId: 'send-operation' };
+  };
+  const c = f.controller({
+    onSendStart: () => events.push('start'),
+    onSendSettled: () => events.push('settled')
+  });
+  await c.openThread('a');
+  await c.send('hello', [{
+    kind: 'file',
+    source: new Blob(['hello']),
+    dataUrl: 'blob:preview-only',
+    mimeType: 'text/plain',
+    fileName: 'hello.txt'
+  }]);
+  assert.deepEqual(events, ['start', 'upload', 'send', 'settled']);
+  c.dispose();
+});
+
 test('Stop on a new thread does not cancel a submission owned by the previously selected thread', async () => {
   const f = fixture();
   const receipt = deferred<{ operationId: string }>();

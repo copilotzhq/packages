@@ -10,6 +10,7 @@ export type {
   ChatSnapshot,
   ControllerOptions
 } from './controller';
+export type { CoreClient } from '@copilotz/copilotz/core/client';
 export type {
   EventInterceptor,
   EventInterceptorResult,
@@ -20,6 +21,8 @@ export type {
 } from './specialState';
 export type {
   AgentOption,
+  ParticipantSelectorRenderContext,
+  ParticipantSelectorRenderer,
   ChatConfig,
   ChatCallbacks,
   ChatUserContext,

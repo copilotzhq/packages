@@ -10,6 +10,8 @@ import type {
   MemoryItem,
   ToolRendererMap
 } from '@copilotz/chat-ui';
+import type { CoreClient } from '@copilotz/copilotz/core/client';
+import type { ObservationFrame } from '@copilotz/copilotz/client';
 import { User } from 'lucide-react';
 import { useCopilotzChat } from './useCopilotzChat';
 import type {
@@ -130,6 +132,12 @@ export interface CopilotzChatProps {
   userMenuSections?: ChatUserMenuSection[];
   /** Additional native items to render inside the sidebar user menu */
   userMenuAdditionalItems?: React.ReactNode;
+  /** Called for each observation frame for the active thread. */
+  onObservationFrame?: (threadId: string, frame: ObservationFrame) => void;
+  /** Called before attachment processing and Core submission. */
+  onSendStart?: (idempotencyKey: string) => void;
+  /** Called after the send promise settles. */
+  onSendSettled?: (idempotencyKey: string) => void;
   /** Empty-state suggestions */
   suggestions?: string[];
   /** Agent selector data (built-in ChatUI) */
@@ -144,6 +152,8 @@ export interface CopilotzChatProps {
   onTargetAgentChange?: (agentId: string | null) => void;
   /** Host-owned Space API; its server must enforce actor and membership. */
   spaceService?: ChatSpaceService;
+  /** Optional host-owned Core client. The adapter creates one when omitted. */
+  coreClient?: CoreClient;
   baseUrl?: string;
   getRequestHeaders?: RequestHeadersProvider;
   className?: string;
@@ -173,6 +183,9 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
   onDeleteMemory,
   userMenuSections,
   userMenuAdditionalItems,
+  onObservationFrame,
+  onSendStart,
+  onSendSettled,
   suggestions,
   agentOptions = [],
   selectedAgentId = null,
@@ -182,6 +195,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
   targetAgentId = null,
   onTargetAgentChange,
   spaceService,
+  coreClient,
   baseUrl,
   getRequestHeaders,
   className,
@@ -249,10 +263,14 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     bootstrap,
     defaultThreadName: userConfig?.labels?.defaultThreadName,
     onToolOutput,
+    onObservationFrame,
+    onSendStart,
+    onSendSettled,
     preferredAgentName: selectedAgentRunId,
     participants: participantAgentIds,
     targetAgentName: targetAgentRunId,
     spaceService,
+    coreClient,
     baseUrl,
     getRequestHeaders,
     eventInterceptor,

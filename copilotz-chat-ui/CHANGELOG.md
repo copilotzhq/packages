@@ -1,5 +1,11 @@
 # @copilotz/chat-ui
 
+## 0.77.0 — 2026-09-18
+
+Allow hosts to replace the header participant selector with a renderer that
+receives the current agents, selected participants, and an update callback.
+The built-in selector remains the default.
+
 ## 0.75.0 — 2026-09-16
 
 Add Space-aware conversation navigation with create and move controls, explicit
