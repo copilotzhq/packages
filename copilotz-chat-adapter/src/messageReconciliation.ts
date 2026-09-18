@@ -52,14 +52,18 @@ export const getCanonicalLlmAttemptId = (
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 };
 
+const getMessageAttemptId = (
+  message: InternalChatMessage
+): string | null =>
+  getCanonicalLlmAttemptId(message) ??
+  getMetadataString(message, LLM_ATTEMPT_ID_METADATA_KEY);
+
 const getCorrelationKeys = (message: InternalChatMessage): string[] => {
   const clientMessageId = getMetadataString(
     message,
     CLIENT_MESSAGE_ID_METADATA_KEY
   );
-  const llmAttemptId =
-    getCanonicalLlmAttemptId(message) ??
-    getMetadataString(message, LLM_ATTEMPT_ID_METADATA_KEY);
+  const llmAttemptId = getMessageAttemptId(message);
 
   return [
     ...(clientMessageId
@@ -126,6 +130,21 @@ export const reconcileThreadMessages = (
     }
 
     seen.add(fresh.id);
+
+    // An active local attempt owns the presentation while its stream is live.
+    // Consume the durable counterpart so it is not appended, but retain the
+    // local identity, order, partial output, activity, attachments, and
+    // streaming state until normal completion can replace it.
+    const attemptId = getMessageAttemptId(message);
+    if (
+      message.role === 'assistant' &&
+      message.isStreaming === true &&
+      attemptId !== null &&
+      getMessageAttemptId(fresh) === attemptId
+    ) {
+      return [message];
+    }
+
     if (getMessageSignature(message) === getMessageSignature(fresh)) {
       return [message];
     }

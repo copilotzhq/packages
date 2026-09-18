@@ -9,6 +9,7 @@ import {
   appendAssistantToolCall,
   applyAssistantToolResult,
 } from '../src/activity.ts';
+import { reconcileThreadMessages } from '../src/messageReconciliation.ts';
 import type { ObservationFrame } from '@copilotz/copilotz/client';
 import type { ChatMessage } from '@copilotz/chat-ui';
 
@@ -197,6 +198,75 @@ test('canonical history replaces a streamed attempt without replay truncating it
   p.apply(chunk('a', 'Complete'));
   assert.equal(p.state.messages.length, 1);
   assert.equal(p.state.messages[0].content, 'Complete answer');
+});
+
+test('an early canonical refresh keeps a live attempt identity and incremental content', () => {
+  const p = projector();
+  p.apply(descriptor('answer', 'run'));
+  p.apply(chunk('answer', 'First'));
+  const liveId = p.state.messages[0].id;
+
+  const durable = {
+    id: 'durable-answer',
+    role: 'assistant' as const,
+    content: 'First',
+    timestamp: 20,
+    isStreaming: false,
+    isComplete: true,
+    metadata: { llmAttemptId: 'run' }
+  };
+  p.history(reconcileThreadMessages(p.state.messages, [durable]).messages);
+  assert.equal(p.state.messages.length, 1);
+  assert.equal(p.state.messages[0].id, liveId);
+  assert.equal(p.state.messages[0].content, 'First');
+  assert.equal(p.state.messages[0].isStreaming, true);
+
+  p.apply(chunk('answer', ' second', 5));
+  assert.equal(p.state.messages[0].id, liveId);
+  assert.equal(p.state.messages[0].content, 'First second');
+});
+
+test('tool drafts keep one live activity item across canonical reconciliation', () => {
+  const p = projector();
+  p.apply(
+    descriptor('tools', 'run', {
+      role: 'tool-call-drafts',
+      mediaType: 'application/x-ndjson'
+    })
+  );
+  const line = (sequence: number) =>
+    `${JSON.stringify({
+      draftId: 'draft-1',
+      phase: 'start',
+      sequence,
+      callIndex: 0,
+      toolName: 'search',
+      delta: ''
+    })}\n`;
+  p.apply(chunk('tools', line(0)));
+  const liveId = p.state.messages[0].id;
+  const firstItem = p.state.messages[0].activity?.items[0];
+  assert.equal(firstItem?.id, 'tool-draft:draft-1');
+
+  p.history(
+    reconcileThreadMessages(p.state.messages, [
+      {
+        id: 'durable-tools',
+        role: 'assistant',
+        content: '',
+        timestamp: 20,
+        isStreaming: false,
+        isComplete: true,
+        metadata: { llmAttemptId: 'run' }
+      }
+    ]).messages
+  );
+  p.apply(chunk('tools', line(1), new TextEncoder().encode(line(0)).length));
+
+  assert.equal(p.state.messages.length, 1);
+  assert.equal(p.state.messages[0].id, liveId);
+  assert.equal(p.state.messages[0].activity?.items.length, 1);
+  assert.equal(p.state.messages[0].activity?.items[0].id, firstItem?.id);
 });
 
 test('incomplete UTF-8 and NDJSON reject terminal application without consuming progress', () => {

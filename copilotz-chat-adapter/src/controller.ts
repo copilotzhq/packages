@@ -514,14 +514,26 @@ export function createChatController(
       const terminalOutput =
         frame.kind === 'output' &&
         /^operation\.(completed|failed|cancelled)$/.test(frame.output.type)
+      const preparingId = preparingForOperation(operationId);
+      const boundPreparing = Boolean(
+        preparingId &&
+          next.state.messages.some(
+            (message) =>
+              message.id === preparingId &&
+              message.metadata?.operationId === operationId &&
+              (message.metadata?.llmAttemptId ||
+                message.metadata?.contextCompactionRunId)
+          )
+      );
       const removedPreparing =
+        !boundPreparing &&
         (next.state.messages.some(
           (message) =>
             message.metadata?.operationId === operationId &&
             (message.metadata?.llmAttemptId ||
               message.metadata?.contextCompactionRunId)
         ) || terminalOutput)
-          ? preparingForOperation(operationId)
+          ? preparingId
           : undefined;
       if (
         disposed ||
@@ -541,7 +553,7 @@ export function createChatController(
         : next.state;
       for (const draft of next.drafts) toolCallDraftSource.apply(draft);
       projection = committedState;
-      if (removedPreparing && operationId) {
+      if ((removedPreparing || boundPreparing) && operationId) {
         preparingByOperation.delete(operationId);
       }
       checkpoint = frame.checkpoint;
@@ -903,6 +915,17 @@ export function createChatController(
         if (generation === epoch && !disposed) {
           projection.operations.add(receipt.operationId);
           if (preparingId) {
+            projection.messages = projection.messages.map((message) =>
+              message.id === preparingId
+                ? {
+                    ...message,
+                    metadata: {
+                      ...(message.metadata ?? {}),
+                      operationId: receipt.operationId
+                    }
+                  }
+                : message
+            );
             preparingByOperation.set(receipt.operationId, preparingId);
             if (
               projection.messages.some(

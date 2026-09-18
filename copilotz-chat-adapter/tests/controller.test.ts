@@ -466,7 +466,7 @@ test('a transient initial history failure retries before attaching observation',
   c.dispose();
 });
 
-test('new-thread preparation survives send settlement and clears on actual invocation', async () => {
+test('new-thread preparation keeps its identity through invocation and tokens', async () => {
   const f = fixture();
   const c = createChatController(f.core as unknown as CoreClient, {
     userId: 'owner',
@@ -479,7 +479,10 @@ test('new-thread preparation survives send settlement and clears on actual invoc
       .getSnapshot()
       .messages.some((m) => m.role === 'user' && m.content === 'hello')
   );
-  assert.ok(c.getSnapshot().messages.some((m) => m.id.endsWith(':preparing')));
+  const preparing = c
+    .getSnapshot()
+    .messages.find((m) => m.id.endsWith(':preparing'));
+  assert.ok(preparing);
   await f.observations[0].options.onFrame({
     kind: 'output',
     output: {
@@ -491,10 +494,33 @@ test('new-thread preparation survives send settlement and clears on actual invoc
       }
     }
   } as any);
-  assert.equal(
-    c.getSnapshot().messages.some((m) => m.id.endsWith(':preparing')),
-    false
-  );
+  const invoked = c
+    .getSnapshot()
+    .messages.find((m) => m.metadata?.llmAttemptId === 'attempt');
+  assert.equal(invoked?.id, preparing.id);
+  assert.equal(invoked?.metadata?.operationId, 'send-operation');
+  await f.observations[0].options.onFrame({
+    kind: 'output',
+    output: {
+      type: 'stream.output',
+      operationId: 'send-operation',
+      streamId: 'answer',
+      role: 'content',
+      mediaType: 'text/plain',
+      metadata: { sourceActionRunId: 'attempt' }
+    }
+  } as any);
+  await f.observations[0].options.onFrame({
+    kind: 'stream-chunk',
+    streamId: 'answer',
+    offset: 0,
+    bytes: new TextEncoder().encode('hello back')
+  } as any);
+  const streamed = c
+    .getSnapshot()
+    .messages.find((m) => m.metadata?.llmAttemptId === 'attempt');
+  assert.equal(streamed?.id, preparing.id);
+  assert.equal(streamed?.content, 'hello back');
   c.dispose();
 });
 
