@@ -189,6 +189,10 @@ export function createChatController(
   };
   const publish = (patch: Partial<ChatSnapshot>) => {
     if (disposed) return;
+    const changed = (Object.keys(patch) as Array<keyof ChatSnapshot>).some(
+      (key) => !Object.is(snapshot[key], patch[key])
+    );
+    if (!changed) return;
     snapshot = { ...snapshot, ...patch };
     if (notifying) return;
     notifying = true;
@@ -223,8 +227,11 @@ export function createChatController(
     });
   };
   const reportSubscriberFailure = (error: unknown) => {
-    subscriberError(error);
-    publish({});
+    publish({
+      error,
+      specialState: specialStateFor(error),
+      isRecoveringStream: false
+    });
   };
   const toolCallDraftSource = createToolCallDraftStore({
     onSubscriberError: reportSubscriberFailure
@@ -570,10 +577,13 @@ export function createChatController(
         frameRecoveryNotice !== undefined && snapshot.error === frameRecoveryNotice;
       frameRecoveryNotice = undefined;
       const visible = restored.visible;
+      const visibleMessages = removedPreparing
+        ? visible.messages.filter(
+            (message) => message.id !== removedPreparing
+          )
+        : visible.messages;
       publish({
-        messages: visible.messages.filter(
-          (message) => message.id !== removedPreparing
-        ),
+        messages: visibleMessages,
         isRecoveringStream: restored.pending,
         isStreaming:
           projection.operations.size > 0 ||

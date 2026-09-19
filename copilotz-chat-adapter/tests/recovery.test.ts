@@ -108,6 +108,131 @@ test('a subscriber failure does not prevent applied checkpoint progress', async 
   c.dispose();
 });
 
+test('a no-op heartbeat does not publish a new visible snapshot', async () => {
+  const f = fixture();
+  const c = f.controller();
+  await c.openThread('thread');
+  let notifications = 0;
+  c.subscribe(() => {
+    notifications += 1;
+  });
+
+  const before = c.getSnapshot();
+  await f.observations[0].options.onFrame?.({
+    kind: 'output',
+    checkpoint: 'heartbeat',
+    output: { type: 'observation.heartbeat' }
+  });
+
+  assert.equal(notifications, 0);
+  assert.equal(c.getSnapshot(), before);
+  assert.equal(c.getSnapshot().messages, before.messages);
+  c.dispose();
+});
+
+test('a meaningful stream frame still publishes changed visible messages', async () => {
+  const f = fixture();
+  const c = f.controller();
+  await c.openThread('thread');
+  let notifications = 0;
+  const unsubscribe = c.subscribe(() => {
+    notifications += 1;
+  });
+
+  const initialMessages = c.getSnapshot().messages;
+  await f.observations[0].options.onFrame?.({
+    kind: 'output',
+    checkpoint: 'descriptor',
+    output: {
+      type: 'stream.output',
+      operationId: 'operation-1',
+      streamId: 'stream-1',
+      role: 'content',
+      mediaType: 'text/plain',
+      metadata: { sourceActionRunId: 'attempt-1' }
+    }
+  });
+  assert.equal(notifications, 1);
+
+  await f.observations[0].options.onFrame?.({
+    kind: 'stream-chunk',
+    checkpoint: 'chunk',
+    streamId: 'stream-1',
+    offset: 0,
+    bytes: new TextEncoder().encode('visible response')
+  });
+  assert.equal(notifications, 2);
+  assert.notEqual(c.getSnapshot().messages, initialMessages);
+  assert.equal(c.getSnapshot().messages[0]?.content, 'visible response');
+  unsubscribe();
+  const notificationsAfterUnsubscribe = notifications;
+  c.createThread();
+  assert.equal(c.getSnapshot().currentThreadId, null);
+  assert.equal(notifications, notificationsAfterUnsubscribe);
+  c.dispose();
+});
+
+test('reconnect cleanup leaves one observer and aborts it on dispose', async () => {
+  const f = fixture();
+  let active = 0;
+  let maxActive = 0;
+  let attempts = 0;
+  f.core.threads.observe = async (id, options) => {
+    attempts += 1;
+    active += 1;
+    maxActive = Math.max(maxActive, active);
+    f.observations.push({ id, options });
+    try {
+      if (attempts === 1) return;
+      await new Promise<void>((resolve) =>
+        options.signal?.addEventListener('abort', () => resolve(), { once: true })
+      );
+    } finally {
+      active -= 1;
+    }
+  };
+
+  const c = f.controller();
+  await c.openThread('thread');
+  await wait(350);
+  assert.equal(attempts, 2);
+  assert.equal(maxActive, 1);
+  c.dispose();
+  await wait();
+  assert.equal(active, 0);
+  assert.equal(f.observations[1].options.signal?.aborted, true);
+  const attemptsAfterDispose = attempts;
+  await wait(300);
+  assert.equal(attempts, attemptsAfterDispose);
+});
+
+test('a draft subscriber failure still reaches the controller snapshot', () => {
+  const f = fixture();
+  const c = f.controller();
+  const error = new Error('draft render failed');
+  let observedError: unknown;
+  c.subscribe(() => {
+    observedError = c.getSnapshot().error;
+  });
+  c.toolCallDraftSource.subscribe('draft', () => {
+    throw error;
+  });
+
+  c.toolCallDraftSource.apply({
+    draftId: 'draft',
+    llmAttemptId: 'attempt',
+    callIndex: 0,
+    sequence: 1,
+    toolName: 'lookup',
+    phase: 'start',
+    delta: '{'
+  });
+
+  assert.equal(c.getSnapshot().error, error);
+  assert.equal(observedError, error);
+  c.dispose();
+});
+
 test('a frame projection failure resyncs history before reconnecting', async () => {
   const f = fixture();
   let messageReads = 0;
