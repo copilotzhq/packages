@@ -117,6 +117,8 @@ export interface CopilotzChatProps {
    * thread list refresh, create/select/delete, etc.). Use to keep side panels
    * in sync; user-driven `onSelectThread` alone does not cover bootstrap paths.
    */
+  /** Controlled conversation navigation; disables adapter URL ownership. */
+  navigation?: { threadId: string | null; onChange: (threadId: string | null) => void };
   onCurrentThreadIdChange?: (threadId: string | null) => void;
   /** Called when user clicks logout in the user menu */
   onLogout?: () => void;
@@ -176,6 +178,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
   customComponent,
   onToolOutput,
   onCurrentThreadIdChange,
+  navigation,
   onLogout,
   onViewProfile,
   onAddMemory,
@@ -254,6 +257,7 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     recoverConversation,
     loadOlderMessages
   } = useCopilotzChat({
+    navigation,
     userId,
     userName,
     userAvatar,
