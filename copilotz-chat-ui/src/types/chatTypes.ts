@@ -419,6 +419,9 @@ export interface ChatConfig {
     createProvider?: CreateVoiceProvider;
   };
   customComponent?: {
+    /** Controlled panel visibility; the host may persist it in navigation. */
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
     label?: string;
     icon?: ReactNode;
     /** Static component or render function receiving panel props */

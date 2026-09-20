@@ -169,6 +169,8 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     attachmentsRef.current = attachments;
   }, [attachments]);
 
+  const panelOpen = config.customComponent?.open ?? state.showSidebar;
+
   // Mobile custom overlay mount/unmount for smooth transitions
   const [isCustomMounted, setIsCustomMounted] = useState(false);
   const [isCustomVisible, setIsCustomVisible] = useState(false);
@@ -215,7 +217,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   // Animate mobile custom component overlay
   useEffect(() => {
     if (!isMobile || !config.customComponent?.component) return;
-    if (state.showSidebar) {
+    if (panelOpen) {
       setIsCustomMounted(true);
       requestAnimationFrame(() => setIsCustomVisible(true));
     } else {
@@ -223,7 +225,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
       const t = setTimeout(() => setIsCustomMounted(false), 200);
       return () => clearTimeout(t);
     }
-  }, [state.showSidebar, isMobile, config.customComponent]);
+  }, [panelOpen, isMobile, config.customComponent?.component]);
 
   // Track previous message count to detect initial load vs incremental updates
   const prevMessageCountRef = useRef(0);
@@ -525,12 +527,14 @@ export const ChatUI: React.FC<ChatV2Props> = ({
 
   // Close sidebar handler
   const closeSidebar = useCallback(() => {
+    config.customComponent?.onOpenChange?.(false);
     setState((prev) => ({ ...prev, showSidebar: false }));
-  }, []);
+  }, [config.customComponent?.onOpenChange]);
 
   const handleCustomComponentToggle = useCallback(() => {
-    setState((prev) => ({ ...prev, showSidebar: !prev.showSidebar }));
-  }, []);
+    config.customComponent?.onOpenChange?.(!panelOpen);
+    setState((prev) => ({ ...prev, showSidebar: !panelOpen }));
+  }, [panelOpen, config.customComponent?.onOpenChange]);
 
   const sidebarUser = useMemo(
     () =>
@@ -992,7 +996,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                   </div>
                 </div>
 
-                {config.customComponent?.component && !isMobile && state.showSidebar && (
+                {config.customComponent?.component && !isMobile && panelOpen && (
                   <ResizablePanel initialWidth={customPanelWidth}
                     storageKey={config.customComponent.panelWidthStorageKey}>
                     {renderCustomComponent()}
