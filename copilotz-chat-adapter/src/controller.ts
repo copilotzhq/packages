@@ -8,6 +8,7 @@ import type {
   AgentOption,
   ChatMessage,
   ChatSpace,
+  ChatSpaceMember,
   ChatThread,
   ChatUserContext,
   MediaAttachment
@@ -55,19 +56,59 @@ export type ControllerOptions = {
   eventInterceptor?: EventInterceptor;
   runErrorInterceptor?: RunErrorInterceptor;
 };
-export type SpaceReadOptions = Readonly<{ signal?: AbortSignal }>;
+export type SpaceReadOptions = Readonly<{ signal?: AbortSignal; cursor?: string }>;
 export type SpaceWriteOptions = Readonly<{ signal?: AbortSignal }>;
+export type SpaceUpdate = Readonly<{
+  name?: string;
+  description?: string;
+}>;
+export type SpaceCollectionPage<T> = Readonly<{
+  items: readonly T[];
+  hasMore?: boolean;
+  next?: string;
+}>;
 export type ChatSpaceService = Readonly<{
   list(options?: SpaceReadOptions): Promise<readonly ChatSpace[]>;
-  create(
+  create?: (
     name: string,
     options?: SpaceWriteOptions,
-  ): Promise<ChatSpace>;
-  move(
+  ) => Promise<ChatSpace>;
+  move?: (
     threadId: string,
     spaceId: string | null,
     options?: SpaceWriteOptions,
-  ): Promise<unknown>;
+  ) => Promise<unknown>;
+  /** Optional detail read. No endpoint is inferred when omitted. */
+  get?: (
+    spaceId: string,
+    options?: SpaceReadOptions,
+  ) => Promise<ChatSpace>;
+  /** Optional detail update. The host remains responsible for authorization. */
+  update?: (
+    spaceId: string,
+    patch: SpaceUpdate,
+    options?: SpaceWriteOptions,
+  ) => Promise<ChatSpace>;
+  /** Optional conversations listing; omitted means unavailable, not empty. */
+  conversations?: (
+    spaceId: string,
+    options?: SpaceReadOptions,
+  ) => Promise<SpaceCollectionPage<ChatThread> | readonly ChatThread[]>;
+  /** Optional members listing; omitted means unavailable, not empty. */
+  members?: (
+    spaceId: string,
+    options?: SpaceReadOptions,
+  ) => Promise<SpaceCollectionPage<ChatSpaceMember> | readonly ChatSpaceMember[]>;
+  addMember?: (
+    spaceId: string,
+    member: { id: string; role?: string },
+    options?: SpaceWriteOptions,
+  ) => Promise<ChatSpaceMember>;
+  removeMember?: (
+    spaceId: string,
+    memberId: string,
+    options?: SpaceWriteOptions,
+  ) => Promise<unknown>;
 }>;
 export type ChatSnapshot = {
   messages: ChatMessage[];
@@ -1125,7 +1166,7 @@ export function createChatController(
     spaceId: string | null
   ): Promise<boolean> => {
     const service = options.spaceService;
-    if (!service) return false;
+    if (!service?.move) return false;
     const current = snapshot.threads.find((thread) => thread.id === id);
     if (!current) return false;
     const originalSpaceId = current.spaceId ?? null;
@@ -1243,7 +1284,7 @@ export function createChatController(
     async createSpace(name: string) {
       const service = options.spaceService;
       const trimmed = name.trim();
-      if (!service || !trimmed) return undefined;
+      if (!service?.create || !trimmed) return undefined;
       try {
         const space = await service.create(trimmed, {
           signal: lifetime.signal

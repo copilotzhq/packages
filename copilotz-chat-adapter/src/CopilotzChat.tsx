@@ -4,7 +4,12 @@ import type {
   AgentOption,
   ChatCallbacks,
   ChatConfig,
+  ChatSpace,
   ChatSpaceManagementRequest,
+  ChatSpaceSection,
+  ChatSpaceSectionId,
+  ChatSpaceViewData,
+  ChatSpaceViewStatus,
   ChatUserContext,
   ChatUserMenuSection,
   MemoryItem,
@@ -21,6 +26,7 @@ import type {
 } from './specialState';
 import type { RequestHeadersProvider } from './useCopilotzChat';
 import type { ChatSpaceService } from './controller';
+import { useSpaceView } from './useSpaceView';
 import { invokeSpaceManagement } from './spaceManagement';
 
 type ChatRenderBoundaryProps = {
@@ -154,6 +160,27 @@ export interface CopilotzChatProps {
   onTargetAgentChange?: (agentId: string | null) => void;
   /** Host-owned Space API; its server must enforce actor and membership. */
   spaceService?: ChatSpaceService;
+  /** Optional canonical Space records supplied by the host. */
+  spaces?: readonly ChatSpace[];
+  /** Space view selection is host controlled; it does not change the chat thread. */
+  selectedSpaceId?: string | null;
+  /** Detailed Space record for the matching selectedSpaceId only. */
+  spaceViewSpace?: ChatSpace | null;
+  onOpenSpace?: (spaceId: string) => void;
+  onCloseSpace?: () => void;
+  spaceSections?: readonly ChatSpaceSection[];
+  selectedSpaceSection?: ChatSpaceSectionId;
+  defaultSpaceSection?: ChatSpaceSectionId;
+  onSpaceSectionChange?: (sectionId: ChatSpaceSectionId) => void;
+  spaceViewData?: ChatSpaceViewData;
+  spaceViewStatus?: ChatSpaceViewStatus;
+  canEditSpace?: boolean;
+  onUpdateSpace?: (
+    patch: { name?: string; description?: string },
+  ) => ChatSpace | void | Promise<ChatSpace | void>;
+  canManageSpaceMembers?: boolean;
+  onAddSpaceMember?: (memberId: string) => void | Promise<void>;
+  onRemoveSpaceMember?: (memberId: string) => void | Promise<void>;
   /** Optional host-owned Core client. The adapter creates one when omitted. */
   coreClient?: CoreClient;
   baseUrl?: string;
@@ -198,6 +225,22 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
   targetAgentId = null,
   onTargetAgentChange,
   spaceService,
+  spaces: suppliedSpaces,
+  selectedSpaceId,
+  spaceViewSpace,
+  onOpenSpace,
+  onCloseSpace,
+  spaceSections,
+  selectedSpaceSection,
+  defaultSpaceSection,
+  onSpaceSectionChange,
+  spaceViewData,
+  spaceViewStatus,
+  canEditSpace,
+  onUpdateSpace,
+  canManageSpaceMembers,
+  onAddSpaceMember,
+  onRemoveSpaceMember,
   coreClient,
   baseUrl,
   getRequestHeaders,
@@ -227,13 +270,24 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     return targetAgentId;
   }, [targetAgentId]);
 
+  const [internalSpaceId, setInternalSpaceId] = useState<string | null>(null);
+  const effectiveSpaceId = selectedSpaceId === undefined ? internalSpaceId : selectedSpaceId;
+  const openSpace = useCallback((spaceId: string) => {
+    if (selectedSpaceId === undefined) setInternalSpaceId(spaceId);
+    onOpenSpace?.(spaceId);
+  }, [onOpenSpace, selectedSpaceId]);
+  const closeSpace = useCallback(() => {
+    if (selectedSpaceId === undefined) setInternalSpaceId(null);
+    onCloseSpace?.();
+  }, [onCloseSpace, selectedSpaceId]);
+
   const {
     messages,
     isMessagesLoading,
     isLoadingOlderMessages,
     messagePageInfo,
     threads,
-    spaces,
+    spaces: controllerSpaces,
     currentThreadId,
     isStreaming,
     isStopping,
@@ -280,6 +334,48 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
     eventInterceptor,
     runErrorInterceptor
   });
+
+  const spaces = suppliedSpaces ?? controllerSpaces;
+
+  const nativeSpaceView = useSpaceView({
+    service: spaceViewSpace === undefined ? spaceService : undefined,
+    spaceId: effectiveSpaceId,
+    initialSpace: spaces.find((space) => space.id === effectiveSpaceId),
+  });
+  const resolvedSpaceViewSpace = spaceViewSpace === undefined
+    ? nativeSpaceView.space
+    : spaceViewSpace;
+  const resolvedSpaceViewData = spaceViewData ?? nativeSpaceView.data;
+  const resolvedSpaceViewStatus = spaceViewStatus ?? {
+    isLoading: nativeSpaceView.isLoading,
+    error: nativeSpaceView.error,
+    onRetry: nativeSpaceView.refresh,
+  };
+  const resolvedCanEditSpace = canEditSpace ?? resolvedSpaceViewSpace?.permissions?.canEdit;
+  const refreshNativeSpace = useCallback(async (patch: { name?: string; description?: string }) => {
+    const updated = await nativeSpaceView.updateSpace(patch);
+    if (spaceViewSpace === undefined) void refreshSpaces();
+    return updated;
+  }, [nativeSpaceView.updateSpace, refreshSpaces, spaceViewSpace]);
+  const resolvedUpdateSpace = onUpdateSpace ?? (
+    spaceViewSpace === undefined && spaceService?.update
+      ? refreshNativeSpace
+      : undefined
+  );
+  const resolvedCanManageMembers = canManageSpaceMembers ?? resolvedSpaceViewSpace?.permissions?.canManageMembers;
+  const addNativeSpaceMember = useCallback(async (memberId: string) => {
+    await nativeSpaceView.addMember(memberId);
+  }, [nativeSpaceView.addMember]);
+  const resolvedAddSpaceMember = onAddSpaceMember ?? (
+    spaceViewSpace === undefined && spaceService?.addMember
+      ? addNativeSpaceMember
+      : undefined
+  );
+  const resolvedRemoveSpaceMember = onRemoveSpaceMember ?? (
+    spaceViewSpace === undefined && spaceService?.removeMember
+      ? nativeSpaceView.removeMember
+      : undefined
+  );
 
   useEffect(() => {
     onCurrentThreadIdChange?.(currentThreadId);
@@ -328,13 +424,17 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
         void archiveThread(threadId);
         userCallbacks?.onArchiveThread?.(threadId);
       },
-      ...(spaceService
+      ...(spaceService?.create
         ? {
             onCreateSpace: async (name: string) => {
               const space = await createSpace(name);
               if (space) userCallbacks?.onCreateSpace?.(name);
               return space;
-            },
+            }
+          }
+        : {}),
+      ...(spaceService?.move
+        ? {
             onMoveThreadToSpace: async (
               threadId: string,
               spaceId: string | null
@@ -457,6 +557,21 @@ export const CopilotzChat: React.FC<CopilotzChatProps> = ({
             threads={threads}
             spaces={spaces}
             currentThreadId={currentThreadId}
+            selectedSpaceId={effectiveSpaceId}
+            spaceViewSpace={resolvedSpaceViewSpace}
+            onOpenSpace={openSpace}
+            onCloseSpace={closeSpace}
+            spaceSections={spaceSections}
+            selectedSpaceSection={selectedSpaceSection}
+            defaultSpaceSection={defaultSpaceSection}
+            onSpaceSectionChange={onSpaceSectionChange}
+            spaceViewData={resolvedSpaceViewData}
+            spaceViewStatus={resolvedSpaceViewStatus}
+            canEditSpace={resolvedCanEditSpace}
+            onUpdateSpace={resolvedUpdateSpace}
+            canManageSpaceMembers={resolvedCanManageMembers}
+            onAddSpaceMember={resolvedAddSpaceMember}
+            onRemoveSpaceMember={resolvedRemoveSpaceMember}
             config={mergedConfig}
             callbacks={chatCallbacks}
             isGenerating={isStreaming}
