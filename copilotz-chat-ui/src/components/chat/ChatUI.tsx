@@ -245,6 +245,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   const stateRef = useRef(state);
   const inputValueRef = useRef(inputValue);
   const attachmentsRef = useRef(attachments);
+  const wasSpaceOpen = useRef(Boolean(effectiveSpaceId));
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -253,6 +254,14 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   useEffect(() => {
     inputValueRef.current = inputValue;
   }, [inputValue]);
+  // Save the local composer's draft before it is mounted again after a Space.
+  // Keep keystrokes local to ChatInput so typing does not rerender the chat tree.
+  useEffect(() => {
+    if (effectiveSpaceId && !wasSpaceOpen.current) {
+      setInputValue(inputValueRef.current);
+    }
+    wasSpaceOpen.current = Boolean(effectiveSpaceId);
+  }, [effectiveSpaceId]);
   useEffect(() => {
     attachmentsRef.current = attachments;
   }, [attachments]);
