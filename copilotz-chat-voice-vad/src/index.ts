@@ -109,7 +109,44 @@ export const createVadVoiceProvider = (
   let isSpeechActive = false;
   let isStarting = false;
   let shouldStayArmed = true;
-  let ignoreNextSpeechEnd = false;
+  let lifecycleGeneration = 0;
+  let vadGeneration = 0;
+  let pendingSegmentCount = 0;
+  let segmentEndQueued = false;
+  const vadStarts = new WeakMap<object, Promise<void>>();
+  const vadDisposals = new WeakMap<object, Promise<void>>();
+  const streamsByGeneration = new Map<number, Set<MediaStream>>();
+
+  const stopStream = (stream: MediaStream) => {
+    stream.getTracks().forEach((track) => track.stop());
+  };
+
+  const releaseStreams = (generation: number) => {
+    const streams = streamsByGeneration.get(generation);
+    if (!streams) {
+      return;
+    }
+
+    streamsByGeneration.delete(generation);
+    streams.forEach(stopStream);
+  };
+
+  const requestStream = (generation: number): Promise<MediaStream> => {
+    const request = navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+
+    return request.then(
+      (stream) => {
+        if (generation !== lifecycleGeneration) {
+          stopStream(stream);
+          throw new Error('Audio capture was cancelled.');
+        }
+        const streams = streamsByGeneration.get(generation) ?? new Set<MediaStream>();
+        streams.add(stream);
+        streamsByGeneration.set(generation, streams);
+        return stream;
+      },
+    );
+  };
 
   const clearTimers = () => {
     if (durationTimer) {
@@ -159,7 +196,14 @@ export const createVadVoiceProvider = (
     handlers.onStateChange?.(shouldStayArmed ? 'waiting_for_speech' : 'idle');
   };
 
-  const emitDuration = () => {
+  const isCurrentGeneration = (generation: number): boolean =>
+    generation === lifecycleGeneration;
+
+  const emitDuration = (generation: number) => {
+    if (!isCurrentGeneration(generation)) {
+      return;
+    }
+
     if (!segmentStartedAt) {
       handlers.onDurationChange?.(0);
       return;
@@ -168,87 +212,183 @@ export const createVadVoiceProvider = (
     handlers.onDurationChange?.(Math.max(0, Date.now() - segmentStartedAt));
   };
 
-  const ensureVad = async () => {
+  const ensureVad = async (generation: number) => {
     if (vad) {
       return vad;
     }
 
-    const module = await ensureVadModule();
-    const onnxWasmBasePath = await ensureOrtWasmBasePath();
+    // Acquire permission before loading the model. This keeps a denied or
+    // cancelled request from leaving a loaded model with no MicVAD owner.
+    const initialStream = await requestStream(generation);
+    let initialStreamConsumed = false;
+    let instance: import('@ricky0123/vad-web').MicVAD | null = null;
 
-    vad = await module.MicVAD.new({
-      model,
-      startOnLoad: false,
-      submitUserSpeechOnPause: config.submitUserSpeechOnPause ?? true,
-      baseAssetPath: vadAssetBasePath,
-      onnxWASMBasePath: onnxWasmBasePath,
-      getStream: () => navigator.mediaDevices.getUserMedia({ audio: audioConstraints }),
-      resumeStream: () => navigator.mediaDevices.getUserMedia({ audio: audioConstraints }),
-      onFrameProcessed(_probabilities, frame) {
-        if (isSpeechActive) {
-          handlers.onAudioLevelChange?.(computeLevelFromFrame(frame));
-        }
-      },
-      onSpeechStart() {
-        if (ignoreNextSpeechEnd) {
-          ignoreNextSpeechEnd = false;
-        }
+    try {
+      const module = await ensureVadModule();
+      const onnxWasmBasePath = await ensureOrtWasmBasePath();
 
-        isSpeechActive = true;
-        segmentStartedAt = Date.now();
-        handlers.onDurationChange?.(0);
-        handlers.onStateChange?.('listening');
-        emitDuration();
-        clearTimers();
-        durationTimer = setInterval(emitDuration, 200);
+      const isCurrentInstance = (): boolean =>
+        instance !== null && vad === instance && isCurrentGeneration(vadGeneration) && vadGeneration > 0;
 
-        if (options.maxRecordingMs && options.maxRecordingMs > 0) {
-          maxDurationTimer = setTimeout(() => {
-            void provider.stop();
-          }, options.maxRecordingMs);
-        }
-      },
-      onSpeechEnd(audio) {
-        const shouldIgnoreSegment = ignoreNextSpeechEnd;
-        ignoreNextSpeechEnd = false;
-
-        resetLiveIndicators();
-
-        if (shouldIgnoreSegment) {
-          resolveIdleState();
-          return;
-        }
-
-        handlers.onStateChange?.('finishing');
-
-        void (async () => {
-          try {
-            const module = await ensureVadModule();
-            const attachment = await audioToAttachment(module, audio, sampleRate);
-
-            handlers.onDurationChange?.(attachment.durationMs ?? 0);
-            handlers.onSegmentReady?.({
-              attachment,
-              metadata: {
-                source: 'vad',
-                model,
-                segmentCount: 1,
-              },
-            });
-
-            handlers.onStateChange?.(shouldStayArmed ? 'waiting_for_speech' : 'review');
-          } catch (error) {
-            handlers.onError?.(normalizeError(error));
+      instance = await module.MicVAD.new({
+        model,
+        // MicVAD.destroy() requires a fully initialized audio graph. Starting
+        // during construction makes the completed instance disposable even
+        // when cancellation races model loading.
+        startOnLoad: true,
+        submitUserSpeechOnPause: config.submitUserSpeechOnPause ?? true,
+        baseAssetPath: vadAssetBasePath,
+        onnxWASMBasePath: onnxWasmBasePath,
+        getStream: () => {
+          if (initialStreamConsumed) {
+            return requestStream(generation);
           }
-        })();
-      },
-      onVADMisfire() {
-        resetLiveIndicators();
-        resolveIdleState();
-      },
-    });
+          initialStreamConsumed = true;
+          return Promise.resolve(initialStream);
+        },
+        resumeStream: () => requestStream(vadGeneration),
+        onFrameProcessed(_probabilities, frame) {
+          if (isCurrentInstance() && isSpeechActive) {
+            handlers.onAudioLevelChange?.(computeLevelFromFrame(frame));
+          }
+        },
+        onSpeechStart() {
+          if (!isCurrentInstance()) {
+            return;
+          }
 
-    return vad;
+          segmentEndQueued = false;
+          const speechGeneration = lifecycleGeneration;
+          isSpeechActive = true;
+          segmentStartedAt = Date.now();
+          handlers.onDurationChange?.(0);
+          handlers.onStateChange?.('listening');
+          emitDuration(speechGeneration);
+          clearTimers();
+          durationTimer = setInterval(() => emitDuration(speechGeneration), 200);
+
+          if (options.maxRecordingMs && options.maxRecordingMs > 0) {
+            maxDurationTimer = setTimeout(() => {
+              if (speechGeneration === lifecycleGeneration) {
+                void provider.stop();
+              }
+            }, options.maxRecordingMs);
+          }
+        },
+        onSpeechEnd(audio) {
+          if (!isCurrentInstance() || segmentEndQueued || !isSpeechActive) {
+            return;
+          }
+
+          segmentEndQueued = true;
+          isSpeechActive = false;
+          pendingSegmentCount += 1;
+          const generation = lifecycleGeneration;
+          resetLiveIndicators();
+          handlers.onStateChange?.('finishing');
+
+          void (async () => {
+            try {
+              const module = await ensureVadModule();
+              const attachment = await audioToAttachment(module, audio, sampleRate);
+
+              if (!isCurrentGeneration(generation) || !isCurrentInstance()) {
+                return;
+              }
+
+              handlers.onDurationChange?.(attachment.durationMs ?? 0);
+              handlers.onSegmentReady?.({
+                attachment,
+                metadata: {
+                  source: 'vad',
+                  model,
+                  segmentCount: 1,
+                },
+              });
+
+              if (!isSpeechActive) {
+                handlers.onStateChange?.(shouldStayArmed ? 'waiting_for_speech' : 'review');
+              }
+            } catch (error) {
+              if (isCurrentGeneration(generation) && isCurrentInstance()) {
+                handlers.onError?.(normalizeError(error));
+              }
+            } finally {
+              if (generation === lifecycleGeneration) {
+                pendingSegmentCount = Math.max(0, pendingSegmentCount - 1);
+              }
+            }
+          })();
+        },
+        onVADMisfire() {
+          if (!isCurrentInstance()) {
+            return;
+          }
+
+          resetLiveIndicators();
+          if (pendingSegmentCount === 0) {
+            resolveIdleState();
+          }
+        },
+      });
+      // startOnLoad resolves only after MicVAD has a complete audio graph.
+    } catch (error) {
+      releaseStreams(generation);
+      throw error;
+    }
+
+    if (generation !== lifecycleGeneration) {
+      return instance;
+    }
+
+    vad = instance;
+    return instance;
+  };
+
+  const discardVad = async (
+    instance: import('@ricky0123/vad-web').MicVAD | null,
+    generation: number,
+  ) => {
+    if (!instance) {
+      return;
+    }
+
+    const existingDisposal = vadDisposals.get(instance);
+    if (existingDisposal) {
+      await existingDisposal;
+      return;
+    }
+
+    const disposal = (async () => {
+      const start = vadStarts.get(instance);
+      if (start) {
+        try {
+          await start;
+        } catch {
+          // The initial start is completed by MicVAD.new({ startOnLoad: true }),
+          // so a failed resume still leaves a safe-to-destroy audio graph.
+          releaseStreams(generation);
+        }
+      }
+
+      if (vad === instance) {
+        vad = null;
+        vadGeneration = 0;
+      }
+
+      releaseStreams(generation);
+      await instance.destroy();
+    })();
+    vadDisposals.set(instance, disposal);
+    await disposal;
+  };
+
+  const startVad = (
+    instance: import('@ricky0123/vad-web').MicVAD,
+  ): Promise<void> => {
+    const promise = instance.start();
+    vadStarts.set(instance, promise);
+    return promise;
   };
 
   const provider: VoiceProvider = {
@@ -262,28 +402,72 @@ export const createVadVoiceProvider = (
       }
 
       isStarting = true;
+      const generation = ++lifecycleGeneration;
+      vadGeneration = 0;
+      pendingSegmentCount = 0;
       shouldStayArmed = true;
-      ignoreNextSpeechEnd = false;
+      segmentEndQueued = false;
       resetLiveIndicators();
       handlers.onTranscriptChange?.({});
       handlers.onDurationChange?.(0);
       handlers.onStateChange?.('preparing');
 
       try {
-        const instance = await ensureVad();
-        await instance.start();
+        const instance = await ensureVad(generation);
+        if (!isCurrentGeneration(generation)) {
+          await discardVad(instance, generation);
+          return;
+        }
+
+        vadGeneration = generation;
+        await startVad(instance);
+
+        if (!isCurrentGeneration(generation)) {
+          await discardVad(instance, generation);
+          return;
+        }
+
         handlers.onStateChange?.('waiting_for_speech');
       } catch (error) {
-        resetLiveIndicators();
+        if (isCurrentGeneration(generation)) {
+          resetLiveIndicators();
+        }
+
+        if (!isCurrentGeneration(generation)) {
+          return;
+        }
+
         throw normalizeError(error);
       } finally {
-        isStarting = false;
+        if (generation === lifecycleGeneration) {
+          isStarting = false;
+        }
       }
     },
     stop: async () => {
       shouldStayArmed = false;
 
-      if (!vad) {
+      if (isStarting) {
+        const startedGeneration = lifecycleGeneration;
+        const generation = ++lifecycleGeneration;
+        vadGeneration = 0;
+        isStarting = false;
+        pendingSegmentCount = 0;
+        const instance = vad;
+        vad = null;
+        resetLiveIndicators();
+        releaseStreams(startedGeneration);
+        await discardVad(instance, startedGeneration);
+        if (generation !== lifecycleGeneration) {
+          return;
+        }
+        handlers.onStateChange?.('idle');
+        return;
+      }
+
+      const generation = lifecycleGeneration;
+      const instance = vad;
+      if (!instance) {
         handlers.onStateChange?.('idle');
         return;
       }
@@ -291,46 +475,52 @@ export const createVadVoiceProvider = (
       handlers.onStateChange?.('finishing');
 
       const wasSpeechActive = isSpeechActive;
-      await vad.pause();
+      await instance.pause();
+      releaseStreams(generation);
 
-      if (!wasSpeechActive) {
+      if (
+        generation === lifecycleGeneration &&
+        vad === instance &&
+        !wasSpeechActive &&
+        pendingSegmentCount === 0
+      ) {
         resetLiveIndicators();
         handlers.onStateChange?.('idle');
       }
     },
     cancel: async () => {
       shouldStayArmed = false;
-
-      if (!vad) {
-        resetLiveIndicators();
-        handlers.onStateChange?.('idle');
+      const startedGeneration = lifecycleGeneration;
+      const generation = ++lifecycleGeneration;
+      vadGeneration = 0;
+      isStarting = false;
+      pendingSegmentCount = 0;
+      const instance = vad;
+      vad = null;
+      resetLiveIndicators();
+      releaseStreams(startedGeneration);
+      await discardVad(instance, startedGeneration);
+      if (generation !== lifecycleGeneration) {
         return;
       }
-
-      const wasSpeechActive = isSpeechActive;
-      ignoreNextSpeechEnd = wasSpeechActive;
-      await vad.pause();
-
-      if (!wasSpeechActive) {
-        ignoreNextSpeechEnd = false;
-      }
-
-      resetLiveIndicators();
       handlers.onStateChange?.('idle');
     },
     destroy: async () => {
       shouldStayArmed = false;
-      ignoreNextSpeechEnd = true;
+      const startedGeneration = lifecycleGeneration;
+      lifecycleGeneration += 1;
+      vadGeneration = 0;
+      isStarting = false;
+      const generation = lifecycleGeneration;
+      pendingSegmentCount = 0;
+      const instance = vad;
+      vad = null;
       resetLiveIndicators();
-
-      if (!vad) {
-        handlers.onStateChange?.('idle');
+      releaseStreams(startedGeneration);
+      await discardVad(instance, startedGeneration);
+      if (generation !== lifecycleGeneration) {
         return;
       }
-
-      await vad.destroy();
-      vad = null;
-      ignoreNextSpeechEnd = false;
       handlers.onStateChange?.('idle');
     },
   };

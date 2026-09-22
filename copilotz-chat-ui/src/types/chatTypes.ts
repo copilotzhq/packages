@@ -231,8 +231,74 @@ export interface ChatSpace {
   description?: string;
   status?: "active" | "archived";
   deletable?: boolean;
+  permissions?: {
+    canEdit?: boolean;
+    canManageMembers?: boolean;
+    canDelete?: boolean;
+  };
   /** Optional server-projected attachment index used by host adapters. */
   threadIds?: readonly string[];
+}
+
+/** A person returned by a host-owned Space membership provider. */
+export interface ChatSpaceMember {
+  id: string;
+  name: string;
+  role?: string;
+  avatarUrl?: string;
+}
+
+export type SpaceCollectionStatus =
+  | "loading"
+  | "ready"
+  | "empty"
+  | "partial"
+  | "unavailable"
+  | "error";
+
+/**
+ * A host can distinguish an unavailable provider from an available empty list.
+ * `partial` means that the host deliberately supplied a limited page.
+ */
+export interface SpaceCollection<T> {
+  status: SpaceCollectionStatus;
+  items?: readonly T[];
+  error?: string;
+  hasMore?: boolean;
+  /** Opaque host cursor retained for a subsequent onLoadMore call. */
+  next?: string;
+  onLoadMore?: () => void | Promise<void>;
+}
+
+export type ChatSpaceSectionId =
+  | "overview"
+  | "conversations"
+  | "members"
+  | (string & {});
+
+export interface ChatSpaceSectionContext {
+  space: ChatSpace;
+  onOpenConversation?: (threadId: string) => void;
+}
+
+/** Ordered host composition for native SpaceView. */
+export interface ChatSpaceSection {
+  id: ChatSpaceSectionId;
+  label: string;
+  icon?: ReactNode;
+  content?: ReactNode | ((context: ChatSpaceSectionContext) => ReactNode);
+}
+
+export interface ChatSpaceViewData {
+  conversations?: SpaceCollection<ChatThread>;
+  members?: SpaceCollection<ChatSpaceMember>;
+}
+
+/** Host loading/error state for a selected Space without a resolved record. */
+export interface ChatSpaceViewStatus {
+  isLoading?: boolean;
+  error?: unknown;
+  onRetry?: () => void | Promise<void>;
 }
 
 // Thread Management
@@ -562,6 +628,32 @@ export interface ChatV2Props {
   threads?: ChatThread[];
   spaces?: readonly ChatSpace[];
   currentThreadId?: string | null;
+
+  /** Space selected in the main content area. Omit for the ordinary chat view. */
+  selectedSpaceId?: string | null;
+  /** Optional detailed record; used only when its id matches selectedSpaceId. */
+  spaceViewSpace?: ChatSpace | null;
+  /** Opens a Space without owning URL or history policy. */
+  onOpenSpace?: (spaceId: string) => void;
+  /** Clears the current Space and returns to the selected conversation. */
+  onCloseSpace?: () => void;
+  /** Host ordered sections; built-ins are used when omitted. */
+  spaceSections?: readonly ChatSpaceSection[];
+  /** Controlled native Space section selection. */
+  selectedSpaceSection?: ChatSpaceSectionId;
+  defaultSpaceSection?: ChatSpaceSectionId;
+  onSpaceSectionChange?: (sectionId: ChatSpaceSectionId) => void;
+  /** Host supplied data and operations for built-in sections. */
+  spaceViewData?: ChatSpaceViewData;
+  /** Loading/error state used while resolving a selected Space record. */
+  spaceViewStatus?: ChatSpaceViewStatus;
+  canEditSpace?: boolean;
+  onUpdateSpace?: (
+    patch: { name?: string; description?: string },
+  ) => ChatSpace | void | Promise<ChatSpace | void>;
+  canManageSpaceMembers?: boolean;
+  onAddSpaceMember?: (memberId: string) => void | Promise<void>;
+  onRemoveSpaceMember?: (memberId: string) => void | Promise<void>;
 
   // Customization
   config?: ChatConfig;

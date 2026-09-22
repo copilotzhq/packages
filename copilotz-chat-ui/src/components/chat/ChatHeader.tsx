@@ -77,6 +77,8 @@ export interface ChatHeaderProps {
   onImportData?: (file: File) => void;
   onClearAll?: () => void;
   showCustomComponentButton?: boolean;
+  /** Hide controls that act on the background conversation while another view is open. */
+  showThreadActions?: boolean;
   isMobile?: boolean;
   showAgentSelector?: boolean;
   isMultiAgentMode?: boolean;
@@ -98,6 +100,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   onImportData,
   onClearAll,
   showCustomComponentButton,
+  showThreadActions = true,
   isMobile,
   showAgentSelector = false,
   isMultiAgentMode = false,
@@ -300,7 +303,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             )}
 
             {/* Custom header actions (passed from parent) */}
-            {config.headerActions}
+            {showThreadActions && config.headerActions}
 
             {/* Settings dropdown menu */}
             <DropdownMenu>
@@ -310,7 +313,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
-                {onNewThread && (
+                {showThreadActions && onNewThread && (
                   <>
                     <DropdownMenuItem onClick={() => onNewThread?.()} className="font-medium text-primary">
                       <Plus className="h-4 w-4 mr-2" />
@@ -320,7 +323,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                   </>
                 )}
 
-                {config.headerMenuItems?.map((item) => (
+                {showThreadActions && config.headerMenuItems?.map((item) => (
                   <DropdownMenuItem
                     key={item.id}
                     onClick={item.onSelect}
@@ -332,7 +335,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
                   </DropdownMenuItem>
                 ))}
 
-                {config.headerMenuItems && config.headerMenuItems.length > 0 && (
+                {showThreadActions && config.headerMenuItems && config.headerMenuItems.length > 0 && (
                   <DropdownMenuSeparator />
                 )}
 

@@ -153,6 +153,8 @@ export interface SidebarProps
   onCreateSpace?: SpaceCreateHandler;
   onManageSpace?: SpaceManagementHandler;
   onMoveThreadToSpace?: SpaceMoveHandler;
+  /** Opens the Space main view. Conversation expansion remains a separate control. */
+  onOpenSpace?: (spaceId: string) => void;
   // User menu props
   user?: UserMenuUser | null;
   userMenuCallbacks?: UserMenuCallbacks;
@@ -448,6 +450,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onCreateSpace,
   onManageSpace,
   onMoveThreadToSpace,
+  onOpenSpace,
   user,
   userMenuCallbacks,
   currentTheme,
@@ -877,28 +880,44 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         : ""
                     }`}
                   >
-                    <CollapsibleTrigger className="group/trigger flex min-w-0 flex-1 items-center justify-start bg-transparent p-0 text-left hover:bg-transparent">
+                    <CollapsibleTrigger
+                      aria-label={`Expand ${group.label} conversations`}
+                      className="group/trigger flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-transparent p-0 text-left hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                    >
                       <ChevronRight
-                        className={`mr-1 h-3.5 w-3.5 transition-transform ${
+                        className={`h-3.5 w-3.5 transition-transform ${
                           isOpen ? "rotate-90" : ""
                         }`}
                       />
+                    </CollapsibleTrigger>
+                    {groupBy === "space" && group.space && onOpenSpace ? (
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 truncate rounded-md bg-transparent px-1 text-left hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                        onClick={() => onOpenSpace(group.space!.id)}
+                        aria-label={`Open ${group.space.name || group.space.id} Space`}
+                      >
                       {groupBy === "space" && group.space && (
                         <SpaceAvatar space={group.space} className="mr-1" />
                       )}
                       <span
-                        className={`min-w-0 flex-1 truncate ${
+                        className={`truncate ${
                           group.muted ? "text-muted-foreground" : ""
                         }`}
                       >
                         {group.label}
                       </span>
+                      </button>
+                    ) : (
+                      <CollapsibleTrigger className="flex min-w-0 flex-1 items-center justify-start rounded-md bg-transparent px-1 text-left hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring">
+                        <span className="min-w-0 flex-1 truncate">{group.label}</span>
+                      </CollapsibleTrigger>
+                    )}
                       {!isOpen && (!group.space || !onManageSpace) && (
                         <span className="ml-auto px-1.5 text-[10px] text-muted-foreground">
                           {group.threads.length}
                         </span>
                       )}
-                    </CollapsibleTrigger>
                     {group.space && onManageSpace && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>

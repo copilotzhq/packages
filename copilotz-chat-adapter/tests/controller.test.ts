@@ -742,6 +742,24 @@ test('failed Space creation reports an error while retaining conversation naviga
   c.dispose();
 });
 
+test('list-only Space service exposes read-only discovery without mutation success', async () => {
+  const f = fixture();
+  f.core.threads.list = async () => ({
+    data: [listedThread],
+    pageInfo: { hasMore: false }
+  });
+  const c = f.controller({
+    spaceService: {
+      list: async () => [{ id: 'research', name: 'Research' }]
+    }
+  });
+  await c.start();
+  assert.deepEqual(c.getSnapshot().spaces, [{ id: 'research', name: 'Research' }]);
+  assert.equal(await c.createSpace('New Space'), undefined);
+  assert.equal(await c.moveThreadToSpace('thread-a', 'research'), false);
+  c.dispose();
+});
+
 test('Space creation returns the host record and refreshes the Space snapshot', async () => {
   const f = fixture();
   let spaces: Array<{ id: string; name: string }> = [];

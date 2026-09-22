@@ -73,6 +73,50 @@ optimistically moves them. A rejected move restores its previous placement.
 Successful moves remain committed when a later refresh fails; the refresh error
 is reported while Date navigation continues to work. Without `spaceService`,
 the adapter keeps the ordinary Date sidebar and does not show Space controls.
+`create` and `move` are optional capabilities, so a list-only service provides
+Space discovery and read-only navigation without exposing mutation controls.
+
+The service can optionally provide native Space detail and lists. These methods
+are capability declarations: omitted methods stay unavailable and never cause
+the adapter to guess an endpoint.
+
+```ts
+const spaceService = {
+  list,
+  create,
+  move,
+  get: (spaceId, options) => api.getSpace(spaceId, options),
+  update: (spaceId, patch, options) => api.updateSpace(spaceId, patch, options),
+  conversations: (spaceId, options) => api.listSpaceConversations(spaceId, options),
+  members: (spaceId, options) => api.listSpaceMembers(spaceId, options),
+};
+```
+
+React hosts that need one shared state object for both presentations can use
+the adapter hook:
+
+```tsx
+const spaceView = useSpaceView({
+  service: spaceService,
+  spaceId: currentSpaceId,
+  initialSpace: currentSpace,
+});
+```
+
+It returns `space`, `data`, `refresh`, `updateSpace`, `addMember`, and
+`removeMember`. `addMember` and `removeMember` are available only when the
+corresponding service methods and server permissions exist; otherwise the host
+can omit those controls. Pass this same object to the main `CopilotzChat`
+props and a side-panel `SpaceView` to keep reads and reconciliation in one
+owner.
+
+When passing the prepared state to `CopilotzChat`, pass
+`spaceViewSpace={spaceView.space ?? null}` and
+`spaceViewStatus={{ isLoading: spaceView.isLoading, error: spaceView.error, onRetry: spaceView.refresh }}`.
+This keeps an unknown, revoked, or still-loading selected id in an explicit
+loading/error/unavailable view instead of falling back to chat. A sidebar record
+is used as read-only context until a detailed read succeeds; a failed detailed
+read clears its permissions and the prepared view record.
 
 For custom interfaces, `useCopilotzChat` subscribes to the same controller. For
 non-React hosts:

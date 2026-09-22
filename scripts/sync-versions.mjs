@@ -43,14 +43,16 @@ const packages = workspaces.map((workspace) => {
   };
 });
 const workspaceNames = new Set(packages.map(({ packageJson }) => packageJson.name));
+const contractsPath = path.join(root, "contracts", "deno.json");
+const contracts = readJson(contractsPath);
 
 if (checkOnly) {
-  checkVersions(targetVersion, packages, workspaceNames);
+  checkVersions(targetVersion, packages, workspaceNames, contracts);
 } else {
-  syncVersions(targetVersion, packages, workspaceNames);
+  syncVersions(targetVersion, packages, workspaceNames, contracts);
 }
 
-function checkVersions(version, workspacePackages, workspacePackageNames) {
+function checkVersions(version, workspacePackages, workspacePackageNames, contractConfig) {
   const problems = [];
 
   if (rootPackage.version !== version) {
@@ -105,6 +107,8 @@ function checkVersions(version, workspacePackages, workspacePackageNames) {
     collectCoreDependencyProblems(problems, `package-lock.json ${workspace}`, lockPackage, version);
   }
 
+  collectContractImportProblems(problems, "contracts/deno.json", contractConfig, workspacePackageNames, version);
+
   if (problems.length > 0) {
     console.error("Package versions are not synchronized:");
     for (const problem of problems) {
@@ -116,7 +120,9 @@ function checkVersions(version, workspacePackages, workspacePackageNames) {
   console.log(`All workspace package versions are synchronized at ${version}.`);
 }
 
-function syncVersions(version, workspacePackages, workspacePackageNames) {
+function syncVersions(version, workspacePackages, workspacePackageNames, contractConfig) {
+  syncContractImports(contractConfig, workspacePackageNames, version);
+
   rootPackage.version = version;
   writeJson(rootPackagePath, rootPackage);
 
@@ -145,7 +151,82 @@ function syncVersions(version, workspacePackages, workspacePackageNames) {
   }
 
   writeJson(lockPath, lock);
+  writeJson(contractsPath, contractConfig);
   console.log(`Synchronized workspace package versions to ${version}.`);
+}
+
+function collectContractImportProblems(problems, label, contractConfig, workspacePackageNames, version) {
+  const imports = contractConfig.imports;
+  if (!imports || typeof imports !== "object" || Array.isArray(imports)) {
+    problems.push(`${label} must define an imports object`);
+    return;
+  }
+
+  for (const [specifier, target] of Object.entries(imports)) {
+    const packageName = contractPackageName(specifier, workspacePackageNames);
+    if (!packageName) {
+      continue;
+    }
+
+    const expected = expectedContractImport(target, packageName, version);
+    if (expected === null || target !== expected) {
+      const scheme = packageName === coreDependencyName ? "jsr" : "npm";
+      const fallback = `${scheme}:${packageName}@${version}`;
+      problems.push(`${label} imports.${specifier} is ${String(target)}, expected ${expected ?? fallback}`);
+    }
+  }
+}
+
+function syncContractImports(contractConfig, workspacePackageNames, version) {
+  const imports = contractConfig.imports;
+  if (!imports || typeof imports !== "object" || Array.isArray(imports)) {
+    throw new Error("contracts/deno.json must define an imports object.");
+  }
+
+  for (const [specifier, target] of Object.entries(imports)) {
+    const packageName = contractPackageName(specifier, workspacePackageNames);
+    if (!packageName) {
+      continue;
+    }
+
+    const expected = expectedContractImport(target, packageName, version);
+    if (expected === null) {
+      const scheme = packageName === coreDependencyName ? "jsr" : "npm";
+      throw new Error(
+        `contracts/deno.json imports.${specifier} must reference ${scheme}:${packageName}; found ${String(target)}`,
+      );
+    }
+
+    imports[specifier] = expected;
+  }
+}
+
+function contractPackageName(specifier, workspacePackageNames) {
+  const packageNames = [coreDependencyName, ...workspacePackageNames]
+    .sort((left, right) => right.length - left.length);
+  return packageNames.find((name) => specifier === name || specifier.startsWith(`${name}/`));
+}
+
+function expectedContractImport(target, packageName, version) {
+  if (typeof target !== "string") {
+    return null;
+  }
+
+  const separator = target.indexOf(":");
+  if (separator <= 0) {
+    return null;
+  }
+
+  const targetPackage = target.slice(separator + 1);
+  const packagePrefix = `${packageName}@`;
+  if (!targetPackage.startsWith(packagePrefix)) {
+    return null;
+  }
+
+  const subpathStart = targetPackage.indexOf("/", packagePrefix.length);
+  const subpath = subpathStart < 0 ? "" : targetPackage.slice(subpathStart);
+  const scheme = packageName === coreDependencyName ? "jsr" : "npm";
+  return `${scheme}:${packageName}@${version}${subpath}`;
 }
 
 function collectInternalDependencyProblems(problems, label, packageJson, workspacePackageNames, version) {

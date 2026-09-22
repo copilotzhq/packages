@@ -123,6 +123,34 @@ drag and drop. Conversations without a Space remain visible in the No Space
 group. Archive toggle, rename, and delete with confirmation dialogs are retained.
 Collapsible icon mode supports smaller screens.
 
+### Native Spaces
+
+`ChatUI` keeps the current conversation controller and draft while a host opens
+a Space in the main content area. Space names and the conversation chevron are
+separate controls. With only Space records, `SpaceView` shows a read-only
+Overview. Conversations and Members appear only when their host supplied data
+source exists; an unavailable source is not treated as an empty list.
+
+```tsx
+<ChatUI
+  spaces={spaces}
+  selectedSpaceId={selectedSpaceId}
+  onOpenSpace={setSelectedSpaceId}
+  onCloseSpace={() => setSelectedSpaceId(null)}
+  spaceViewData={{ conversations, members }}
+  spaceViewStatus={{ isLoading, error, onRetry: refresh }}
+  selectedSpaceSection={section}
+  onSpaceSectionChange={setSection}
+/>
+```
+
+Hosts can provide an ordered `spaceSections` list using the built-in ids
+`overview`, `conversations`, and `members`, plus application-owned content.
+Selection is local by default and controlled when `selectedSpaceSection` is
+provided. `SpaceView` performs no HTTP or URL work. Pass both `canEditSpace`
+and `onUpdateSpace` to expose a real Overview edit action; otherwise the
+Overview remains readable.
+
 ### User Profile
 
 Built-in sheet panel with user info, dynamic custom fields (auto-detects icons based on field names), and a memories section. Memories support CRUD operations and distinguish between agent-created and user-created entries.

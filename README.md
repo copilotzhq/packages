@@ -62,4 +62,4 @@ in npm's install metadata. It then refreshes Deno's metadata for Chat UI and Cha
 Adapter before testing the actual released packages. A registry timeout identifies
 the missing versions; contract failures remain failures and are not retried or
 hidden. Run the release orchestration tests with
-`node --test scripts/publish-workspaces.test.mjs`.
+`node --test scripts/publish-workspaces.test.mjs scripts/sync-versions.test.mjs`.

@@ -12,6 +12,7 @@ import {
   ChatThread,
   ChatUserContext,
   ChatV2Props,
+  ChatSpaceViewStatus,
   MediaAttachment,
   MessageActionEvent,
   StateCallback,
@@ -29,6 +30,7 @@ import { ScrollArea } from "../ui/scroll-area";
 import { Skeleton } from "../ui/skeleton";
 import { TooltipProvider } from "../ui/tooltip";
 import { SidebarInset, SidebarProvider } from "../ui/sidebar";
+import { SpaceView } from "./SpaceView";
 import {
   ArrowRight,
   HelpCircle,
@@ -38,12 +40,76 @@ import {
   Zap,
 } from "lucide-react";
 
+const SpaceSelectionState: React.FC<{
+  status?: ChatSpaceViewStatus;
+  onClose: () => void;
+}> = ({ status, onClose }) => {
+  const errorMessage = status?.error instanceof Error
+    ? status.error.message
+    : typeof status?.error === "string"
+      ? status.error
+      : "This Space is unavailable.";
+  const isLoading = status?.isLoading === true;
+
+  return (
+    <section
+      className="flex min-h-0 flex-1 flex-col overflow-hidden"
+      aria-label="Space"
+    >
+      <header className="flex shrink-0 items-center border-b px-4 py-3 sm:px-6">
+        <h1 className="min-w-0 flex-1 truncate text-base font-semibold">Space</h1>
+      </header>
+      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+        <p
+          className={status?.error ? "text-sm text-destructive" : "text-sm text-muted-foreground"}
+          role={status?.error ? "alert" : "status"}
+        >
+          {isLoading ? "Loading Space…" : errorMessage}
+        </p>
+        <div className="flex items-center gap-2">
+          {status?.onRetry && !isLoading && (
+            <button
+              type="button"
+              className="rounded-md border px-3 py-2 text-sm hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() => void status.onRetry?.()}
+            >
+              Try again
+            </button>
+          )}
+          <button
+            type="button"
+            className="rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={onClose}
+          >
+            Back to conversation
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+};
+
 // ChatUI is a purely presentational component
 export const ChatUI: React.FC<ChatV2Props> = ({
   messages = [],
   threads = [],
   spaces = [],
   currentThreadId = null,
+  selectedSpaceId,
+  spaceViewSpace,
+  onOpenSpace,
+  onCloseSpace,
+  spaceSections,
+  selectedSpaceSection,
+  defaultSpaceSection,
+  onSpaceSectionChange,
+  spaceViewData,
+  spaceViewStatus,
+  canEditSpace,
+  onUpdateSpace,
+  canManageSpaceMembers,
+  onAddSpaceMember,
+  onRemoveSpaceMember,
   config: userConfig,
   sidebar: _sidebar,
   userMenuSections,
@@ -82,6 +148,28 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     () => mergeConfig(defaultChatConfig, userConfig),
     [userConfig]
   );
+
+  const [internalSpaceId, setInternalSpaceId] = useState<string | null>(null);
+  const effectiveSpaceId = selectedSpaceId === undefined ? internalSpaceId : selectedSpaceId;
+  const hasPreparedSpaceState =
+    spaceViewSpace !== undefined || spaceViewStatus !== undefined;
+  const effectiveSpace = useMemo(
+    () => {
+      if (!effectiveSpaceId) return null;
+      if (spaceViewSpace?.id === effectiveSpaceId) return spaceViewSpace;
+      if (hasPreparedSpaceState) return null;
+      return spaces.find((space) => space.id === effectiveSpaceId) ?? null;
+    },
+    [effectiveSpaceId, hasPreparedSpaceState, spaceViewSpace, spaces],
+  );
+  const openSpace = useCallback((spaceId: string) => {
+    if (selectedSpaceId === undefined) setInternalSpaceId(spaceId);
+    onOpenSpace?.(spaceId);
+  }, [onOpenSpace, selectedSpaceId]);
+  const closeSpace = useCallback(() => {
+    if (selectedSpaceId === undefined) setInternalSpaceId(null);
+    onCloseSpace?.();
+  }, [onCloseSpace, selectedSpaceId]);
 
   // Mobile detection
   const [isMobile, setIsMobile] = useState(false);
@@ -157,6 +245,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   const stateRef = useRef(state);
   const inputValueRef = useRef(inputValue);
   const attachmentsRef = useRef(attachments);
+  const wasSpaceOpen = useRef(Boolean(effectiveSpaceId));
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -165,11 +254,20 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   useEffect(() => {
     inputValueRef.current = inputValue;
   }, [inputValue]);
+  // Save the local composer's draft before it is mounted again after a Space.
+  // Keep keystrokes local to ChatInput so typing does not rerender the chat tree.
+  useEffect(() => {
+    if (effectiveSpaceId && !wasSpaceOpen.current) {
+      setInputValue(inputValueRef.current);
+    }
+    wasSpaceOpen.current = Boolean(effectiveSpaceId);
+  }, [effectiveSpaceId]);
   useEffect(() => {
     attachmentsRef.current = attachments;
   }, [attachments]);
 
   const panelOpen = config.customComponent?.open ?? state.showSidebar;
+  const isSpaceViewOpen = Boolean(effectiveSpaceId);
 
   // Mobile custom overlay mount/unmount for smooth transitions
   const [isCustomMounted, setIsCustomMounted] = useState(false);
@@ -217,7 +315,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   // Animate mobile custom component overlay
   useEffect(() => {
     if (!isMobile || !config.customComponent?.component) return;
-    if (panelOpen) {
+    if (panelOpen && !isSpaceViewOpen) {
       setIsCustomMounted(true);
       requestAnimationFrame(() => setIsCustomVisible(true));
     } else {
@@ -225,7 +323,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
       const t = setTimeout(() => setIsCustomMounted(false), 200);
       return () => clearTimeout(t);
     }
-  }, [panelOpen, isMobile, config.customComponent?.component]);
+  }, [panelOpen, isSpaceViewOpen, isMobile, config.customComponent?.component]);
 
   // Track previous message count to detect initial load vs incremental updates
   const prevMessageCountRef = useRef(0);
@@ -492,16 +590,18 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   // Thread management
   const handleCreateThread = useCallback(
     (title?: string) => {
+      if (effectiveSpaceId) closeSpace();
       callbacks.onCreateThread?.(title, createStateCallback());
     },
-    [callbacks, createStateCallback]
+    [callbacks, closeSpace, createStateCallback, effectiveSpaceId]
   );
 
   const handleSelectThread = useCallback(
     (threadId: string) => {
+      if (effectiveSpaceId) closeSpace();
       callbacks.onSelectThread?.(threadId, createStateCallback());
     },
-    [callbacks, createStateCallback]
+    [callbacks, closeSpace, createStateCallback, effectiveSpaceId]
   );
 
   const handleRenameThread = useCallback(
@@ -803,6 +903,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                     )
                 : undefined
             }
+            onOpenSpace={openSpace}
             // User menu props
             user={sidebarUser}
             userMenuCallbacks={sidebarUserMenuCallbacks}
@@ -820,14 +921,16 @@ export const ChatUI: React.FC<ChatV2Props> = ({
               <ChatHeader
                 config={config}
                 currentThreadTitle={
+                  effectiveSpace?.name ||
                   threads.find((t) => t.id === state.selectedThreadId)?.title
                 }
                 // onSidebarToggle is now handled by SidebarTrigger inside ChatHeader
                 isMobile={isMobile}
-                onCustomComponentToggle={handleCustomComponentToggle}
-                onNewThread={handleCreateThread}
-                showCustomComponentButton={!!config?.customComponent?.component}
-                showAgentSelector={shouldShowAgentSelector}
+                onCustomComponentToggle={isSpaceViewOpen ? undefined : handleCustomComponentToggle}
+                onNewThread={isSpaceViewOpen ? undefined : handleCreateThread}
+                showCustomComponentButton={!isSpaceViewOpen && !!config?.customComponent?.component}
+                showThreadActions={!isSpaceViewOpen}
+                showAgentSelector={!isSpaceViewOpen && shouldShowAgentSelector}
                 isMultiAgentMode={isMultiAgentMode}
                 agentOptions={agentOptions}
                 selectedAgentId={selectedAgentId}
@@ -837,7 +940,28 @@ export const ChatUI: React.FC<ChatV2Props> = ({
               />
 
               <div className="flex flex-1 flex-row min-h-0 min-w-0 overflow-hidden">
-                {/* Main Chat Area */}
+                {effectiveSpace ? (
+                  <SpaceView
+                    space={effectiveSpace}
+                    sections={spaceSections}
+                    selectedSection={selectedSpaceSection}
+                    defaultSelectedSection={defaultSpaceSection}
+                    onSectionChange={onSpaceSectionChange}
+                    data={spaceViewData}
+                    canEditSpace={canEditSpace}
+                    onUpdateSpace={onUpdateSpace}
+                    canManageMembers={canManageSpaceMembers}
+                    onAddMember={onAddSpaceMember}
+                    onRemoveMember={onRemoveSpaceMember}
+                    onOpenConversation={(threadId) => {
+                      handleSelectThread(threadId);
+                    }}
+                    onClose={closeSpace}
+                  />
+                ) : effectiveSpaceId ? (
+                  <SpaceSelectionState status={spaceViewStatus} onClose={closeSpace} />
+                ) : (
+                <>
                 <div className="flex-1 flex flex-col min-h-0 min-w-0">
                   {/* Messages — contain: strict prevents reflow from propagating to/from the input */}
                   <ScrollArea
@@ -1001,6 +1125,8 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                     storageKey={config.customComponent.panelWidthStorageKey}>
                     {renderCustomComponent()}
                   </ResizablePanel>
+                )}
+                </>
                 )}
               </div>
             </div>
