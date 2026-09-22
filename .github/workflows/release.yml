@@ -48,6 +48,8 @@ jobs:
           node --test copilotz-chat-ui/tests/**/*.test.js
           node --test --experimental-strip-types copilotz-chat-ui/tests/**/*.test.ts
           npm -w copilotz-chat-adapter test
+          npm -w copilotz-chat-voice-vad test
+          npm -w copilotz-chat-voice-moonshine test
 
       - name: Publish unpublished package versions
         run: npm run publish:workspaces

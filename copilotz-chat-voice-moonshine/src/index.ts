@@ -3,6 +3,7 @@ import type {
   CreateVoiceProvider,
   VoiceProvider,
   VoiceProviderHandlers,
+  VoiceProviderOptions,
 } from '@copilotz/chat-ui';
 
 export interface MoonshineVoiceProviderConfig {
@@ -123,37 +124,54 @@ export const createMoonshineVoiceProvider = (
   config: MoonshineVoiceProviderConfig = {},
 ): CreateVoiceProvider => async (
   handlers: VoiceProviderHandlers,
+  options: VoiceProviderOptions = {},
 ): Promise<VoiceProvider> => {
   let moonshineModule: typeof import('@moonshine-ai/moonshine-js') | null = null;
   let transcriber: import('@moonshine-ai/moonshine-js').Transcriber | null = null;
   let mediaStream: MediaStream | null = null;
-  let mediaRecorder: MediaRecorder | null = null;
-  let recorderStopPromise: Promise<Blob | null> | null = null;
-  let recorderStopResolver: ((blob: Blob | null) => void) | null = null;
-  let recorderChunks: BlobPart[] = [];
+  type RecorderCapture = {
+    recorder: MediaRecorder;
+    stopPromise: Promise<Blob | null>;
+  };
+  let recorderCapture: RecorderCapture | null = null;
   let durationTimer: ReturnType<typeof setInterval> | null = null;
+  let maxDurationTimer: ReturnType<typeof setTimeout> | null = null;
   let segmentStartedAt = 0;
-  let isCancelling = false;
   let shouldStayArmed = true;
   let isFinalizingManualStop = false;
   let ignoreCommittedSegments = false;
   let isSpeechActive = false;
   let currentDurationMs = 0;
+  let lifecycleGeneration = 0;
+  let isStarting = false;
+  let segmentGeneration = 0;
+  let provider: VoiceProvider;
 
   const clearDurationTimer = () => {
     if (durationTimer) {
       clearInterval(durationTimer);
       durationTimer = null;
     }
+
+    if (maxDurationTimer) {
+      clearTimeout(maxDurationTimer);
+      maxDurationTimer = null;
+    }
   };
 
-  const releaseStream = () => {
-    if (!mediaStream) {
+  const stopOwnedStream = (stream: MediaStream) => {
+    stream.getTracks().forEach((track) => track.stop());
+  };
+
+  const releaseStream = (stream: MediaStream | null = mediaStream) => {
+    if (!stream) {
       return;
     }
 
-    mediaStream.getTracks().forEach((track) => track.stop());
-    mediaStream = null;
+    stopOwnedStream(stream);
+    if (mediaStream === stream) {
+      mediaStream = null;
+    }
   };
 
   const resetLiveState = () => {
@@ -163,51 +181,61 @@ export const createMoonshineVoiceProvider = (
     handlers.onAudioLevelChange?.(0);
   };
 
-  const stopRecorder = (): Promise<Blob | null> => {
-    if (!mediaRecorder || mediaRecorder.state === 'inactive') {
-      return recorderStopPromise ?? Promise.resolve(null);
+  const stopRecorder = (
+    capture: RecorderCapture | null = recorderCapture,
+  ): Promise<Blob | null> => {
+    if (!capture || capture.recorder.state === 'inactive') {
+      return capture?.stopPromise ?? Promise.resolve(null);
     }
 
-    mediaRecorder.stop();
-    return recorderStopPromise ?? Promise.resolve(null);
+    capture.recorder.stop();
+    return capture.stopPromise;
   };
 
-  const startRecorder = () => {
-    if (!mediaStream || typeof MediaRecorder === 'undefined') {
+  const startRecorder = (
+    generation: number,
+    stream: MediaStream | null = mediaStream,
+  ) => {
+    if (!stream || typeof MediaRecorder === 'undefined') {
       return;
     }
 
-    recorderChunks = [];
-    recorderStopPromise = new Promise<Blob | null>((resolve) => {
-      recorderStopResolver = resolve;
+    const chunks: BlobPart[] = [];
+    let resolveStop: ((blob: Blob | null) => void) | null = null;
+    const stopPromise = new Promise<Blob | null>((resolve) => {
+      resolveStop = resolve;
     });
 
-    mediaRecorder = new MediaRecorder(mediaStream);
+    const capture: RecorderCapture = { recorder: new MediaRecorder(stream), stopPromise };
+    const recorder = capture.recorder;
+    recorderCapture = capture;
 
-    mediaRecorder.ondataavailable = (event) => {
+    recorder.ondataavailable = (event) => {
       if (event.data.size > 0) {
-        recorderChunks.push(event.data);
+        chunks.push(event.data);
       }
     };
 
-    mediaRecorder.onerror = (event) => {
-      handlers.onError?.(normalizeError(event.error));
+    recorder.onerror = (event) => {
+      if (recorderCapture?.recorder === recorder && generation === lifecycleGeneration) {
+        handlers.onError?.(normalizeError(event.error));
+      }
     };
 
-    mediaRecorder.onstop = () => {
-      const blob = recorderChunks.length > 0
-        ? new Blob(recorderChunks, {
-          type: mediaRecorder?.mimeType || 'audio/webm',
+    recorder.onstop = () => {
+      const blob = chunks.length > 0
+        ? new Blob(chunks, {
+          type: recorder.mimeType || 'audio/webm',
         })
         : null;
 
-      recorderChunks = [];
-      recorderStopResolver?.(blob);
-      recorderStopResolver = null;
-      mediaRecorder = null;
+      resolveStop?.(blob);
+      if (recorderCapture === capture) {
+        recorderCapture = null;
+      }
     };
 
-    mediaRecorder.start();
+    recorder.start();
   };
 
   const ensureModule = async () => {
@@ -224,24 +252,49 @@ export const createMoonshineVoiceProvider = (
     resetLiveState();
   };
 
-  const stopSession = async () => {
-    clearDurationTimer();
-    handlers.onAudioLevelChange?.(0);
-    resetLiveState();
-    releaseStream();
-    transcriber?.stop();
-    await stopRecorder();
+  const isCurrentSession = (
+    generation: number,
+    instance: import('@moonshine-ai/moonshine-js').Transcriber,
+  ): boolean => (
+    generation === lifecycleGeneration &&
+    transcriber === instance
+  );
+
+  const stopSession = async (
+    instance: import('@moonshine-ai/moonshine-js').Transcriber | null = transcriber,
+    stream: MediaStream | null = mediaStream,
+    capture: RecorderCapture | null = recorderCapture,
+  ) => {
+    const ownsLiveState = stream === mediaStream && capture === recorderCapture;
+    if (ownsLiveState) {
+      clearDurationTimer();
+      handlers.onAudioLevelChange?.(0);
+      resetLiveState();
+    }
+    instance?.stop();
+    releaseStream(stream);
+    await stopRecorder(capture);
   };
 
-  const emitSegment = async (attachment: AudioAttachment, transcriptText?: string) => {
-    if (isCancelling) {
+  const emitSegment = async (
+    generation: number,
+    instance: import('@moonshine-ai/moonshine-js').Transcriber,
+    attachment: AudioAttachment,
+    captureGeneration: number,
+    transcriptText?: string,
+  ) => {
+    if (!isCurrentSession(generation, instance)) {
       return;
     }
 
-    const shouldResumeListening = shouldStayArmed && !isSpeechActive;
-    cleanupSegmentCapture();
-    handlers.onDurationChange?.(attachment.durationMs ?? currentDurationMs);
-    handlers.onTranscriptChange?.(transcriptText ? { final: transcriptText } : {});
+    const segmentDurationMs = attachment.durationMs ?? currentDurationMs;
+    const isCurrentCapture = captureGeneration === segmentGeneration;
+    const shouldResumeListening = isCurrentCapture && shouldStayArmed && !isSpeechActive;
+    if (isCurrentCapture) {
+      cleanupSegmentCapture();
+      handlers.onDurationChange?.(segmentDurationMs);
+      handlers.onTranscriptChange?.(transcriptText ? { final: transcriptText } : {});
+    }
     handlers.onSegmentReady?.({
       attachment,
       transcript: transcriptText ? { final: transcriptText } : undefined,
@@ -257,167 +310,289 @@ export const createMoonshineVoiceProvider = (
     }
   };
 
-  const callbacks: import('@moonshine-ai/moonshine-js').TranscriberCallbacks = {
-    onModelLoadStarted() {
-      handlers.onStateChange?.('preparing');
-    },
-    onModelLoaded() {
-      if (!isCancelling && !isFinalizingManualStop) {
-        handlers.onStateChange?.('waiting_for_speech');
-      }
-    },
-    onTranscribeStarted() {
-      if (!isCancelling && !isFinalizingManualStop) {
-        handlers.onStateChange?.('waiting_for_speech');
-      }
-    },
-    onTranscribeStopped() {
-      handlers.onAudioLevelChange?.(0);
-      if (!isCancelling && !isFinalizingManualStop) {
-        handlers.onStateChange?.('idle');
-      }
-    },
-    onFrame(_probs, frame) {
-      if (isSpeechActive) {
-        handlers.onAudioLevelChange?.(computeLevelFromFrame(frame));
-      }
-    },
-    onSpeechStart() {
-      if (isCancelling || isFinalizingManualStop) {
-        return;
-      }
+  const createTranscriber = (
+    moonshine: typeof import('@moonshine-ai/moonshine-js'),
+    generation: number,
+  ): import('@moonshine-ai/moonshine-js').Transcriber => {
+    let instance: import('@moonshine-ai/moonshine-js').Transcriber | null = null;
+    const callbacks: import('@moonshine-ai/moonshine-js').TranscriberCallbacks = {
+      onModelLoadStarted() {
+        if (instance && isCurrentSession(generation, instance)) {
+          handlers.onStateChange?.('preparing');
+        }
+      },
+      onModelLoaded() {
+        if (instance && isCurrentSession(generation, instance) && !isFinalizingManualStop) {
+          handlers.onStateChange?.('waiting_for_speech');
+        }
+      },
+      onTranscribeStarted() {
+        if (instance && isCurrentSession(generation, instance) && !isFinalizingManualStop) {
+          handlers.onStateChange?.('waiting_for_speech');
+        }
+      },
+      onTranscribeStopped() {
+        if (instance && isCurrentSession(generation, instance)) {
+          handlers.onAudioLevelChange?.(0);
+          if (!isFinalizingManualStop) {
+            handlers.onStateChange?.('idle');
+          }
+        }
+      },
+      onFrame(_probs, frame) {
+        if (instance && isCurrentSession(generation, instance) && isSpeechActive) {
+          handlers.onAudioLevelChange?.(computeLevelFromFrame(frame));
+        }
+      },
+      onSpeechStart() {
+        if (!instance || !isCurrentSession(generation, instance) || isFinalizingManualStop) {
+          return;
+        }
 
-      ignoreCommittedSegments = false;
-      isSpeechActive = true;
-      currentDurationMs = 0;
-      segmentStartedAt = Date.now();
-      handlers.onTranscriptChange?.({});
-      handlers.onDurationChange?.(0);
-      handlers.onStateChange?.('listening');
-      startRecorder();
-      clearDurationTimer();
-      durationTimer = setInterval(() => {
-        currentDurationMs = Math.max(0, Date.now() - segmentStartedAt);
-        handlers.onDurationChange?.(currentDurationMs);
-      }, 200);
-    },
-    onSpeechEnd() {
-      if (isCancelling || isFinalizingManualStop) {
-        return;
-      }
+        ignoreCommittedSegments = false;
+        segmentGeneration += 1;
+        isSpeechActive = true;
+        currentDurationMs = 0;
+        segmentStartedAt = Date.now();
+        handlers.onTranscriptChange?.({});
+        handlers.onDurationChange?.(0);
+        handlers.onStateChange?.('listening');
+        startRecorder(generation);
+        clearDurationTimer();
+        durationTimer = setInterval(() => {
+          if (!instance || !isCurrentSession(generation, instance)) {
+            return;
+          }
+          currentDurationMs = Math.max(0, Date.now() - segmentStartedAt);
+          handlers.onDurationChange?.(currentDurationMs);
+        }, 200);
+        if (options.maxRecordingMs && options.maxRecordingMs > 0) {
+          maxDurationTimer = setTimeout(() => {
+            if (generation === lifecycleGeneration) {
+              void provider.stop();
+            }
+          }, options.maxRecordingMs);
+        }
+      },
+      onSpeechEnd() {
+        if (!instance || !isCurrentSession(generation, instance) || isFinalizingManualStop) {
+          return;
+        }
 
-      isSpeechActive = false;
-      clearDurationTimer();
-      handlers.onStateChange?.('finishing');
-      void stopRecorder();
-    },
-    onTranscriptionCommitted(text, buffer) {
-      if (isCancelling || ignoreCommittedSegments || isSpeechActive) {
-        return;
-      }
+        const capture = recorderCapture;
+        isSpeechActive = false;
+        clearDurationTimer();
+        handlers.onStateChange?.('finishing');
+        void stopRecorder(capture);
+      },
+      onTranscriptionCommitted(text, buffer) {
+        if (
+          !instance ||
+          !isCurrentSession(generation, instance) ||
+          ignoreCommittedSegments ||
+          isSpeechActive
+        ) {
+          return;
+        }
 
-      void (async () => {
-        try {
-          const attachment = buffer
-            ? await audioBufferToAttachment(buffer)
-            : (() => {
-              throw new Error('Moonshine did not return audio for the committed segment');
-            })();
+        const captureGeneration = segmentGeneration;
+        void (async () => {
+          try {
+            const attachment = buffer
+              ? await audioBufferToAttachment(buffer)
+              : (() => {
+                throw new Error('Moonshine did not return audio for the committed segment');
+              })();
 
-          await emitSegment(attachment, text);
-        } catch (error) {
+            if (instance && isCurrentSession(generation, instance)) {
+              await emitSegment(
+                generation,
+                instance,
+                attachment,
+                captureGeneration,
+                text,
+              );
+            }
+          } catch (error) {
+            if (instance && isCurrentSession(generation, instance)) {
+              handlers.onError?.(normalizeError(error));
+            }
+          }
+        })();
+      },
+      onError(error) {
+        if (instance && isCurrentSession(generation, instance)) {
           handlers.onError?.(normalizeError(error));
         }
-      })();
-    },
-    onError(error) {
-      handlers.onError?.(normalizeError(error));
-    },
+      },
+    };
+
+    instance = new moonshine.Transcriber(
+      config.modelUrl ?? DEFAULT_MODEL_URL,
+      callbacks,
+      true,
+      config.precision ?? 'quantized',
+    );
+    return instance;
   };
 
-  return {
+  provider = {
     start: async () => {
+      if (isStarting || transcriber?.isActive || mediaStream) {
+        return;
+      }
+
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error('Audio capture is not supported in this browser');
       }
 
-      isCancelling = false;
       shouldStayArmed = true;
       isFinalizingManualStop = false;
       ignoreCommittedSegments = false;
+      const generation = ++lifecycleGeneration;
+      isStarting = true;
       resetLiveState();
       handlers.onTranscriptChange?.({});
       handlers.onDurationChange?.(0);
       handlers.onStateChange?.('preparing');
 
-      const moonshine = await ensureModule();
+      let stream: MediaStream | null = null;
+      try {
+        const moonshine = await ensureModule();
+        if (generation !== lifecycleGeneration) {
+          return;
+        }
 
-      if (!transcriber) {
-        transcriber = new moonshine.Transcriber(
-          config.modelUrl ?? DEFAULT_MODEL_URL,
-          callbacks,
-          true,
-          config.precision ?? 'quantized',
-        );
+        const instance = createTranscriber(moonshine, generation);
+        transcriber = instance;
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            autoGainControl: true,
+            noiseSuppression: true,
+            sampleRate: 16000,
+            ...config.audioConstraints,
+          },
+        });
+
+        if (generation !== lifecycleGeneration) {
+          releaseStream(stream);
+          return;
+        }
+
+        mediaStream = stream;
+        instance.attachStream(stream);
+        await instance.start();
+
+        if (!isCurrentSession(generation, instance)) {
+          await stopSession(instance, stream, null);
+        }
+      } catch (error) {
+        if (generation !== lifecycleGeneration) {
+          return;
+        }
+
+        const instance = transcriber;
+        transcriber = null;
+        await stopSession(instance, stream, recorderCapture);
+        throw normalizeError(error);
+      } finally {
+        if (generation === lifecycleGeneration) {
+          isStarting = false;
+        }
       }
-
-      mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          autoGainControl: true,
-          noiseSuppression: true,
-          sampleRate: 16000,
-          ...config.audioConstraints,
-        },
-      });
-
-      transcriber.attachStream(mediaStream);
-      await transcriber.start();
     },
     stop: async () => {
-      if (isCancelling) {
+      if (isStarting) {
+        const startedStream = mediaStream;
+        const startedCapture = recorderCapture;
+        const generation = ++lifecycleGeneration;
+        isStarting = false;
+        shouldStayArmed = false;
+        const instance = transcriber;
+        transcriber = null;
+        await stopSession(instance, startedStream, startedCapture);
+        if (generation !== lifecycleGeneration) {
+          return;
+        }
+        handlers.onStateChange?.('idle');
         return;
       }
 
       shouldStayArmed = false;
+      const generation = lifecycleGeneration;
+      const instance = transcriber;
+      if (!instance) {
+        resetLiveState();
+        handlers.onStateChange?.('idle');
+        return;
+      }
       const wasSpeechActive = isSpeechActive;
+      const segmentDurationMs = currentDurationMs;
+      const segmentCapture = recorderCapture;
+      const segmentStream = mediaStream;
+      const captureGeneration = segmentGeneration;
       ignoreCommittedSegments = wasSpeechActive;
       isFinalizingManualStop = wasSpeechActive;
       handlers.onStateChange?.('finishing');
       clearDurationTimer();
       handlers.onAudioLevelChange?.(0);
       isSpeechActive = false;
-      transcriber?.stop();
-      releaseStream();
+      instance?.stop();
+      releaseStream(segmentStream);
 
-      const blob = await stopRecorder();
-      isFinalizingManualStop = false;
+      const blob = await stopRecorder(segmentCapture);
+      if (generation === lifecycleGeneration) {
+        isFinalizingManualStop = false;
+      }
 
-      if (isCancelling || !wasSpeechActive || !blob) {
+      if (!instance || !isCurrentSession(generation, instance) || !wasSpeechActive || !blob) {
         return;
       }
 
-      await emitSegment(await blobToAttachment(blob, currentDurationMs || undefined));
+      await emitSegment(
+        generation,
+        instance,
+        await blobToAttachment(blob, segmentDurationMs || undefined),
+        captureGeneration,
+      );
     },
     cancel: async () => {
-      isCancelling = true;
       shouldStayArmed = false;
       ignoreCommittedSegments = true;
-      await stopSession();
+      const generation = ++lifecycleGeneration;
+      isStarting = false;
+      const instance = transcriber;
+      const stream = mediaStream;
+      const capture = recorderCapture;
+      transcriber = null;
+      await stopSession(instance, stream, capture);
+      if (generation !== lifecycleGeneration) {
+        return;
+      }
       handlers.onStateChange?.('idle');
       resetLiveState();
-      isCancelling = false;
     },
     destroy: async () => {
-      isCancelling = true;
       shouldStayArmed = false;
       ignoreCommittedSegments = true;
-      await stopSession();
+      const generation = ++lifecycleGeneration;
+      isStarting = false;
+      const instance = transcriber;
+      const stream = mediaStream;
+      const capture = recorderCapture;
+      transcriber = null;
+      await stopSession(instance, stream, capture);
+      if (generation !== lifecycleGeneration) {
+        return;
+      }
       handlers.onStateChange?.('idle');
       resetLiveState();
     },
   };
+
+  return provider;
 };
 
 export type { CreateVoiceProvider };

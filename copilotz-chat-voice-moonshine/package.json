@@ -20,7 +20,8 @@
     "build": "tsup",
     "build:watch": "tsup --watch",
     "dev": "npm run build:watch",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "test": "node --experimental-test-module-mocks --experimental-strip-types --test test/*.test.mjs"
   },
   "dependencies": {
     "@copilotz/chat-ui": "0.78.0",
