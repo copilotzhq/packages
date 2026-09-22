@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   publishWorkspaces,
   registryPackage,
+  registryTarball,
   waitForRegistry,
 } from "./publish-workspaces.mjs";
 
@@ -103,6 +104,26 @@ test("registry check distinguishes package absence from registry errors", async 
   );
 });
 
+test("registry tarball check requires a successful HEAD response", async () => {
+  const requests = [];
+  assert.equal(
+    await registryTarball("https://registry.npmjs.org/artifact.tgz", async (url, options) => {
+      requests.push({ url, options });
+      return new Response(null, { status: 200 });
+    }),
+    true,
+  );
+  assert.equal(
+    await registryTarball("https://registry.npmjs.org/missing.tgz", async () =>
+      new Response(null, { status: 404 }),
+    ),
+    false,
+  );
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].options.method, "HEAD");
+  assert.equal(requests[0].options.headers["cache-control"], "no-cache");
+});
+
 test("readiness waits through stale metadata and only revisits unresolved packages", async () => {
   let elapsed = 0;
   const lookups = [];
@@ -112,11 +133,44 @@ test("readiness waits through stale metadata and only revisits unresolved packag
       if (!name.endsWith("adapter") || elapsed >= 20_000) return available;
       return elapsed === 0 ? null : { versions: { "0.66.0": {} } };
     },
+    checkTarball: async () => true,
     now: () => elapsed,
     sleep: async (ms) => {
       elapsed += ms;
     },
   });
+  assert.equal(elapsed, 20_000);
+  assert.deepEqual(lookups, [
+    ...packages.map((pkg) => pkg.name),
+    "@copilotz/adapter",
+    "@copilotz/adapter",
+  ]);
+});
+
+test("readiness waits for tarballs after metadata becomes visible", async () => {
+  let elapsed = 0;
+  const lookups = [];
+  const metadata = (name) => ({
+    versions: {
+      "0.66.0": {
+        dist: { tarball: `https://registry.npmjs.org/${name}.tgz` },
+      },
+    },
+  });
+
+  await waitForRegistry(packages, {
+    lookup: async (name) => {
+      lookups.push(name);
+      return metadata(name);
+    },
+    checkTarball: async (tarball) =>
+      !tarball.includes("adapter") || elapsed >= 20_000,
+    now: () => elapsed,
+    sleep: async (ms) => {
+      elapsed += ms;
+    },
+  });
+
   assert.equal(elapsed, 20_000);
   assert.deepEqual(lookups, [
     ...packages.map((pkg) => pkg.name),

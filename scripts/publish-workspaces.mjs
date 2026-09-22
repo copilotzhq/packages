@@ -109,8 +109,24 @@ export async function registryPackage(name, request = fetch) {
   return response.json();
 }
 
+export async function registryTarball(tarball, request = fetch) {
+  try {
+    const response = await request(tarball, {
+      method: "HEAD",
+      headers: {
+        "cache-control": "no-cache",
+      },
+      signal: AbortSignal.timeout(15_000),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function waitForRegistry(packages, {
   lookup = registryPackage,
+  checkTarball = registryTarball,
   sleep = setTimeout,
   now = Date.now,
   timeoutMs = 900_000,
@@ -121,7 +137,8 @@ export async function waitForRegistry(packages, {
     const missing = [];
     for (const pkg of pending) {
       const metadata = await lookup(pkg.name);
-      if (!metadata?.versions?.[pkg.version]?.dist?.tarball) missing.push(pkg);
+      const tarball = metadata?.versions?.[pkg.version]?.dist?.tarball;
+      if (!tarball || !(await checkTarball(tarball))) missing.push(pkg);
     }
     pending = missing;
     if (!pending.length) return;
