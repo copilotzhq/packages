@@ -253,6 +253,28 @@ test('stale Moonshine instance startup cannot stop the restarted session', async
   assert.equal(oldCapture.track.stop.mock.calls.length > 0, true);
 });
 
+test('Moonshine startup failure reports the model error and releases the microphone', async () => {
+  installBrowser();
+  let rejectStart;
+  pendingTranscriberStarts.push(new Promise((_, reject) => { rejectStart = reject; }));
+  const result = createHandlers();
+  const provider = await createMoonshineVoiceProvider()(result.handlers);
+  const startPromise = provider.start();
+  await waitFor(() => transcribers.length === 1 && streams.length === 1);
+  const instance = transcribers[0];
+  const capture = streams[0];
+  const modelError = new Error('Moonshine model failed to start');
+
+  instance.callbacks.onError(modelError);
+  rejectStart(modelError);
+
+  await assert.rejects(startPromise, /Moonshine model failed to start/);
+  assert.equal(capture.track.stop.mock.calls.length, 1);
+  assert.equal(instance.isActive, false);
+  assert.deepEqual(result.errors, [modelError]);
+  assert.equal(result.segments.length, 0);
+});
+
 for (const method of ['cancel', 'destroy']) {
   test(`${method} suppresses a deferred Moonshine audio and transcript result`, async () => {
     installBrowser();

@@ -65,6 +65,10 @@ class FakeMicVAD {
     this.speechActive = false;
     this.options.onSpeechEnd(audio);
   }
+
+  emitVADMisfire() {
+    this.options.onVADMisfire();
+  }
 }
 
 mock.module('@ricky0123/vad-web', {
@@ -210,6 +214,43 @@ test('destroyed deferred VAD encoding never delivers a segment', async () => {
   await provider.destroy();
   await flush();
 
+  assert.equal(result.segments.length, 0);
+  assert.equal(result.errors.length, 0);
+});
+
+test('empty VAD callbacks and misfires do not emit a segment', async () => {
+  installBrowser();
+  const result = createHandlers();
+  const provider = await createVadVoiceProvider()(result.handlers);
+  await provider.start();
+  const instance = vadInstances[0];
+
+  instance.emitSpeechEnd(new Float32Array());
+  instance.emitVADMisfire();
+  await flush();
+
+  assert.equal(result.segments.length, 0);
+  assert.equal(result.errors.length, 0);
+  assert.equal(result.states.at(-1), 'waiting_for_speech');
+  await provider.cancel();
+});
+
+test('VAD model startup failure releases the acquired microphone', async () => {
+  installBrowser();
+  let rejectCreate;
+  pendingVadCreates.push({
+    promise: new Promise((_, reject) => { rejectCreate = reject; }),
+  });
+  const result = createHandlers();
+  const provider = await createVadVoiceProvider()(result.handlers);
+  const startPromise = provider.start();
+  await waitFor(() => vadInstances.length === 1 && streams.length === 1);
+  const capture = streams[0];
+
+  rejectCreate(new Error('VAD model failed to load'));
+
+  await assert.rejects(startPromise, /VAD model failed to load/);
+  assert.equal(capture.track.stop.mock.calls.length, 1);
   assert.equal(result.segments.length, 0);
   assert.equal(result.errors.length, 0);
 });
