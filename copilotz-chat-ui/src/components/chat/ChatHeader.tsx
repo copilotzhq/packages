@@ -21,6 +21,7 @@ import {
   Moon,
   Sun,
   ChevronDown,
+  ChevronLeft,
   Check,
 } from 'lucide-react';
 import { ReactNode } from 'react';
@@ -55,6 +56,7 @@ export interface ChatHeaderConfig {
     toggleDarkMode?: string;
     lightMode?: string;
     darkMode?: string;
+    backToConversation?: string;
   };
   customComponent?: {
     label?: string;
@@ -73,6 +75,8 @@ export interface ChatHeaderProps {
   onSidebarToggle?: () => void;
   onCustomComponentToggle?: () => void;
   onNewThread?: () => void;
+  /** Return from a Space or other direct-link view to the conversation. */
+  onCloseSpace?: () => void;
   onExportData?: () => void;
   onImportData?: (file: File) => void;
   onClearAll?: () => void;
@@ -96,6 +100,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   onSidebarToggle: _onSidebarToggle,
   onCustomComponentToggle,
   onNewThread,
+  onCloseSpace,
   onExportData,
   onImportData,
   onClearAll,
@@ -183,6 +188,22 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         <div className="flex items-center justify-between gap-2">
           {/* Left side - Sidebar toggle + Agent Selector */}
           <div className="flex items-center gap-1">
+            {onCloseSpace && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={onCloseSpace}
+                    aria-label={config.labels?.backToConversation || "Back to conversation"}
+                  >
+                    <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>{config.labels?.backToConversation || "Back to conversation"}</TooltipContent>
+              </Tooltip>
+            )}
             <Tooltip>
               <TooltipTrigger asChild>
                 <SidebarTrigger className="-ml-1" />
@@ -271,6 +292,11 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             )}
 
             {/* Mobile title when no agent selector */}
+            {onCloseSpace && !isMobile && (
+              <span className="ml-1 max-w-[220px] truncate text-sm font-medium">
+                {currentThreadTitle || "Space"}
+              </span>
+            )}
             {!showAgentSelector && isMobile && (
               <span className="text-sm font-medium truncate max-w-[150px] ml-2">
                 {currentThreadTitle || config.branding?.title || 'Chat'}

@@ -172,6 +172,65 @@ test('Space main view suppresses conversation-only header controls', () => {
   assert.doesNotMatch(html, /New Thread/);
 });
 
+test('Chat navigation exposes mode selector and mode-aware search affordances', () => {
+  globalThis.window = { innerWidth: 1024 };
+  globalThis.document = {
+    cookie: '',
+    documentElement: { classList: { contains: () => false } },
+  };
+  const html = renderToStaticMarkup(
+    React.createElement(
+      ChatUserContextProvider,
+      { initial: {} },
+      React.createElement(ChatUI, {
+        spaces: [{ id: 'research', name: 'Research' }],
+        callbacks: {
+          onCreateThread: () => {},
+          onCreateSpace: async () => ({ id: 'new', name: 'New' }),
+        },
+      }),
+    ),
+  );
+
+  assert.match(html, /aria-label="Navigation"/);
+  assert.match(html, />Chats</);
+  assert.match(html, />Spaces</);
+  assert.match(html, /placeholder="Search conversations\.\.\."/);
+  assert.match(html, /New Conversation/);
+  assert.doesNotMatch(html, /Create Space<\/button>/);
+});
+
+test('Space view keeps its title in the global header and uses a compact conversation list', () => {
+  globalThis.window = { innerWidth: 1024 };
+  globalThis.document = {
+    cookie: '',
+    documentElement: { classList: { contains: () => false } },
+  };
+  const standalone = renderToStaticMarkup(
+    React.createElement(SpaceView, {
+      space: { id: 'research', name: 'Research' },
+      data: {
+        conversations: {
+          status: 'ready',
+          items: [{ id: 'thread-a', title: 'Plan', createdAt: 0, updatedAt: 0, messageCount: 0 }],
+        },
+      },
+      selectedSection: 'conversations',
+    }),
+  );
+  assert.doesNotMatch(standalone, /<header/);
+  assert.match(standalone, /max-w-2xl/);
+  assert.match(standalone, />1 conversation</);
+
+  const chatView = renderToStaticMarkup(
+    React.createElement(ChatUI, {
+      selectedSpaceId: 'research',
+      spaces: [{ id: 'research', name: 'Research' }],
+    }),
+  );
+  assert.match(chatView, /aria-label="Back to conversation"/);
+});
+
 test('unknown controlled Space selection stays explicit instead of falling back to chat', () => {
   const html = renderToStaticMarkup(
     React.createElement(ChatUI, {

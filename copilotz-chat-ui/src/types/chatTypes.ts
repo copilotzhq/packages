@@ -391,8 +391,11 @@ export interface ChatConfig {
     toggleDarkMode?: string;
     lightMode?: string;
     darkMode?: string;
+    backToConversation?: string;
     // Sidebar labels
+    chats?: string;
     newChat?: string;
+    newSpace?: string;
     search?: string;
     customComponentLabel?: string;
     showArchived?: string;

@@ -875,6 +875,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
             threads={threads}
             spaces={spaces}
             currentThreadId={state.selectedThreadId}
+            currentSpaceId={effectiveSpaceId}
             config={config}
             onCreateThread={handleCreateThread}
             onSelectThread={handleSelectThread}
@@ -926,6 +927,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                 }
                 // onSidebarToggle is now handled by SidebarTrigger inside ChatHeader
                 isMobile={isMobile}
+                onCloseSpace={isSpaceViewOpen ? closeSpace : undefined}
                 onCustomComponentToggle={isSpaceViewOpen ? undefined : handleCustomComponentToggle}
                 onNewThread={isSpaceViewOpen ? undefined : handleCreateThread}
                 showCustomComponentButton={!isSpaceViewOpen && !!config?.customComponent?.component}

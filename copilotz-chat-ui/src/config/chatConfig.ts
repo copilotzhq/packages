@@ -69,8 +69,11 @@ export const defaultChatConfig: Required<ChatConfig> = {
     toggleDarkMode: "Toggle Dark Mode",
     lightMode: "Light Mode",
     darkMode: "Dark Mode",
+    backToConversation: "Back to conversation",
     // Sidebar labels
+    chats: "Chats",
     newChat: "New Conversation",
+    newSpace: "New Space",
     search: "Search conversations...",
     customComponentLabel: "Custom",
     showArchived: "Show Archived",
