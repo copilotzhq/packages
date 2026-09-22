@@ -1,6 +1,6 @@
 {
   "name": "@copilotz/chat-voice-moonshine",
-  "version": "0.78.0",
+  "version": "0.80.0",
   "description": "Optional Moonshine voice provider for Copilotz chat voice compose",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -24,7 +24,7 @@
     "test": "node --experimental-test-module-mocks --experimental-strip-types --test test/*.test.mjs"
   },
   "dependencies": {
-    "@copilotz/chat-ui": "0.78.0",
+    "@copilotz/chat-ui": "0.80.0",
     "@moonshine-ai/moonshine-js": "^0.1.29"
   },
   "devDependencies": {
