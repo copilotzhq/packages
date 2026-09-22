@@ -1,5 +1,11 @@
 export { CopilotzChat } from './CopilotzChat';
 export { useCopilotzChat } from './useCopilotzChat';
+export { useSpaceView } from './useSpaceView';
+export type {
+  SpaceViewService,
+  SpaceViewState,
+  UseSpaceViewOptions
+} from './useSpaceView';
 export { createChatController } from './controller';
 export type {
   RequestHeadersProvider,
@@ -30,6 +36,13 @@ export type {
   ChatSender,
   ChatThread,
   ChatSpace,
+  ChatSpaceMember,
+  ChatSpaceSection,
+  ChatSpaceSectionId,
+  ChatSpaceViewData,
+  ChatSpaceViewStatus,
+  SpaceCollection,
+  SpaceCollectionStatus,
   MediaAttachment,
   MemoryItem,
   VoiceComposerState,
@@ -48,4 +61,10 @@ export type {
   ToolRendererProps,
   ToolRendererStatus
 } from '@copilotz/chat-ui';
-export type { ChatSpaceService, SpaceReadOptions, SpaceWriteOptions } from './controller';
+export type {
+  ChatSpaceService,
+  SpaceCollectionPage,
+  SpaceReadOptions,
+  SpaceUpdate,
+  SpaceWriteOptions
+} from './controller';

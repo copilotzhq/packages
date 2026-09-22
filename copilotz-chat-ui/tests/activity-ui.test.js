@@ -7,6 +7,7 @@ import {
   AskToolRenderer,
   ChatUI,
   ChatUserContextProvider,
+  SpaceView,
   defaultChatConfig,
   formatToolDetailValue,
   mergeConfig,
@@ -96,6 +97,111 @@ test('mergeConfig allows consumers to disable Spaces navigation', () => {
 
   assert.equal(config.features.spaces.enabled, false);
   assert.equal(config.features.spaces.groupingEnabled, true);
+});
+
+test('native SpaceView shows only supplied default data sources', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(SpaceView, {
+      space: { id: 'research', name: 'Research', description: 'Shared **work**' },
+      data: {
+        conversations: {
+          status: 'ready',
+          items: [{ id: 'thread-a', title: 'Plan', createdAt: 0, updatedAt: 0, messageCount: 0 }],
+        },
+      },
+      selectedSection: 'conversations',
+    }),
+  );
+  assert.match(html, /Overview/);
+  assert.match(html, /Conversations/);
+  assert.match(html, /Plan/);
+  assert.doesNotMatch(html, />Members</);
+  assert.doesNotMatch(html, /Edit Space/);
+  const overviewHtml = renderToStaticMarkup(
+    React.createElement(SpaceView, {
+      space: { id: 'research', name: 'Research', description: 'Shared **work**' },
+    }),
+  );
+  assert.match(overviewHtml, /<strong>work<\/strong>/);
+});
+
+test('native SpaceView keeps data-only Spaces read-only and omits empty tabs', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(SpaceView, {
+      space: { id: 'research', name: 'Research', description: 'Read only' },
+      canEditSpace: true,
+    }),
+  );
+  assert.match(html, /Overview/);
+  assert.doesNotMatch(html, />Conversations</);
+  assert.doesNotMatch(html, />Members</);
+  assert.doesNotMatch(html, /Edit Space/);
+});
+
+test('Space main view suppresses conversation-only header controls', () => {
+  globalThis.window = { innerWidth: 1024 };
+  globalThis.document = {
+    cookie: '',
+    documentElement: { classList: { contains: () => false } },
+  };
+  const html = renderToStaticMarkup(
+    React.createElement(ChatUI, {
+      selectedSpaceId: 'research',
+      spaces: [{ id: 'research', name: 'Research' }],
+      agentOptions: [{ id: 'north', name: 'North' }],
+      onSelectAgent: () => {},
+      callbacks: { onCreateThread: () => {} },
+      config: {
+        agentSelector: { enabled: true },
+        customComponent: {
+          component: React.createElement('div', null, 'Custom panel'),
+          label: 'Open custom panel',
+        },
+        headerActions: React.createElement('span', null, 'Thread action'),
+        headerMenuItems: [{ id: 'thread-action', label: 'Thread menu action', onSelect: () => {} }],
+      },
+    }),
+  );
+
+  assert.match(html, /Research/);
+  assert.match(html, /Overview/);
+  assert.doesNotMatch(html, /North/);
+  assert.doesNotMatch(html, /Open custom panel/);
+  assert.doesNotMatch(html, /Thread action/);
+  assert.doesNotMatch(html, /Thread menu action/);
+  assert.doesNotMatch(html, /New Thread/);
+});
+
+test('unknown controlled Space selection stays explicit instead of falling back to chat', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(ChatUI, {
+      selectedSpaceId: 'missing',
+      spaces: [{ id: 'missing', name: 'Cached Space' }],
+      spaceViewSpace: null,
+      spaceViewStatus: { isLoading: false },
+    }),
+  );
+
+  assert.match(html, /This Space is unavailable\./);
+  assert.match(html, /Back to conversation/);
+  assert.doesNotMatch(html, /Cached Space/);
+  assert.doesNotMatch(html, /Loading Space…/);
+});
+
+test('managed empty member lists keep the add control available', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(SpaceView, {
+      space: { id: 'research', name: 'Research' },
+      data: { members: { status: 'empty', items: [] } },
+      selectedSection: 'members',
+      canManageMembers: true,
+      onAddMember: async () => {},
+    }),
+  );
+
+  assert.match(html, /Member id/);
+  assert.match(html, />Add</);
+  assert.match(html, /No members yet/);
 });
 
 test('AssistantActivity renders generic timeline labels', () => {
