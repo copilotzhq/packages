@@ -36,7 +36,7 @@ jobs:
         run: npm run check:versions
 
       - name: Test release orchestration
-        run: node --test scripts/publish-workspaces.test.mjs
+        run: node --test scripts/publish-workspaces.test.mjs scripts/sync-versions.test.mjs
 
       - name: Build packages
         run: npm run build
