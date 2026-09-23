@@ -958,6 +958,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                     onOpenConversation={(threadId) => {
                       handleSelectThread(threadId);
                     }}
+                    onRefresh={spaceViewStatus?.onRetry}
                     onClose={closeSpace}
                   />
                 ) : effectiveSpaceId ? (

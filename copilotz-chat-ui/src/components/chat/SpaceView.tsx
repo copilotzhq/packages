@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  ChevronRight,
   FileText,
-  Loader2,
   MessageSquare,
   Pencil,
   Users,
@@ -19,8 +19,10 @@ import type {
   ChatThread,
 } from "../../types/chatTypes";
 import { Button } from "../ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
+import { SpaceResourceList, SpaceResourceRow, SpaceResourceToolbar } from "./SpaceResources";
 
 export type SpaceUpdate = { name?: string; description?: string };
 
@@ -36,8 +38,9 @@ export interface SpaceViewProps {
     patch: SpaceUpdate,
   ) => ChatSpace | void | Promise<ChatSpace | void>;
   onOpenConversation?: (threadId: string) => void;
+  onRefresh?: () => void | Promise<void>;
   canManageMembers?: boolean;
-  onAddMember?: (memberId: string) => void | Promise<void>;
+  onAddMember?: (email: string) => void | Promise<void>;
   onRemoveMember?: (memberId: string) => void | Promise<void>;
   onClose?: () => void;
   className?: string;
@@ -52,7 +55,7 @@ const builtInSections = (
   if (data?.conversations) {
     sections.push({
       id: "conversations",
-      label: "Conversations",
+      label: "Chats",
       icon: <MessageSquare className="h-4 w-4" />,
     });
   }
@@ -77,46 +80,35 @@ function CollectionState<T>({
 }) {
   if (!collection) return null;
   if (collection.status === "loading") {
-    return (
-      <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground" role="status">
-        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-        Loading {noun}…
-      </div>
-    );
+    return <SpaceResourceList loading loadingLabel={`Loading ${noun.toLowerCase()}…`} />;
   }
   if (collection.status === "unavailable") {
-    return <p className="p-6 text-sm text-muted-foreground">{noun} are not available for this Space.</p>;
+    return <SpaceResourceList empty emptyMessage={`${noun} are not available for this Space.`} />;
   }
   if (collection.status === "error") {
-    return (
-      <p className="p-6 text-sm text-destructive" role="alert">
-        {collection.error || `Unable to load ${noun.toLowerCase()}.`}
-      </p>
-    );
+    return <SpaceResourceList error={collection.error || `Unable to load ${noun.toLowerCase()}.`} />;
   }
   const items = collection.items ?? [];
-  if (collection.status === "empty" || items.length === 0) {
-    return <p className="p-6 text-sm text-muted-foreground">No {noun.toLowerCase()} yet.</p>;
-  }
   return (
-    <>
+    <div className="space-y-3">
       {collection.status === "partial" && (
-        <p className="mb-3 text-xs text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           Showing the available {noun.toLowerCase()}; this list is not exhaustive.
         </p>
       )}
-      {children(items as readonly T[])}
+      <SpaceResourceList empty={collection.status === "empty" || items.length === 0} emptyMessage={`No ${noun.toLowerCase()} yet.`}>
+        {children(items as readonly T[])}
+      </SpaceResourceList>
       {collection.hasMore && collection.onLoadMore && (
         <Button
           type="button"
           variant="ghost"
-          className="mt-3"
           onClick={() => void collection.onLoadMore?.()}
         >
           Load more {noun.toLowerCase()}
         </Button>
       )}
-    </>
+    </div>
   );
 }
 
@@ -128,42 +120,46 @@ function ConversationList({
   onOpen?: (threadId: string) => void;
 }) {
   return (
-    <div className="max-w-2xl overflow-hidden rounded-lg border">
+    <>
       {items.map((thread) => (
-        <button
-          type="button"
+        <SpaceResourceRow
           key={thread.id}
-          className="flex min-h-9 w-full items-center gap-3 border-b px-3 py-2 text-left last:border-b-0 hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          onClick={() => onOpen?.(thread.id)}
-          disabled={!onOpen}
-        >
-          <MessageSquare className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-          <span className="min-w-0 flex-1 truncate text-sm">{thread.title || "Conversation"}</span>
-        </button>
+          title={thread.title || "Chat"}
+          onOpen={onOpen ? () => onOpen(thread.id) : undefined}
+          openLabel="Open chat"
+        />
       ))}
-    </div>
+    </>
   );
 }
 
 function ConversationSection({
   collection,
   onOpen,
+  onRefresh,
 }: {
   collection?: SpaceCollection<ChatThread>;
   onOpen?: (threadId: string) => void;
+  onRefresh?: () => void | Promise<void>;
 }) {
-  const count = collection?.items?.length ?? 0;
+  const [search, setSearch] = useState("");
+  const items = collection?.items?.filter((thread) =>
+    (thread.title || "Chat").toLowerCase().includes(search.trim().toLowerCase())
+  );
+  const visibleCollection = collection && items
+    ? { ...collection, items, status: items.length ? collection.status : "empty" as const }
+    : collection;
   return (
-    <div className="max-w-2xl space-y-3">
-      <div className="flex min-h-8 items-center justify-between gap-3">
-        <div>
-          <h2 className="text-sm font-medium">Conversations</h2>
-          <p className="text-xs text-muted-foreground">
-            {count} {count === 1 ? "conversation" : "conversations"}
-          </p>
-        </div>
-      </div>
-      <CollectionState<ChatThread> collection={collection} noun="Conversations">
+    <div className="mx-auto max-w-4xl space-y-3">
+      <SpaceResourceToolbar
+        searchValue={search}
+        onSearchChange={setSearch}
+        searchLabel="Search Chats"
+        searchPlaceholder="Search Chats"
+        onRefresh={onRefresh ? () => void onRefresh() : undefined}
+        refreshLabel="Refresh Chats"
+      />
+      <CollectionState<ChatThread> collection={visibleCollection} noun="Chats">
         {(items) => <ConversationList items={items} onOpen={onOpen} />}
       </CollectionState>
     </div>
@@ -180,26 +176,32 @@ function MemberList({
   onRemove?: (memberId: string) => void | Promise<void>;
 }) {
   return (
-    <div className="divide-y rounded-lg border">
-      {items.map((member) => (
-        <div key={member.id} className="flex items-center gap-3 px-4 py-3">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium">
-            {(member.name || member.id).slice(0, 2).toUpperCase()}
-          </div>
-          <span className="min-w-0 flex-1 truncate text-sm">{member.name || member.id}</span>
-          {member.role && <span className="text-xs text-muted-foreground">{member.role}</span>}
-          {canManage && onRemove && (
-            <button
-              type="button"
-              className="text-xs text-destructive underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              onClick={() => void onRemove(member.id)}
-            >
-              Remove
-            </button>
-          )}
-        </div>
-      ))}
-    </div>
+    <>
+      {items.map((member) => {
+        const displayName = member.name || member.id;
+        const isOwner = member.role?.toLowerCase() === "owner";
+        return (
+          <SpaceResourceRow
+            key={member.id}
+            title={displayName}
+            subtitle={member.email}
+            rightLabel={member.role}
+            actions={canManage && onRemove && !isOwner ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2 text-xs text-destructive hover:text-destructive"
+                aria-label={`Remove ${displayName}`}
+                onClick={() => void onRemove(member.id)}
+              >
+                Remove
+              </Button>
+            ) : undefined}
+          />
+        );
+      })}
+    </>
   );
 }
 
@@ -213,6 +215,7 @@ export const SpaceView: React.FC<SpaceViewProps> = ({
   canEditSpace,
   onUpdateSpace,
   onOpenConversation,
+  onRefresh,
   canManageMembers,
   onAddMember,
   onRemoveMember,
@@ -235,13 +238,17 @@ export const SpaceView: React.FC<SpaceViewProps> = ({
   const [description, setDescription] = useState(space.description ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [memberId, setMemberId] = useState("");
+  const [memberEmail, setMemberEmail] = useState("");
+  const [memberSearch, setMemberSearch] = useState("");
+  const [memberDialogOpen, setMemberDialogOpen] = useState(false);
   const [memberWorking, setMemberWorking] = useState(false);
   const activeSpaceId = useRef(space.id);
   const activeTabRef = useRef<HTMLButtonElement>(null);
+  const tabNavRef = useRef<HTMLElement>(null);
   const saveOperation = useRef(0);
   const addMemberOperation = useRef(0);
   const removeMemberOperation = useRef(0);
+  const [canScrollTabsRight, setCanScrollTabsRight] = useState(false);
 
   useEffect(() => {
     activeSpaceId.current = space.id;
@@ -249,7 +256,9 @@ export const SpaceView: React.FC<SpaceViewProps> = ({
     setDescription(space.description ?? "");
     setEditing(false);
     setError(null);
-    setMemberId("");
+    setMemberEmail("");
+    setMemberSearch("");
+    setMemberDialogOpen(false);
     setSaving(false);
     setMemberWorking(false);
     saveOperation.current += 1;
@@ -309,6 +318,21 @@ export const SpaceView: React.FC<SpaceViewProps> = ({
   useEffect(() => {
     activeTabRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [resolvedActiveSection]);
+  useEffect(() => {
+    const nav = tabNavRef.current;
+    if (!nav) return;
+    const updateOverflow = () => {
+      setCanScrollTabsRight(nav.scrollLeft + nav.clientWidth < nav.scrollWidth - 1);
+    };
+    updateOverflow();
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(updateOverflow);
+    observer?.observe(nav);
+    window.addEventListener("resize", updateOverflow);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", updateOverflow);
+    };
+  }, [sections]);
   const builtInContent = section?.id === "overview"
     ? (
       <div className="space-y-5">
@@ -326,7 +350,6 @@ export const SpaceView: React.FC<SpaceViewProps> = ({
           </div>
         ) : (
           <div className="space-y-3">
-            <h2 className="text-xl font-semibold">{space.name || space.id}</h2>
             {space.description ? (
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
@@ -347,51 +370,80 @@ export const SpaceView: React.FC<SpaceViewProps> = ({
       </div>
     )
     : section?.id === "conversations"
-      ? <ConversationSection collection={data?.conversations} onOpen={onOpenConversation} />
+    ? <ConversationSection collection={data?.conversations} onOpen={onOpenConversation} onRefresh={onRefresh} />
     : null;
   const customContent = section?.content
     ? typeof section.content === "function" ? section.content(context) : section.content
     : null;
+  const handleAddMember = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const email = memberEmail.trim();
+    if (!email || memberWorking || !onAddMember) return;
+    const addingSpaceId = space.id;
+    const operation = ++addMemberOperation.current;
+    setError(null);
+    setMemberWorking(true);
+    try {
+      await onAddMember(email);
+      if (activeSpaceId.current === addingSpaceId && addMemberOperation.current === operation) {
+        setMemberEmail("");
+        setMemberDialogOpen(false);
+      }
+    } catch (cause) {
+      if (activeSpaceId.current === addingSpaceId && addMemberOperation.current === operation) {
+        setError(cause instanceof Error ? cause.message : "The member could not be added.");
+      }
+    } finally {
+      if (activeSpaceId.current === addingSpaceId && addMemberOperation.current === operation) {
+        setMemberWorking(false);
+      }
+    }
+  };
   const memberContent = section?.id === "members"
     ? (
-      <div>
-        {error && <p className="mb-3 text-sm text-destructive" role="alert">{error}</p>}
-        {canManage && onAddMember && (
-          <form
-            className="mb-4 flex gap-2"
-            onSubmit={async (event) => {
-              event.preventDefault();
-              const id = memberId.trim();
-              if (!id || memberWorking) return;
-              const addingSpaceId = space.id;
-              const operation = ++addMemberOperation.current;
-              setError(null);
-              setMemberWorking(true);
-              try {
-                await onAddMember(id);
-                if (activeSpaceId.current === addingSpaceId && addMemberOperation.current === operation) setMemberId("");
-              } catch (cause) {
-                if (activeSpaceId.current === addingSpaceId && addMemberOperation.current === operation) {
-                  setError(cause instanceof Error ? cause.message : "The member could not be added.");
-                }
-              } finally {
-                if (activeSpaceId.current === addingSpaceId && addMemberOperation.current === operation) {
-                  setMemberWorking(false);
-                }
-              }
-            }}
-          >
-            <Input
-              value={memberId}
-              onChange={(event) => setMemberId(event.target.value)}
-              placeholder="Member id"
-              aria-label="Member id"
-              disabled={memberWorking}
-            />
-            <Button type="submit" disabled={!memberId.trim() || memberWorking}>Add</Button>
-          </form>
-        )}
-        <CollectionState<ChatSpaceMember> collection={data?.members} noun="Members">
+      <div className="mx-auto max-w-4xl space-y-3">
+        {error && !memberDialogOpen && <p className="text-sm text-destructive" role="alert">{error}</p>}
+        <SpaceResourceToolbar
+          searchValue={memberSearch}
+          onSearchChange={setMemberSearch}
+          searchLabel="Search Members"
+          searchPlaceholder="Search Members"
+          onCreate={canManage && onAddMember ? () => setMemberDialogOpen(true) : undefined}
+          createLabel="Add Member"
+          onRefresh={onRefresh ? () => void onRefresh() : undefined}
+          refreshLabel="Refresh Members"
+        />
+        <Dialog open={memberDialogOpen} onOpenChange={(open) => { if (!memberWorking) setMemberDialogOpen(open); }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Add Member</DialogTitle>
+              <DialogDescription>Enter the email address of a user in this tenant.</DialogDescription>
+            </DialogHeader>
+            {canManage && onAddMember && (
+              <form className="space-y-3" onSubmit={handleAddMember}>
+                <Input
+                  value={memberEmail}
+                  onChange={(event) => setMemberEmail(event.target.value)}
+                  type="email"
+                  placeholder="Email address"
+                  aria-label="Email"
+                  disabled={memberWorking}
+                />
+                {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
+                <Button type="submit" disabled={!memberEmail.trim() || memberWorking}>Add</Button>
+              </form>
+            )}
+          </DialogContent>
+        </Dialog>
+        <CollectionState<ChatSpaceMember>
+          collection={data?.members && {
+            ...data.members,
+            items: data.members.items?.filter((member) =>
+              `${member.name ?? ""} ${member.email ?? ""}`.toLowerCase().includes(memberSearch.trim().toLowerCase())
+            ),
+          }}
+          noun="Members"
+        >
           {(items) => (
             <MemberList
               items={items}
@@ -419,43 +471,75 @@ export const SpaceView: React.FC<SpaceViewProps> = ({
   return (
     <section className={`flex min-h-0 flex-1 flex-col overflow-hidden ${className}`} aria-label={`${space.name || space.id} Space`}>
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="order-1 min-h-0 flex-1 overflow-y-auto p-4 sm:order-2 sm:p-6" role="tabpanel">
+        <div className="shrink-0 border-b px-4 py-2 sm:px-6">
+          <h1 className="truncate text-sm font-semibold">{space.name || space.id}</h1>
+        </div>
+        <div
+          className={`order-1 min-h-0 flex-1 sm:order-2 ${
+            customContent ? "overflow-hidden" : "overflow-y-auto p-4 sm:p-6"
+          }`}
+          role="tabpanel"
+        >
           {customContent ?? resolvedBuiltInContent}
         </div>
-        <nav
-          className="order-2 flex shrink-0 gap-1 overflow-x-auto border-t px-3 pt-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:order-1 sm:border-t-0 sm:border-b sm:px-5 sm:py-2"
-          aria-label="Space sections"
-          role="tablist"
-          onKeyDown={(event) => {
-            const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
-            const index = tabs.indexOf(event.target as HTMLButtonElement);
-            if (index < 0) return;
-            const next = event.key === "ArrowRight" ? (index + 1) % tabs.length
-              : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length
-              : event.key === "Home" ? 0
-              : event.key === "End" ? tabs.length - 1 : -1;
-            if (next < 0) return;
-            event.preventDefault();
-            tabs[next]?.focus();
-            tabs[next]?.click();
-          }}
-        >
-          {sections.map((candidate) => (
-            <button
-              type="button"
-              role="tab"
-              aria-selected={candidate.id === resolvedActiveSection}
-              tabIndex={candidate.id === resolvedActiveSection ? 0 : -1}
-              key={candidate.id}
-              ref={candidate.id === resolvedActiveSection ? activeTabRef : undefined}
-              className={`inline-flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${candidate.id === resolvedActiveSection ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/60"}`}
-              onClick={() => chooseSection(candidate.id)}
-            >
-              {candidate.icon}
-              {candidate.label}
-            </button>
-          ))}
-        </nav>
+        <div className="relative order-2 shrink-0 border-t pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:order-1 sm:border-t-0 sm:border-b sm:pb-0">
+          <nav
+            ref={tabNavRef}
+            className="flex gap-1 overflow-x-auto px-3 pt-2 sm:px-5 sm:py-2"
+            aria-label="Space sections"
+            role="tablist"
+            onScroll={(event) => {
+              const nav = event.currentTarget;
+              setCanScrollTabsRight(nav.scrollLeft + nav.clientWidth < nav.scrollWidth - 1);
+            }}
+            onKeyDown={(event) => {
+              const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+              const index = tabs.indexOf(event.target as HTMLButtonElement);
+              if (index < 0) return;
+              const next = event.key === "ArrowRight" ? (index + 1) % tabs.length
+                : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length
+                : event.key === "Home" ? 0
+                : event.key === "End" ? tabs.length - 1 : -1;
+              if (next < 0) return;
+              event.preventDefault();
+              tabs[next]?.focus();
+              tabs[next]?.click();
+            }}
+          >
+            {sections.map((candidate) => (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={candidate.id === resolvedActiveSection}
+                tabIndex={candidate.id === resolvedActiveSection ? 0 : -1}
+                key={candidate.id}
+                ref={candidate.id === resolvedActiveSection ? activeTabRef : undefined}
+                className={`inline-flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${candidate.id === resolvedActiveSection ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/60"}`}
+                onClick={() => chooseSection(candidate.id)}
+              >
+                {candidate.icon}
+                {candidate.label}
+              </button>
+            ))}
+          </nav>
+          {canScrollTabsRight && (
+            <>
+              <div className="pointer-events-none absolute inset-y-0 right-8 w-8 bg-gradient-to-l from-background to-transparent" aria-hidden="true" />
+              <button
+                type="button"
+                className="absolute right-1 top-1/2 flex h-8 -translate-y-1/2 items-center rounded-md bg-background/95 px-1 text-muted-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label="Show more Space sections"
+                onClick={() => {
+                  const nav = tabNavRef.current;
+                  if (nav) nav.scrollBy({ left: Math.max(120, nav.clientWidth * 0.75), behavior: "smooth" });
+                }}
+              >
+                <ChevronRight className="h-4 w-4" aria-hidden="true" />
+                <span className="sr-only">More Space sections</span>
+              </button>
+            </>
+          )}
+        </div>
       </div>
     </section>
   );

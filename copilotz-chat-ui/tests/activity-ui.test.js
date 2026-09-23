@@ -7,6 +7,9 @@ import {
   AskToolRenderer,
   ChatUI,
   ChatUserContextProvider,
+  SpaceResourceList,
+  SpaceResourceRow,
+  SpaceResourceToolbar,
   SpaceView,
   defaultChatConfig,
   formatToolDetailValue,
@@ -99,6 +102,58 @@ test('mergeConfig allows consumers to disable Spaces navigation', () => {
   assert.equal(config.features.spaces.groupingEnabled, true);
 });
 
+test('Space resource primitives expose controlled search, state announcements, and sibling actions', () => {
+  const toolbarHtml = renderToStaticMarkup(
+    React.createElement(SpaceResourceToolbar, {
+      searchValue: 'plan',
+      onSearchChange: () => {},
+      searchLabel: 'Search chats',
+      searchPlaceholder: 'Search chats',
+      onCreate: () => {},
+      createLabel: 'New chat',
+      onRefresh: () => {},
+      refreshLabel: 'Refresh chats',
+    }),
+  );
+  assert.match(toolbarHtml, /aria-label="Search chats"/);
+  assert.match(toolbarHtml, /value="plan"/);
+  assert.match(toolbarHtml, /aria-label="New chat"/);
+  assert.match(toolbarHtml, /aria-label="Refresh chats"/);
+
+  const errorHtml = renderToStaticMarkup(
+    React.createElement(SpaceResourceList, {
+      error: React.createElement('button', { type: 'button' }, 'Retry'),
+    }),
+  );
+  assert.match(errorHtml, /role="alert"/);
+  assert.match(errorHtml, />Retry<\/button>/);
+
+  const staleHtml = renderToStaticMarkup(
+    React.createElement(SpaceResourceList, { error: 'Refresh failed' },
+      React.createElement(SpaceResourceRow, { title: 'Last available item' }),
+    ),
+  );
+  assert.match(staleHtml, /Refresh failed/);
+  assert.match(staleHtml, /Last available item/);
+
+  const rowHtml = renderToStaticMarkup(
+    React.createElement(SpaceResourceList, null,
+      React.createElement(SpaceResourceRow, {
+        title: 'Quarterly plan',
+        subtitle: 'Updated today',
+        onOpen: () => {},
+        openLabel: 'Open chat',
+        actions: React.createElement('button', { type: 'button' }, 'Archive'),
+      }),
+    ),
+  );
+  assert.match(rowHtml, /role="listitem"/);
+  assert.match(rowHtml, /Updated today/);
+  assert.match(rowHtml, /Open chat:/);
+  assert.match(rowHtml, /Quarterly plan/);
+  assert.match(rowHtml, /<\/button><div class="flex shrink-0 items-center gap-1"><button/);
+});
+
 test('native SpaceView shows only supplied default data sources', () => {
   const html = renderToStaticMarkup(
     React.createElement(SpaceView, {
@@ -110,11 +165,13 @@ test('native SpaceView shows only supplied default data sources', () => {
         },
       },
       selectedSection: 'conversations',
+      onOpenConversation: () => {},
     }),
   );
   assert.match(html, /Overview/);
-  assert.match(html, /Conversations/);
+  assert.match(html, />Chats</);
   assert.match(html, /Plan/);
+  assert.match(html, /Open chat/);
   assert.doesNotMatch(html, />Members</);
   assert.doesNotMatch(html, /Edit Space/);
   const overviewHtml = renderToStaticMarkup(
@@ -200,7 +257,7 @@ test('Chat navigation exposes mode selector and mode-aware search affordances', 
   assert.doesNotMatch(html, /Create Space<\/button>/);
 });
 
-test('Space view keeps its title in the global header and uses a compact conversation list', () => {
+test('Space view keeps a compact identity and uses the shared chat list toolbar', () => {
   globalThis.window = { innerWidth: 1024 };
   globalThis.document = {
     cookie: '',
@@ -219,8 +276,10 @@ test('Space view keeps its title in the global header and uses a compact convers
     }),
   );
   assert.doesNotMatch(standalone, /<header/);
-  assert.match(standalone, /max-w-2xl/);
-  assert.match(standalone, />1 conversation</);
+  assert.match(standalone, /<h1 class="truncate text-sm font-semibold">Research<\/h1>/);
+  assert.match(standalone, /max-w-4xl/);
+  assert.match(standalone, /aria-label="Search Chats"/);
+  assert.match(standalone, /role="list"/);
 
   const chatView = renderToStaticMarkup(
     React.createElement(ChatUI, {
@@ -258,9 +317,42 @@ test('managed empty member lists keep the add control available', () => {
     }),
   );
 
-  assert.match(html, /Member id/);
-  assert.match(html, />Add</);
+  assert.match(html, /aria-label="Search Members"/);
+  assert.match(html, /aria-label="Add Member"/);
   assert.match(html, /No members yet/);
+});
+
+test('Space member rows show email and hide owner or unauthorized remove actions', () => {
+  const managedHtml = renderToStaticMarkup(
+    React.createElement(SpaceView, {
+      space: { id: 'research', name: 'Research' },
+      data: {
+        members: {
+          status: 'ready',
+          items: [
+            { id: 'owner', name: 'Alex Owner', email: 'alex@example.com', role: 'owner' },
+            { id: 'member', name: 'Sam Member', email: 'sam@example.com', role: 'member' },
+          ],
+        },
+      },
+      selectedSection: 'members',
+      canManageMembers: true,
+      onRemoveMember: () => {},
+    }),
+  );
+  assert.match(managedHtml, /sam@example\.com/);
+  assert.match(managedHtml, /aria-label="Remove Sam Member"/);
+  assert.doesNotMatch(managedHtml, /aria-label="Remove Alex Owner"/);
+
+  const readOnlyHtml = renderToStaticMarkup(
+    React.createElement(SpaceView, {
+      space: { id: 'research', name: 'Research', permissions: { canManageMembers: false } },
+      data: { members: { status: 'ready', items: [{ id: 'member', name: 'Sam Member' }] } },
+      selectedSection: 'members',
+      onRemoveMember: () => {},
+    }),
+  );
+  assert.doesNotMatch(readOnlyHtml, /Remove Sam Member/);
 });
 
 test('AssistantActivity renders generic timeline labels', () => {

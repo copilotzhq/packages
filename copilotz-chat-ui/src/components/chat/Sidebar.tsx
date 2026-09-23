@@ -888,7 +888,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         ) : (
           displayThreadGroups.map((group) => {
-            const isOpen = isGroupOpen(group.key, !isSpaceGrouping);
+            const isOpen = isGroupOpen(
+              group.key,
+              !isSpaceGrouping || group.spaceId === currentSpaceId,
+            );
+            const isSelectedSpace =
+              isSpaceGrouping && group.spaceId === currentSpaceId;
             return (
               <Collapsible
                 key={group.key}
@@ -926,10 +931,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   }}
                 >
                   <SidebarGroupLabel
-                    className={`group/space-row h-7 justify-start bg-transparent px-2 hover:bg-transparent group-data-[collapsible=icon]:hidden ${
+                    className={`group/space-row h-7 justify-start px-1 hover:bg-transparent group-data-[collapsible=icon]:hidden ${
                       dragOverSpaceId === group.spaceId
                         ? "bg-sidebar-accent/50 text-sidebar-accent-foreground"
-                        : ""
+                        : isSelectedSpace
+                          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                          : "bg-transparent"
                     }`}
                   >
                     <CollapsibleTrigger
@@ -945,20 +952,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     {isSpaceGrouping && group.space && onOpenSpace ? (
                       <button
                         type="button"
-                        className="min-w-0 flex-1 truncate rounded-md bg-transparent px-1 text-left hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring"
+                        aria-current={isSelectedSpace ? "page" : undefined}
+                        className={`flex h-7 min-w-0 flex-1 items-center gap-2 truncate rounded-md bg-transparent px-2 text-left focus-visible:ring-2 focus-visible:ring-sidebar-ring ${isSelectedSpace ? "font-medium" : "hover:bg-sidebar-accent"}`}
                         onClick={() => onOpenSpace(group.space!.id)}
                         aria-label={`Open ${group.space.name || group.space.id} Space`}
                       >
-                      {isSpaceGrouping && group.space && (
-                        <SpaceAvatar space={group.space} className="mr-1" />
-                      )}
-                      <span
-                        className={`truncate ${
-                          group.muted ? "text-muted-foreground" : ""
-                        }`}
-                      >
-                        {group.label}
-                      </span>
+                        <SpaceAvatar space={group.space} />
+                        <span className={`min-w-0 flex-1 truncate ${group.muted ? "text-muted-foreground" : ""}`}>
+                          {group.label}
+                        </span>
                       </button>
                     ) : (
                       <CollapsibleTrigger className="flex min-w-0 flex-1 items-center justify-start rounded-md bg-transparent px-1 text-left hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring">
@@ -976,7 +978,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           <button
                             type="button"
                             aria-label={`Manage ${group.space.name || group.space.id} Space`}
-                            className="ml-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-sidebar-foreground/70 outline-hidden opacity-100 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring md:opacity-0 md:group-hover/space-row:opacity-100 md:focus-visible:opacity-100"
+                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-sidebar-foreground/70 outline-hidden opacity-100 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring md:opacity-0 md:group-hover/space-row:opacity-100 md:focus-visible:opacity-100"
                             onClick={(event) => event.stopPropagation()}
                           >
                             <MoreHorizontal className="h-4 w-4" />
@@ -1056,7 +1058,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               </div>
                             ) : (
                               <SidebarMenuButton
-                                isActive={currentThreadId === thread.id}
+                                isActive={currentThreadId === thread.id && !isSelectedSpace}
                                 onClick={() => onSelectThread?.(thread.id)}
                                 tooltip={thread.title}
                                 draggable={canDragSpaces}

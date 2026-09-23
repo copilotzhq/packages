@@ -2,6 +2,16 @@ export { ChatUI } from './components/chat/ChatUI';
 export { SpaceView } from './components/chat/SpaceView';
 export type { SpaceUpdate, SpaceViewProps } from './components/chat/SpaceView';
 export {
+  SpaceResourceList,
+  SpaceResourceRow,
+  SpaceResourceToolbar,
+} from './components/chat/SpaceResources';
+export type {
+  SpaceResourceListProps,
+  SpaceResourceRowProps,
+  SpaceResourceToolbarProps,
+} from './components/chat/SpaceResources';
+export {
   AssistantActivity,
   formatToolDetailValue,
   resolveActivityStableId,

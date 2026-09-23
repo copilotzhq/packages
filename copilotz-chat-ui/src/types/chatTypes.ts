@@ -244,6 +244,7 @@ export interface ChatSpace {
 export interface ChatSpaceMember {
   id: string;
   name: string;
+  email?: string;
   role?: string;
   avatarUrl?: string;
 }
@@ -655,7 +656,7 @@ export interface ChatV2Props {
     patch: { name?: string; description?: string },
   ) => ChatSpace | void | Promise<ChatSpace | void>;
   canManageSpaceMembers?: boolean;
-  onAddSpaceMember?: (memberId: string) => void | Promise<void>;
+  onAddSpaceMember?: (email: string) => void | Promise<void>;
   onRemoveSpaceMember?: (memberId: string) => void | Promise<void>;
 
   // Customization

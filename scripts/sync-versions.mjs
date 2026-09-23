@@ -29,6 +29,7 @@ const currentVersion = rootPackage.version;
 const targetVersion = requestedVersion
   ? resolveVersion(currentVersion, requestedVersion)
   : currentVersion;
+const coreVersion = rootPackage.copilotzCoreVersion ?? targetVersion;
 
 if (!targetVersion) {
   throw new Error("Root package.json must define version, or a version must be provided.");
@@ -47,12 +48,12 @@ const contractsPath = path.join(root, "contracts", "deno.json");
 const contracts = readJson(contractsPath);
 
 if (checkOnly) {
-  checkVersions(targetVersion, packages, workspaceNames, contracts);
+  checkVersions(targetVersion, coreVersion, packages, workspaceNames, contracts);
 } else {
-  syncVersions(targetVersion, packages, workspaceNames, contracts);
+  syncVersions(targetVersion, coreVersion, packages, workspaceNames, contracts);
 }
 
-function checkVersions(version, workspacePackages, workspacePackageNames, contractConfig) {
+function checkVersions(version, coreVersion, workspacePackages, workspacePackageNames, contractConfig) {
   const problems = [];
 
   if (rootPackage.version !== version) {
@@ -71,7 +72,7 @@ function checkVersions(version, workspacePackages, workspacePackageNames, contra
       workspacePackageNames,
       version,
     );
-    collectCoreDependencyProblems(problems, `${workspace}/package.json`, packageJson, version);
+    collectCoreDependencyProblems(problems, `${workspace}/package.json`, packageJson, coreVersion);
   }
 
   const lockPath = path.join(root, "package-lock.json");
@@ -104,10 +105,10 @@ function checkVersions(version, workspacePackages, workspacePackageNames, contra
       workspacePackageNames,
       version,
     );
-    collectCoreDependencyProblems(problems, `package-lock.json ${workspace}`, lockPackage, version);
+    collectCoreDependencyProblems(problems, `package-lock.json ${workspace}`, lockPackage, coreVersion);
   }
 
-  collectContractImportProblems(problems, "contracts/deno.json", contractConfig, workspacePackageNames, version);
+  collectContractImportProblems(problems, "contracts/deno.json", contractConfig, workspacePackageNames, version, coreVersion);
 
   if (problems.length > 0) {
     console.error("Package versions are not synchronized:");
@@ -120,8 +121,8 @@ function checkVersions(version, workspacePackages, workspacePackageNames, contra
   console.log(`All workspace package versions are synchronized at ${version}.`);
 }
 
-function syncVersions(version, workspacePackages, workspacePackageNames, contractConfig) {
-  syncContractImports(contractConfig, workspacePackageNames, version);
+function syncVersions(version, coreVersion, workspacePackages, workspacePackageNames, contractConfig) {
+  syncContractImports(contractConfig, workspacePackageNames, version, coreVersion);
 
   rootPackage.version = version;
   writeJson(rootPackagePath, rootPackage);
@@ -129,7 +130,7 @@ function syncVersions(version, workspacePackages, workspacePackageNames, contrac
   for (const { packagePath, packageJson } of workspacePackages) {
     packageJson.version = version;
     syncInternalDependencyRanges(packageJson, workspacePackageNames, version);
-    syncCoreDependencyRanges(packageJson, version);
+    syncCoreDependencyRanges(packageJson, coreVersion);
     writeJson(packagePath, packageJson);
   }
 
@@ -147,7 +148,7 @@ function syncVersions(version, workspacePackages, workspacePackageNames, contrac
 
     lock.packages[workspace].version = version;
     syncInternalDependencyRanges(lock.packages[workspace], workspacePackageNames, version);
-    syncCoreDependencyRanges(lock.packages[workspace], version);
+    syncCoreDependencyRanges(lock.packages[workspace], coreVersion);
   }
 
   writeJson(lockPath, lock);
@@ -155,7 +156,7 @@ function syncVersions(version, workspacePackages, workspacePackageNames, contrac
   console.log(`Synchronized workspace package versions to ${version}.`);
 }
 
-function collectContractImportProblems(problems, label, contractConfig, workspacePackageNames, version) {
+function collectContractImportProblems(problems, label, contractConfig, workspacePackageNames, version, coreVersion) {
   const imports = contractConfig.imports;
   if (!imports || typeof imports !== "object" || Array.isArray(imports)) {
     problems.push(`${label} must define an imports object`);
@@ -168,7 +169,7 @@ function collectContractImportProblems(problems, label, contractConfig, workspac
       continue;
     }
 
-    const expected = expectedContractImport(target, packageName, version);
+    const expected = expectedContractImport(target, packageName, packageName === coreDependencyName ? coreVersion : version);
     if (expected === null || target !== expected) {
       const scheme = packageName === coreDependencyName ? "jsr" : "npm";
       const fallback = `${scheme}:${packageName}@${version}`;
@@ -177,7 +178,7 @@ function collectContractImportProblems(problems, label, contractConfig, workspac
   }
 }
 
-function syncContractImports(contractConfig, workspacePackageNames, version) {
+function syncContractImports(contractConfig, workspacePackageNames, version, coreVersion) {
   const imports = contractConfig.imports;
   if (!imports || typeof imports !== "object" || Array.isArray(imports)) {
     throw new Error("contracts/deno.json must define an imports object.");
@@ -189,7 +190,7 @@ function syncContractImports(contractConfig, workspacePackageNames, version) {
       continue;
     }
 
-    const expected = expectedContractImport(target, packageName, version);
+    const expected = expectedContractImport(target, packageName, packageName === coreDependencyName ? coreVersion : version);
     if (expected === null) {
       const scheme = packageName === coreDependencyName ? "jsr" : "npm";
       throw new Error(

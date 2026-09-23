@@ -132,6 +132,36 @@ test("version sync updates contract packages and keeps subpaths/configuration", 
   }
 });
 
+test("frontend release keeps an explicitly pinned Copilotz Core version", async () => {
+  const { directory } = await fixture();
+  try {
+    const rootPath = path.join(directory, "package.json");
+    const root = JSON.parse(await readFile(rootPath, "utf8"));
+    root.copilotzCoreVersion = "0.78.0";
+    await writeJson(rootPath, root);
+    const uiPath = path.join(directory, "copilotz-chat-ui/package.json");
+    const ui = JSON.parse(await readFile(uiPath, "utf8"));
+    ui.dependencies = { "@copilotz/copilotz": "npm:@jsr/copilotz__copilotz@0.78.0" };
+    await writeJson(uiPath, ui);
+    const lockPath = path.join(directory, "package-lock.json");
+    const lock = JSON.parse(await readFile(lockPath, "utf8"));
+    lock.packages["copilotz-chat-ui"].dependencies = { ...ui.dependencies };
+    await writeJson(lockPath, lock);
+
+    execFileSync(process.execPath, [syncScript, "0.79.0"], { cwd: directory, stdio: "pipe" });
+    const syncedUi = JSON.parse(await readFile(uiPath, "utf8"));
+    const syncedContract = JSON.parse(await readFile(path.join(directory, "contracts/deno.json"), "utf8"));
+    assert.equal(syncedUi.version, "0.79.0");
+    assert.equal(syncedUi.dependencies["@copilotz/copilotz"], "npm:@jsr/copilotz__copilotz@0.78.0");
+    assert.equal(syncedContract.imports["@copilotz/copilotz/core"], "jsr:@copilotz/copilotz@0.78.0/core");
+    assert.equal(syncedContract.imports["@copilotz/chat-ui"], "npm:@copilotz/chat-ui@0.79.0");
+    const check = runSync(directory, "--check");
+    assert.equal(check.status, 0, check.stderr);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("invalid owned contract imports fail before package or lockfile mutation", async () => {
   const { directory } = await fixture();
   try {
