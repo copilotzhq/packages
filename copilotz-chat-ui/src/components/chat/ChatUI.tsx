@@ -1,6 +1,7 @@
 import React, {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -39,6 +40,9 @@ import {
   Sparkles,
   Zap,
 } from "lucide-react";
+
+const useIsomorphicLayoutEffect =
+  typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 const SpaceSelectionState: React.FC<{
   status?: ChatSpaceViewStatus;
@@ -234,12 +238,16 @@ export const ChatUI: React.FC<ChatV2Props> = ({
 
   // Refs
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const virtualMessageListRef = useRef<HTMLDivElement>(null);
   const prependSnapshotRef = useRef<{
-    scrollHeight: number;
-    scrollTop: number;
+    threadId: string | null;
     firstMessageId: string | null;
     messageCount: number;
+    anchorMessageId: string;
+    anchorOffset: number;
   } | null>(null);
+  const olderLoadThreadIdRef = useRef<string | null>(null);
+  const autoScrollGenerationRef = useRef(0);
 
   // Refs for state to avoid recreating callbacks on every state change
   const stateRef = useRef(state);
@@ -281,7 +289,10 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   const virtualizer = useVirtualizer({
     count: groupedMessages.length,
     getScrollElement: () => scrollAreaRef.current,
-    getItemKey: (index) => groupedMessages[index]?.id ?? index,
+    // A prepended assistant fragment can merge into the old first group and
+    // change its group ID. The group's last message survives that merge, so
+    // use it as the cache key to retain the old measured height.
+    getItemKey: (index) => groupedMessages[index]?.primaryMessage.id ?? index,
     estimateSize: () => 100,
     overscan: 5,
   });
@@ -327,15 +338,24 @@ export const ChatUI: React.FC<ChatV2Props> = ({
 
   // Track previous message count to detect initial load vs incremental updates
   const prevMessageCountRef = useRef(0);
+  const prevThreadIdRef = useRef(currentThreadId);
 
   // Auto-scroll to bottom on message changes
   useEffect(() => {
+    if (prevThreadIdRef.current !== currentThreadId) {
+      prevThreadIdRef.current = currentThreadId;
+      prependSnapshotRef.current = null;
+      olderLoadThreadIdRef.current = null;
+      autoScrollGenerationRef.current += 1;
+      prevMessageCountRef.current = 0;
+    }
+
     if (groupedMessages.length === 0) {
       prevMessageCountRef.current = 0;
       return;
     }
 
-    if (prependSnapshotRef.current) {
+    if (olderLoadThreadIdRef.current === currentThreadId) {
       prevMessageCountRef.current = groupedMessages.length;
       return;
     }
@@ -348,8 +368,17 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     if (wasEmpty) {
       // Initial load (thread switch) — jump instantly to the bottom
       // Double RAF ensures the virtualizer has committed its layout
+      const threadId = currentThreadId;
+      const generation = autoScrollGenerationRef.current;
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
+          if (
+            prevThreadIdRef.current !== threadId ||
+            autoScrollGenerationRef.current !== generation ||
+            olderLoadThreadIdRef.current === threadId
+          ) {
+            return;
+          }
           virtualizer.scrollToIndex(groupedMessages.length - 1, {
             align: "end",
           });
@@ -364,7 +393,16 @@ export const ChatUI: React.FC<ChatV2Props> = ({
 
     // Incremental update (new message, streaming) — smooth-scroll if at bottom
     if (!state.isAtBottom) return;
+    const threadId = currentThreadId;
+    const generation = autoScrollGenerationRef.current;
     requestAnimationFrame(() => {
+      if (
+        prevThreadIdRef.current !== threadId ||
+        autoScrollGenerationRef.current !== generation ||
+        olderLoadThreadIdRef.current === threadId
+      ) {
+        return;
+      }
       const viewport = scrollAreaRef.current;
       if (!viewport) return;
       try {
@@ -373,7 +411,22 @@ export const ChatUI: React.FC<ChatV2Props> = ({
         viewport.scrollTop = viewport.scrollHeight;
       }
     });
-  }, [groupedMessages, isBackgroundRefreshingMessages, state.isAtBottom, virtualizer]);
+  }, [
+    currentThreadId,
+    groupedMessages,
+    isBackgroundRefreshingMessages,
+    state.isAtBottom,
+    virtualizer,
+  ]);
+
+  useEffect(() => {
+    if (
+      !isLoadingOlderMessages &&
+      olderLoadThreadIdRef.current === currentThreadId
+    ) {
+      olderLoadThreadIdRef.current = null;
+    }
+  }, [currentThreadId, isLoadingOlderMessages]);
 
   // Re-measure visible items when the scroll container is resized (sidebar
   // toggle, devtools, window resize).  We do NOT call virtualizer.measure()
@@ -414,39 +467,60 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     };
   }, [virtualizer]);
 
-  useEffect(() => {
-    prependSnapshotRef.current = null;
-  }, [currentThreadId]);
-
-  useEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     const snapshot = prependSnapshotRef.current;
     if (!snapshot) return;
 
-    if (groupedMessages.length <= snapshot.messageCount) {
+    if (snapshot.threadId !== currentThreadId) {
+      prependSnapshotRef.current = null;
+      return;
+    }
+
+    const previousFirstMessageIndex = messages.findIndex(
+      (message) => message.id === snapshot.firstMessageId
+    );
+    if (
+      messages.length <= snapshot.messageCount ||
+      previousFirstMessageIndex <= 0
+    ) {
       if (!isLoadingOlderMessages) {
         prependSnapshotRef.current = null;
       }
       return;
     }
 
-    if ((groupedMessages[0]?.id ?? null) === snapshot.firstMessageId) {
+    // The row can have a different group ID after assistant fragments merge.
+    // Find it by the stable source message ID captured from the visible row.
+    const anchorIndex = groupedMessages.findIndex((group) =>
+      group.primaryMessage.id === snapshot.anchorMessageId ||
+      group.messages.some((message) => message.id === snapshot.anchorMessageId)
+    );
+    if (anchorIndex < 0) {
       if (!isLoadingOlderMessages) {
         prependSnapshotRef.current = null;
       }
       return;
     }
 
-    requestAnimationFrame(() => {
-      virtualizer.measure();
-      requestAnimationFrame(() => {
-        const viewport = scrollAreaRef.current;
-        if (!viewport) return;
-        const heightDelta = viewport.scrollHeight - snapshot.scrollHeight;
-        viewport.scrollTop = snapshot.scrollTop + heightDelta;
-        prependSnapshotRef.current = null;
-      });
-    });
-  }, [groupedMessages, isLoadingOlderMessages, virtualizer]);
+    const viewport = scrollAreaRef.current;
+    const virtualList = virtualMessageListRef.current;
+    if (!viewport || !virtualList) return;
+
+    const anchorOffset = virtualizer.getOffsetForIndex(anchorIndex, "start")?.[0];
+    if (anchorOffset === undefined) return;
+    const viewportRect = viewport.getBoundingClientRect();
+    const listRect = virtualList.getBoundingClientRect();
+    const listOffset = listRect.top - viewportRect.top + viewport.scrollTop;
+    viewport.scrollTop = listOffset + anchorOffset - snapshot.anchorOffset;
+
+    prependSnapshotRef.current = null;
+  }, [
+    currentThreadId,
+    groupedMessages,
+    isLoadingOlderMessages,
+    messages,
+    virtualizer,
+  ]);
 
   const requestOlderMessages = useCallback(() => {
     if (
@@ -457,21 +531,52 @@ export const ChatUI: React.FC<ChatV2Props> = ({
       return;
 
     const viewport = scrollAreaRef.current;
-    prependSnapshotRef.current = viewport
-      ? {
-          scrollHeight: viewport.scrollHeight,
-          scrollTop: viewport.scrollTop,
-          firstMessageId: groupedMessages[0]?.id ?? null,
-          messageCount: groupedMessages.length,
-        }
+    autoScrollGenerationRef.current += 1;
+    olderLoadThreadIdRef.current = currentThreadId;
+    const virtualList = virtualMessageListRef.current;
+    const viewportRect = viewport?.getBoundingClientRect();
+    const listRect = virtualList?.getBoundingClientRect();
+    const listOffset = viewport && viewportRect && listRect
+      ? listRect.top - viewportRect.top + viewport.scrollTop
+      : 0;
+    const virtualOffset = (viewport?.scrollTop ?? 0) - listOffset;
+    const visibleItem = virtualizer.getVirtualItems().find(
+      (item) => item.end > virtualOffset
+    ) ?? virtualizer.getVirtualItemForOffset(virtualOffset);
+    const anchorGroup = visibleItem
+      ? groupedMessages[visibleItem.index]
+      : undefined;
+    const anchorNode = visibleItem
+      ? virtualList?.querySelector<HTMLElement>(
+          `[data-index="${visibleItem.index}"]`
+        )
       : null;
+    const anchorOffset = viewport && viewportRect && anchorNode
+      ? anchorNode.getBoundingClientRect().top - viewportRect.top
+      : visibleItem
+        ? listOffset + visibleItem.start - (viewport?.scrollTop ?? 0)
+        : null;
+
+    prependSnapshotRef.current =
+      viewport && anchorGroup && anchorOffset !== null
+        ? {
+            threadId: currentThreadId,
+            firstMessageId: messages[0]?.id ?? null,
+            messageCount: messages.length,
+            anchorMessageId: anchorGroup.primaryMessage.id,
+            anchorOffset,
+          }
+        : null;
 
     onLoadOlderMessages();
   }, [
+    currentThreadId,
     groupedMessages,
     hasMoreMessagesBefore,
     isLoadingOlderMessages,
+    messages,
     onLoadOlderMessages,
+    virtualizer,
   ]);
 
   useEffect(() => {
@@ -959,7 +1064,6 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                       handleSelectThread(threadId);
                     }}
                     onRefresh={spaceViewStatus?.onRetry}
-                    onClose={closeSpace}
                   />
                 ) : effectiveSpaceId ? (
                   <SpaceSelectionState status={spaceViewStatus} onClose={closeSpace} />
@@ -998,6 +1102,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                         renderSuggestions()
                       ) : (
                         <div
+                          ref={virtualMessageListRef}
                           style={{
                             height: `${virtualizer.getTotalSize()}px`,
                             width: "100%",
@@ -1010,7 +1115,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
 
                             return (
                               <div
-                                key={group.id}
+                                key={virtualRow.key}
                                 data-index={virtualRow.index}
                                 ref={virtualizer.measureElement}
                                 style={{
