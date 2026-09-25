@@ -5,6 +5,7 @@ import {
   ChevronRight,
   FileText,
   MessageSquare,
+  PanelRightClose,
   Pencil,
   Users,
 } from "lucide-react";
@@ -471,8 +472,22 @@ export const SpaceView: React.FC<SpaceViewProps> = ({
   return (
     <section className={`flex min-h-0 flex-1 flex-col overflow-hidden ${className}`} aria-label={`${space.name || space.id} Space`}>
       <div className="flex min-h-0 flex-1 flex-col">
-        <div className="shrink-0 border-b px-4 py-2 sm:px-6">
-          <h1 className="truncate text-sm font-semibold">{space.name || space.id}</h1>
+        <div className="flex shrink-0 items-center gap-2 border-b px-4 py-2 sm:px-6">
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-sm font-semibold">{space.name || space.id}</h1>
+          </div>
+          {onClose && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0 lg:hidden"
+              aria-label="Back to conversation"
+              onClick={onClose}
+            >
+              <PanelRightClose className="h-4 w-4" aria-hidden="true" />
+            </Button>
+          )}
         </div>
         <div
           className={`order-1 min-h-0 flex-1 sm:order-2 ${
