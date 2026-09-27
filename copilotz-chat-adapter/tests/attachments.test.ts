@@ -85,5 +85,11 @@ test('base64 media uses raw upload bytes and remote URLs never become authentica
     ),
     /local Blob/
   );
-  assert.equal(calls, 1);
+  assert.equal(calls, 0);
+});
+
+test('supported image is sent inline without asset upload', async () => {
+  const assets = { upload: async () => { throw new Error('unexpected upload'); } } as unknown as CoreClient['assets'];
+  const content = await uploadAttachments(assets, [{ kind: 'image', mimeType: 'image/jpeg', fileName: 'photo.jpg', dataUrl: 'data:image/jpeg;base64,AQID' }], { idempotencyKey: 'image', signal: new AbortController().signal });
+  assert.deepEqual(content, [{ type: 'image', bytes: new Uint8Array([1, 2, 3]), mediaType: 'image/jpeg', role: 'attachment', disposition: 'inline', name: 'photo.jpg' }]);
 });
