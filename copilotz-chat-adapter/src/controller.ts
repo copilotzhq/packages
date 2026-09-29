@@ -18,6 +18,7 @@ import { createHistoryReader } from './history.ts';
 import { reconcileThreadMessages } from './messageReconciliation.ts';
 import { mergePersistedToolResults } from './toolActivity.ts';
 import { createToolCallDraftStore } from './toolCallDraftStore.ts';
+import { resolveAgentSender, type SenderResolutionOptions } from './senders.ts';
 import {
   type ChatProjection,
   emptyProjection,
@@ -270,23 +271,25 @@ export function createChatController(
   const toolCallDraftSource = createToolCallDraftStore({
     onSubscriberError: reportSubscriberFailure
   });
+  /** How senders are presented: configured agents, the current person, the assistant fallback. */
+  const senderOptions = (): SenderResolutionOptions => ({
+    agents: options.agentOptions,
+    user: options.userId
+      ? {
+          id: options.userId,
+          name: options.userName,
+          avatarUrl: options.userAvatar
+        }
+      : null,
+    assistantName: options.assistantName
+  });
   const projectHistory = (
     page: Parameters<typeof history.project>[0],
     signal = historyAbort.signal
   ) =>
     history.project(page, {
       signal,
-      senderOptions: {
-        agents: options.agentOptions,
-        user: options.userId
-          ? {
-              id: options.userId,
-              name: options.userName,
-              avatarUrl: options.userAvatar
-            }
-          : null,
-        assistantName: options.assistantName
-      }
+      senderOptions: senderOptions()
     });
   const mergeHistory = (
     current: ChatProjection,
@@ -555,7 +558,7 @@ export function createChatController(
         frame.kind === 'output'
           ? options.eventInterceptor?.(frame.output)
           : undefined;
-      const next = projectFrame(projection, frame, Date.now());
+      const next = projectFrame(projection, frame, Date.now(), senderOptions());
       const restored = bootstrap.apply(
         frame,
         next.state,
@@ -904,9 +907,6 @@ export function createChatController(
         }
       ];
       if (preparingId) {
-        const agent = options.agentOptions?.find(
-          (value) => value.id === preparingAgentId
-        );
         projection.messages = [
           ...projection.messages,
           {
@@ -915,12 +915,10 @@ export function createChatController(
             content: '',
             timestamp: Date.now(),
             isStreaming: true,
-            sender: {
-              type: 'agent',
-              id: preparingAgentId!,
-              agentId: preparingAgentId!,
-              name: agent?.name ?? preparingAgentId!
-            },
+            sender: resolveAgentSender(
+              { id: preparingAgentId!, name: preparingAgentId! },
+              senderOptions()
+            ),
             metadata: { clientMessageId: idempotencyKey },
             activity: {
               items: [

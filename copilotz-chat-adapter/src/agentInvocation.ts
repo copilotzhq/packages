@@ -1,6 +1,7 @@
 import type { ChatMessage } from '@copilotz/chat-ui';
 import { finalizeAssistantMessage } from './activity.ts';
 import { getCanonicalLlmAttemptId } from './messageReconciliation.ts';
+import { resolveAgentSender, type SenderResolutionOptions } from './senders.ts';
 
 /** Model preparation belongs to one invocation, never to its whole operation. */
 export function projectAgentInvocation(
@@ -8,7 +9,8 @@ export function projectAgentInvocation(
   type: string,
   operationId: string,
   data: Record<string, unknown>,
-  at: number
+  at: number,
+  senderOptions: SenderResolutionOptions = {}
 ): ChatMessage[] {
   const run = data.actionRunId;
   if (typeof run !== 'string') return messages;
@@ -33,6 +35,7 @@ export function projectAgentInvocation(
     typeof metadata.agentId !== 'string'
   )
     return messages;
+  const agentId = metadata.agentId;
 
   // A send may have already rendered a preparation entry before the
   // operation receipt arrived. Keep that entry as the presentation identity
@@ -51,16 +54,18 @@ export function projectAgentInvocation(
       index === preparationIndex
         ? {
             ...message,
-            sender: {
-              type: 'agent',
-              id: metadata.agentId as string,
-              agentId: metadata.agentId as string,
-              name:
-                message.sender?.agentId === metadata.agentId &&
-                  message.sender.name
-                  ? message.sender.name
-                  : metadata.agentId as string
-            },
+            // The agent's configured presentation (name, avatar, color) wins,
+            // exactly as it does for the finished message.
+            sender: resolveAgentSender(
+              {
+                id: agentId,
+                name:
+                  message.sender?.agentId === agentId && message.sender.name
+                    ? message.sender.name
+                    : agentId
+              },
+              senderOptions
+            ),
             metadata: {
               ...(message.metadata ?? {}),
               operationId,
@@ -79,12 +84,7 @@ export function projectAgentInvocation(
       content: '',
       timestamp: at,
       isStreaming: true,
-      sender: {
-        type: 'agent',
-        id: metadata.agentId,
-        agentId: metadata.agentId,
-        name: metadata.agentId
-      },
+      sender: resolveAgentSender({ id: agentId, name: agentId }, senderOptions),
       metadata: { operationId, llmAttemptId: run },
       activity: {
         items: [

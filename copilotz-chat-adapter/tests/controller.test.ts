@@ -551,6 +551,74 @@ test('new-thread preparation keeps its identity through invocation and tokens', 
   c.dispose();
 });
 
+test('the pending reply is presented as the configured agent from the first moment to the last', async () => {
+  const f = fixture();
+  const west = {
+    id: 'West',
+    name: 'West',
+    color: '#9d8cff',
+    avatarUrl: 'data:image/svg+xml,west'
+  };
+  const c = createChatController(f.core as unknown as CoreClient, {
+    userId: 'owner',
+    // The room addresses the agent by the lowercase id the server knows.
+    targetAgentName: 'west',
+    agentOptions: [west]
+  });
+  await c.send('hello');
+  const senderOf = () =>
+    c.getSnapshot().messages.find((m) => m.role === 'assistant')?.sender;
+  const expected = {
+    type: 'agent',
+    id: 'West',
+    agentId: 'West',
+    externalId: 'west',
+    name: 'West',
+    color: west.color,
+    avatarUrl: west.avatarUrl
+  };
+  assert.deepEqual(senderOf(), expected);
+  await f.observations[0].options.onFrame({
+    kind: 'output',
+    output: {
+      type: 'llm.call.invoked',
+      operationId: 'send-operation',
+      data: {
+        actionRunId: 'attempt',
+        metadata: { schema: 'copilotz.core.llm-call.v1', agentId: 'west' }
+      }
+    }
+  } as any);
+  assert.deepEqual(senderOf(), expected);
+  await f.observations[0].options.onFrame({
+    kind: 'output',
+    output: {
+      type: 'stream.output',
+      operationId: 'send-operation',
+      streamId: 'answer',
+      role: 'content',
+      mediaType: 'text/plain',
+      metadata: {
+        sourceActionRunId: 'attempt',
+        copilotzCore: { agent: { id: 'west', name: 'west' } }
+      }
+    }
+  } as any);
+  assert.deepEqual(senderOf(), expected);
+  // A reply from an agent the host did not configure still shows what it can.
+  const d = createChatController(f.core as unknown as CoreClient, {
+    userId: 'owner',
+    targetAgentName: 'north'
+  });
+  await d.send('hello');
+  assert.deepEqual(
+    d.getSnapshot().messages.find((m) => m.role === 'assistant')?.sender,
+    { type: 'agent', id: 'north', agentId: 'north', name: 'north' }
+  );
+  c.dispose();
+  d.dispose();
+});
+
 test('simultaneous navigation cannot publish or fetch the superseded thread', async () => {
   const f = fixture();
   const reads: string[] = [];
