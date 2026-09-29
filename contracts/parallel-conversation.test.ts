@@ -150,15 +150,21 @@ Deno.test("parallel Agents, nested asks and pipelines retain exact identities th
     for (let index = 0; index < 1000; index++) {
       const state = controller.getSnapshot();
       if (state.error) throw state.error;
-      if (
-        !state.isStreaming && state.messages.some((message) =>
-          message.content === "Answer a 🌎"
-        ) && state.messages.some((message) => message.content === "Answer b 🌎")
-      ) break;
+      // Streaming can stop before the nonblocking history refresh replaces
+      // provisional live attempt IDs with their durable message IDs.
+      const hasBothAnswers = state.messages.some((message) =>
+        message.content === "Answer a 🌎"
+      ) && state.messages.some((message) => message.content === "Answer b 🌎");
+      const hasCanonicalIds = state.messages.every((message) =>
+        !message.id.startsWith("live:")
+      );
+      if (!state.isStreaming && hasBothAnswers && hasCanonicalIds) break;
       if (index === 999) {
         throw new Error(
           `Parallel conversation did not settle: ${
             JSON.stringify({
+              streaming: state.isStreaming,
+              messageIds: state.messages.map((message) => message.id),
               calls: [...calls],
               executions,
               messages: state.messages.map((message) => ({
