@@ -35,6 +35,8 @@
     "age": "P1D",
     "exclude": [
       "jsr:@copilotz/copilotz",
+      "jsr:@oxian/ominipg",
+      "npm:@jsr/oxian__ominipg",
       "npm:@jsr/copilotz__copilotz",
       "npm:@copilotz/chat-ui",
       "npm:@copilotz/chat-adapter",
