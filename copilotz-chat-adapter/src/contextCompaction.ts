@@ -1,4 +1,5 @@
 import type { ChatMessage } from '@copilotz/chat-ui';
+import { resolveAgentSender, type SenderResolutionOptions } from './senders.ts';
 
 /** Only the foreground wait is public activity; maintenance turns stay private. */
 export function projectContextCompaction(
@@ -6,7 +7,8 @@ export function projectContextCompaction(
   type: string,
   operationId: string,
   data: Record<string, unknown>,
-  at: number
+  at: number,
+  senderOptions: SenderResolutionOptions = {}
 ): ChatMessage[] {
   if (!type.startsWith('copilotz.core.context.compact.')) return messages;
   const metadata = data.metadata as Record<string, unknown> | undefined;
@@ -29,8 +31,8 @@ export function projectContextCompaction(
   if (!type.endsWith('.invoked') || messages.some(message => message.id === id)) return messages;
   return [...messages, {
     id, role: 'assistant', content: '', timestamp: at, isStreaming: true,
-    sender: { type: 'agent', id: metadata.agentId, agentId: metadata.agentId,
-      name: typeof metadata.agentName === 'string' ? metadata.agentName : metadata.agentId },
+    sender: resolveAgentSender({ id: metadata.agentId,
+      name: typeof metadata.agentName === 'string' ? metadata.agentName : metadata.agentId }, senderOptions),
     metadata: { operationId, contextCompactionRunId: run },
     activity: { items: [{ id: `${run}:compacting`, kind: 'compacting', status: 'active', startedAt: at }] }
   }];

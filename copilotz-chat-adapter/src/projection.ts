@@ -16,6 +16,7 @@ import {
 import { projectAgentInvocation } from './agentInvocation.ts';
 import { projectContextCompaction } from './contextCompaction.ts';
 import { encodeBase64 } from './messageContract.ts';
+import { resolveAgentSender, type SenderResolutionOptions } from './senders.ts';
 import { getAttachmentKindFromMimeType } from '@copilotz/chat-ui/model';
 
 type ToolOrigin = {
@@ -118,7 +119,8 @@ export function projectHistoryMessages(
 export function projectFrame(
   previous: ChatProjection,
   frame: ObservationFrame,
-  at: number
+  at: number,
+  senderOptions: SenderResolutionOptions = {}
 ) {
   const state: ChatProjection = {
     messages: previous.messages,
@@ -137,13 +139,21 @@ export function projectFrame(
         ? object(output.metadata).sourceAction
         : output.data
     );
-    state.messages = projectContextCompaction(state.messages, output.type, operationId, data, at);
+    state.messages = projectContextCompaction(
+      state.messages,
+      output.type,
+      operationId,
+      data,
+      at,
+      senderOptions
+    );
     state.messages = projectAgentInvocation(
       state.messages,
       output.type,
       operationId,
       data,
-      at
+      at,
+      senderOptions
     );
     const origin = object(object(data.metadata).copilotzToolAction);
     if (
@@ -170,15 +180,14 @@ export function projectFrame(
         string(metadata.llmAttemptId) ||
         string(output.streamId);
       const agent = object(object(metadata.copilotzCore).agent);
-      const sender: ChatSender | undefined =
-        typeof agent.id === 'string'
-          ? {
-              type: 'agent',
-              id: agent.id,
-              agentId: agent.id,
-              name: string(agent.name) || agent.id
-            }
-          : undefined;
+      // A streaming reply is presented as the finished one will be: through
+      // the configured agent (name, avatar, color) when there is one.
+      const sender: ChatSender | undefined = string(agent.id)
+        ? resolveAgentSender(
+            { id: string(agent.id), name: string(agent.name) || string(agent.id) },
+            senderOptions
+          )
+        : undefined;
       if (sender)
         state.messages = state.messages.map((message) =>
           message.metadata?.llmAttemptId === attemptId

@@ -1,5 +1,14 @@
 # @copilotz/chat-adapter
 
+## 0.82.2 — 2026-09-29
+
+An agent that is preparing or streaming a reply is now presented as the
+`AgentOption` the host configured (name, avatar, color), the same as its
+finished message. Before, the pending and streaming entries showed the agent's
+raw id and initials until the reply arrived. This covers the placeholder shown
+on send, an agent invoked by another agent, live streaming, and foreground
+consolidation.
+
 ## 0.77.0 — 2026-09-18
 
 Support host-owned Core clients and lifecycle hooks for send start, send
