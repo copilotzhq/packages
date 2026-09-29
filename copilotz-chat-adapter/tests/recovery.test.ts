@@ -264,7 +264,7 @@ test('a delayed send receipt treats terminal cancellation as an expected result'
       code: 'action_not_completed'
     });
   };
-  f.core.operations.get = async () => ({ state: 'cancelled' });
+  f.core.operations.get = async () => ({ data: { state: 'cancelled' } });
   const c = f.controller();
   await c.openThread('thread');
   const sending = c.send('hello');
@@ -407,6 +407,31 @@ test('active operations stay active between calls and heartbeat repairs missing 
     await frame({ kind: 'output', checkpoint: 'heartbeat', output: { type: 'observation.heartbeat' }} as never);
     await wait();
     assert.equal(c.getSnapshot().isStreaming, false);
+  } finally { c.dispose(); }
+});
+
+test('operation status HTTP envelopes let heartbeats repair a missed completion frame', async () => {
+  const f = fixture();
+  let state = 'running';
+  let reads = 0;
+  f.core.operations.get = async () => {
+    reads += 1;
+    return { data: { state } };
+  };
+  const c = f.controller();
+  try {
+    await c.openThread('thread');
+    const frame = f.observations[0].options.onFrame!;
+    await frame({ kind: 'output', checkpoint: 'started', output: { type: 'message.created', operationId: 'op' }} as never);
+    await wait();
+    assert.equal(c.getSnapshot().isStreaming, true);
+
+    state = 'completed';
+    await frame({ kind: 'output', checkpoint: 'heartbeat', output: { type: 'observation.heartbeat' }} as never);
+    await wait();
+
+    assert.equal(c.getSnapshot().isStreaming, false);
+    assert.equal(reads, 2);
   } finally { c.dispose(); }
 });
 

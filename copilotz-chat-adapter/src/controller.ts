@@ -455,13 +455,20 @@ export function createChatController(
       publish({ isStopping: hasStoppingForGeneration(generation) });
     }
   };
-  const isTerminalOperationStatus = (
+  type TerminalOperationState = 'completed' | 'failed' | 'cancelled';
+  const isTerminalOperationState = (
     value: unknown
-  ): value is { state: 'completed' | 'failed' | 'cancelled' } => {
-    const state = (value as { state?: unknown })?.state;
-    return (
-      state === 'completed' || state === 'failed' || state === 'cancelled'
-    );
+  ): value is TerminalOperationState =>
+    value === 'completed' || value === 'failed' || value === 'cancelled';
+  const terminalOperationState = (
+    value: unknown
+  ): TerminalOperationState | undefined => {
+    if (!value || typeof value !== 'object') return undefined;
+    const response = value as { state?: unknown; data?: unknown };
+    if (isTerminalOperationState(response.state)) return response.state;
+    if (!response.data || typeof response.data !== 'object') return undefined;
+    const state = (response.data as { state?: unknown }).state;
+    return isTerminalOperationState(state) ? state : undefined;
   };
   const waitForStopConfirmation = async (
     operationId: string,
@@ -474,7 +481,7 @@ export function createChatController(
       if (signal.aborted || disposed) return false;
       try {
         const status = await core.operations.get(operationId);
-        if (isTerminalOperationStatus(status)) return true;
+        if (terminalOperationState(status)) return true;
       } catch {
         // Preserve the result error below when status cannot be read.
       }
@@ -514,12 +521,13 @@ export function createChatController(
     if (operationStatusReads.has(key) || projection.terminalOperations.has(operationId)) return;
     operationStatusReads.add(key);
     void Promise.resolve().then(() => core.operations.get(operationId)).then(async (status) => {
+      const state = terminalOperationState(status);
       if (disposed || generation !== epoch || token !== observationToken ||
-          projection.terminalOperations.has(operationId) || !isTerminalOperationStatus(status)) return;
+          projection.terminalOperations.has(operationId) || !state) return;
       await apply({
         kind: 'output',
         checkpoint: checkpoint!,
-        output: { type: `operation.${status.state}`, operationId }
+        output: { type: `operation.${state}`, operationId }
       } as ObservationFrame, generation, undefined, token);
     }).catch(() => {
       // A failed read is not completion. Retry on the next observation heartbeat.
