@@ -27,6 +27,8 @@ import { ChatInput } from "./ChatInput";
 import { UserProfile } from "./UserProfile";
 import { useChatUserContext } from "./UserContext";
 import { groupMessagesForRender } from "../../lib/messageGrouping";
+import { createOwnMessagePredicate } from "../../lib/messageOwnership";
+import { resolveDarkMode } from "../../lib/theme";
 import { ScrollArea } from "../ui/scroll-area";
 import { Skeleton } from "../ui/skeleton";
 import { TooltipProvider } from "../ui/tooltip";
@@ -152,6 +154,25 @@ export const ChatUI: React.FC<ChatV2Props> = ({
     () => mergeConfig(defaultChatConfig, userConfig),
     [userConfig]
   );
+
+  // Apply a theme only when the host chose one; hosts that manage the `dark`
+  // class themselves are left alone.
+  const configuredTheme = userConfig?.ui?.theme;
+  useEffect(() => {
+    if (!configuredTheme || typeof document === "undefined") return;
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem("theme");
+    } catch {
+      // Storage can be unavailable; the configured theme still applies.
+    }
+    const systemPrefersDark =
+      globalThis.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+    document.documentElement.classList.toggle(
+      "dark",
+      resolveDarkMode(configuredTheme, saved, systemPrefersDark)
+    );
+  }, [configuredTheme]);
 
   const [internalSpaceId, setInternalSpaceId] = useState<string | null>(null);
   const effectiveSpaceId = selectedSpaceId === undefined ? internalSpaceId : selectedSpaceId;
@@ -283,6 +304,10 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   const groupedMessages = useMemo(
     () => groupMessagesForRender(messages),
     [messages]
+  );
+  const isOwnMessage = useMemo(
+    () => createOwnMessagePredicate(messages, user?.id),
+    [messages, user?.id]
   );
 
   // Virtualizer — only renders messages visible in the viewport + overscan buffer
@@ -1135,6 +1160,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
                                     message={message}
                                     fragments={group.messages}
                                     {...messageProps}
+                                    isUser={isOwnMessage(message)}
                                     isExpanded={Boolean(
                                       expandedMessageIds[message.id]
                                     )}

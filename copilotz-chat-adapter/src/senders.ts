@@ -181,7 +181,7 @@ export const resolveCanonicalParticipantSender = (
       id: externalId,
       externalId,
       name: currentUserName ?? displayName,
-      avatarUrl: clean(options.user?.avatarUrl),
+      avatarUrl: isCurrentUser ? clean(options.user?.avatarUrl) : undefined,
       participantId
     });
   }

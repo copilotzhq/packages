@@ -1,6 +1,6 @@
 {
   "name": "copilotz-packages",
-  "version": "0.82.0",
+  "version": "0.82.1",
   "copilotzCoreVersion": "0.82.0",
   "private": true,
   "workspaces": [
