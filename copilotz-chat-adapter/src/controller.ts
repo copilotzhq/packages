@@ -222,6 +222,11 @@ export function createChatController(
     }
   };
   const subscriberError = (error: unknown) => {
+    try {
+      console.error('[CopilotzChat] The chat presentation could not apply an update.', error);
+    } catch {
+      // Diagnostics must not change the result of an already-failed update.
+    }
     snapshot = {
       ...snapshot,
       error,

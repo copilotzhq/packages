@@ -168,6 +168,41 @@ test('send start is reported before attachment upload and settled exactly once',
   c.dispose();
 });
 
+test('an unreadable local attachment prevents message submission and reports recovery guidance', async () => {
+  const f = fixture();
+  const source = new Blob(['placeholder']);
+  Object.defineProperty(source, 'arrayBuffer', {
+    value: async () => {
+      throw new DOMException('The I/O read operation failed.', 'NotReadableError');
+    },
+  });
+  let uploads = 0;
+  let sends = 0;
+  f.core.assets.upload = async () => {
+    uploads++;
+    return { data: { content: { assetId: 'unexpected' } } };
+  };
+  f.core.threads.send = async () => {
+    sends++;
+    return { operationId: 'unexpected' };
+  };
+  const c = f.controller();
+  await c.openThread('a');
+  await c.send('', [{
+    kind: 'file',
+    source,
+    dataUrl: 'blob:preview-only',
+    mimeType: 'text/x-tex',
+    fileName: 'drive-not-synced.tex',
+  }]);
+
+  assert.equal(uploads, 0);
+  assert.equal(sends, 0);
+  assert.match(String(c.getSnapshot().error), /drive-not-synced\.tex/);
+  assert.match(String(c.getSnapshot().error), /download.*available offline.*attach it again/i);
+  c.dispose();
+});
+
 test('Stop on a new thread does not cancel a submission owned by the previously selected thread', async () => {
   const f = fixture();
   const receipt = deferred<{ operationId: string }>();

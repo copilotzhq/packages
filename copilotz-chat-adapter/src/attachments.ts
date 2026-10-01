@@ -2,6 +2,44 @@ import type { CoreClient } from '@copilotz/copilotz/core/client';
 import type { ContentInput } from '@copilotz/copilotz/content';
 import type { MediaAttachment } from '@copilotz/chat-ui';
 
+function unreadableAttachmentError(
+  attachment: MediaAttachment,
+  cause: unknown
+): Error {
+  const label = attachment.fileName
+    ? `“${attachment.fileName}”`
+    : 'the attached file';
+  return new Error(
+    `Could not read ${label} from local storage. Download it or make it available offline, then attach it again.`,
+    { cause }
+  );
+}
+
+async function materializeLocalBlob(
+  body: Blob,
+  attachment: MediaAttachment,
+  signal: AbortSignal
+): Promise<Blob> {
+  signal.throwIfAborted();
+  let bytes: ArrayBuffer;
+  try {
+    bytes = await body.arrayBuffer();
+    signal.throwIfAborted();
+  } catch (error) {
+    signal.throwIfAborted();
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'name' in error &&
+      error.name === 'AbortError'
+    ) {
+      throw error;
+    }
+    throw unreadableAttachmentError(attachment, error);
+  }
+  return new Blob([bytes], { type: attachment.mimeType || body.type });
+}
+
 /** Sends supported images inline; uploads other browser-local bodies as references. */
 export async function uploadAttachments(
   assets: CoreClient['assets'],
@@ -10,9 +48,12 @@ export async function uploadAttachments(
 ): Promise<ContentInput[]> {
   const refs: ContentInput[] = [];
   for (const [index, attachment] of attachments.entries()) {
+    options.signal.throwIfAborted();
     let body: Blob;
+    let localFileBody = false;
     if (attachment.kind === 'file' && attachment.source instanceof Blob) {
       body = attachment.source;
+      localFileBody = true;
     } else {
       const comma = attachment.dataUrl.indexOf(',');
       if (
@@ -29,6 +70,7 @@ export async function uploadAttachments(
       body = new Blob([bytes], { type: attachment.mimeType });
     }
     if (attachment.kind === 'image' && /^image\/(?:png|jpeg|webp|gif)$/.test(attachment.mimeType)) {
+      options.signal.throwIfAborted();
       refs.push({
         type: 'image',
         bytes: new Uint8Array(await body.arrayBuffer()),
@@ -37,8 +79,15 @@ export async function uploadAttachments(
         disposition: 'inline',
         ...(attachment.fileName ? { name: attachment.fileName } : {})
       });
+      options.signal.throwIfAborted();
       continue;
     }
+    // Snapshot picker-backed Files before fetch so the request owns replayable
+    // bytes even when the browser's file provider only offers an on-demand stream.
+    if (localFileBody) {
+      body = await materializeLocalBlob(body, attachment, options.signal);
+    }
+    options.signal.throwIfAborted();
     const uploaded = (await assets.upload(body, {
       mediaType: attachment.mimeType,
       filename: attachment.fileName,

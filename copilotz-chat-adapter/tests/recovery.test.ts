@@ -108,6 +108,74 @@ test('a subscriber failure does not prevent applied checkpoint progress', async 
   c.dispose();
 });
 
+test('chat subscriber failures log the original error and still reach healthy subscribers', async () => {
+  const f = fixture();
+  const c = f.controller();
+  await c.openThread('thread');
+  const renderError = new Error('Maximum update depth exceeded');
+  const logs: unknown[][] = [];
+  const originalConsoleError = console.error;
+  let healthyError: unknown;
+  console.error = (...args: unknown[]) => logs.push(args);
+
+  try {
+    c.subscribe(() => {
+      throw renderError;
+    });
+    c.subscribe(() => {
+      healthyError = c.getSnapshot().error;
+    });
+
+    await f.observations[0].options.onFrame?.({
+      kind: 'output',
+      checkpoint: 'subscriber-failure-diagnostic',
+      output: { type: 'message.created' }
+    });
+
+    assert.equal(logs.length, 1);
+    assert.equal(logs[0][1], renderError);
+    assert.equal(c.getSnapshot().error, renderError);
+    assert.equal(healthyError, renderError);
+  } finally {
+    console.error = originalConsoleError;
+    c.dispose();
+  }
+});
+
+test('draft subscriber diagnostics cannot interrupt error propagation when console.error throws', () => {
+  const c = fixture().controller();
+  const renderError = new Error('draft render failed');
+  const originalConsoleError = console.error;
+  let healthyError: unknown;
+  console.error = () => {
+    throw new Error('console unavailable');
+  };
+
+  try {
+    c.subscribe(() => {
+      healthyError = c.getSnapshot().error;
+    });
+    c.toolCallDraftSource.subscribe('draft', () => {
+      throw renderError;
+    });
+
+    assert.doesNotThrow(() => c.toolCallDraftSource.apply({
+      draftId: 'draft',
+      llmAttemptId: 'attempt',
+      callIndex: 0,
+      sequence: 1,
+      toolName: 'lookup',
+      phase: 'start',
+      delta: '{'
+    }));
+    assert.equal(c.getSnapshot().error, renderError);
+    assert.equal(healthyError, renderError);
+  } finally {
+    console.error = originalConsoleError;
+    c.dispose();
+  }
+});
+
 test('a frame projection failure resyncs history before reconnecting', async () => {
   const f = fixture();
   let messageReads = 0;
