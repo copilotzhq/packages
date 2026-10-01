@@ -606,6 +606,11 @@ export const ChatUI: React.FC<ChatV2Props> = ({
 
   useEffect(() => {
     const validMessageIds = new Set(groupedMessages.map((group) => group.id));
+    const hasStaleExpandedMessage = Object.keys(expandedMessageIds).some(
+      (messageId) => !validMessageIds.has(messageId)
+    );
+
+    if (!hasStaleExpandedMessage) return;
 
     setExpandedMessageIds((prev) => {
       const activeIds = Object.keys(prev);
@@ -623,7 +628,7 @@ export const ChatUI: React.FC<ChatV2Props> = ({
       });
       return next;
     });
-  }, [groupedMessages]);
+  }, [expandedMessageIds, groupedMessages]);
 
   // Handle scroll position — only update state when the value actually changes
   const handleScroll = useCallback(
