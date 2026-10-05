@@ -40,7 +40,7 @@ try {
     await delay(350);
     const cdp = await context.newCDPSession(page);
     const touch = (type, point) => cdp.send("Input.dispatchTouchEvent", { type, touchPoints: point ? [{ ...point, id: 1 }] : [] });
-    const row = (id) => page.locator('[data-sidebar="menu-button"]').filter({ hasText: new RegExp(`^Conversation ${id}$`) });
+    const row = (id) => page.locator('[data-sidebar="menu-button"]').filter({ has: page.getByText(`Conversation ${id}`, { exact: true }) });
     await row(1).click();
     assert.equal(await page.evaluate(() => window.fixture.selected), "thread-1");
     assert.deepEqual(await page.evaluate(() => window.moves), []);
@@ -81,7 +81,7 @@ try {
     await touch("touchMove", await center(target));
     await delay(100);
     assert.ok((await target.getAttribute("class")).includes("border-sidebar-ring"));
-    assert.ok(await page.getByText("Release to move to Destination 2", { exact: true }).isVisible());
+    assert.ok(await page.locator("[data-touch-space-destinations]").getByText("Release to move to Destination 2", { exact: true }).isVisible());
     await touch("touchEnd");
     await delay(180);
     assert.deepEqual(await page.evaluate(() => window.moves), [{ threadId: "thread-0", spaceId: "space-2" }]);
@@ -132,15 +132,24 @@ try {
     const viewport = page.getByLabel("Move conversation destinations");
     const edge = await viewport.boundingBox();
     await touch("touchMove", { x: edge.x + 80, y: edge.y + edge.height - 2 });
-    await delay(1600);
+    // RAF elapsed is deliberately capped. A slow CI compositor takes longer
+    // than a physical display; assert actual movement with a bounded wait.
+    await page.waitForFunction(() => document.querySelector('[aria-label="Move conversation destinations"]').scrollTop > 450, null, { timeout: 10000 });
     const down = await viewport.evaluate((node) => node.scrollTop);
     assert.ok(down > 450, "bottom hold scrolls");
-    await touch("touchMove", { x: edge.x + 80, y: edge.y + 2 });
-    await delay(400);
+    const topEdge = await viewport.boundingBox();
+    await touch("touchMove", { x: topEdge.x + 80, y: topEdge.y + 2 });
+    await page.waitForFunction((previous) => document.querySelector('[aria-label="Move conversation destinations"]').scrollTop < previous - 30, down, { timeout: 10000 });
     assert.ok(await viewport.evaluate((node) => node.scrollTop) < down, "top hold reverses scroll");
-    await touch("touchMove", { x: edge.x + 80, y: edge.y + edge.height - 2 });
-    await delay(2200);
-    assert.ok(await page.locator('[data-touch-space-target="space-30"]').isVisible());
+    const bottomEdge = await viewport.boundingBox();
+    await touch("touchMove", { x: bottomEdge.x + 80, y: bottomEdge.y + bottomEdge.height - 2 });
+    await page.waitForFunction(() => {
+      const node = document.querySelector('[aria-label="Move conversation destinations"]');
+      return node.scrollTop >= node.scrollHeight - node.clientHeight - 2;
+    }, null, { timeout: 10000 });
+    const last = await page.locator('[data-touch-space-target="space-30"]').boundingBox();
+    const finalViewport = await viewport.boundingBox();
+    assert.ok(last.y >= finalViewport.y && last.y + last.height <= finalViewport.y + finalViewport.height + 1, "offscreen target scrolled fully into viewport");
     await drop("space-30");
     assert.deepEqual(await page.evaluate(() => window.moves), [{ threadId: "thread-0", spaceId: "space-30" }]);
     await page.touchscreen.tap(...Object.values(await center(handle)));
@@ -211,7 +220,8 @@ try {
   await page.goto(url);
   assert.equal(await page.locator('[data-touch-drag-handle="thread-0"]').isVisible(), false);
   await page.getByRole("button", { name: "Spaces", exact: true }).click();
-  const row = page.locator('[data-sidebar="menu-button"]').filter({ hasText: /^Conversation 0$/ });
+  await page.getByRole("button", { name: "Expand Original Space conversations", exact: true }).click();
+  const row = page.locator('[data-sidebar="menu-button"]').filter({ has: page.getByText("Conversation 0", { exact: true }) });
   await row.waitFor({ state: "visible" });
   assert.equal(await row.getAttribute("draggable"), "true");
   await row.dispatchEvent("dragstart");
