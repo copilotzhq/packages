@@ -575,3 +575,43 @@ MIT — see [LICENSE](./LICENSE)
 <p align="center">
   <strong>Ship your agent's interface, not your UI backlog.</strong>
 </p>
+
+## Touch conversation moves and narrow Space navigation
+
+When Space dragging is enabled, narrow/coarse-pointer sidebars show a separate
+conversation grip. Drag from this grip; ordinary title taps select and row swipes
+scroll. Tap/keyboard activation opens the existing **Move to Space** picker; the
+More menu retains the same alternative. The active destination list ignores the
+current search/grouping, excludes archived/source destinations, names/highlights
+the hover target, and scrolls when held near either edge. One eligible release
+calls `onMoveThreadToSpace` once. Cancellation, losing capture/focus, a second
+pointer, source reassignment/removal, or destination identity/order changes make
+no move. The active conversation remains open; no destination navigation or
+participant-membership change is made by this presentational UI.
+
+The host owns authorization, persistence and optimistic rollback. Resolve on
+success (the existing void return is supported), or return `false`/reject on
+failure so the sidebar can announce it and enable retry. Native mouse dragging
+remains on the row. The Space tab strip reserves a separate overflow-control slot
+and reveals the selected tab within its own viewport after selection, resize and
+text scaling. Keyboard arrows/Home/End and ordinary strip scrolling remain.
+
+Focused verification from the repository root:
+
+```sh
+npm -w copilotz-chat-ui test
+npm -w copilotz-chat-adapter test
+PLAYWRIGHT_MODULE=../.tmp/browser-tools/node_modules/playwright/index.mjs \
+  node scripts/check-mobile-space-ux.mjs
+```
+
+The browser fixture requires separately installed Playwright/Chromium and built
+chat-ui CSS. Its default import is `playwright`; `CHROMIUM_EXECUTABLE` is optional.
+It mounts real Sidebar/SpaceView components with disposable host data. The HTTP
+fixture/browser exist only for the script lifetime. Bundles/screenshots/receipt
+stay in `.tmp/mobile-browser/`. Chromium input checks are not physical iOS/Android,
+live backend persistence or notch/safe-area acceptance.
+
+This source/test fixture was reconstructed after a sandbox worker restored an
+older checkpoint. Earlier passing execution receipts are historical, not proof
+that this reconstructed tree passes; rerun checks only after source retention.

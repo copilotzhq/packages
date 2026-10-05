@@ -250,6 +250,7 @@ export const SpaceView: React.FC<SpaceViewProps> = ({
   const addMemberOperation = useRef(0);
   const removeMemberOperation = useRef(0);
   const [canScrollTabsRight, setCanScrollTabsRight] = useState(false);
+  const [hasTabsOverflow, setHasTabsOverflow] = useState(false);
 
   useEffect(() => {
     activeSpaceId.current = space.id;
@@ -316,18 +317,34 @@ export const SpaceView: React.FC<SpaceViewProps> = ({
   const canManage = canManageMembers ?? space.permissions?.canManageMembers === true;
   const section = sections.find((candidate) => candidate.id === activeSection) ?? sections[0];
   const resolvedActiveSection = section?.id;
+  const revealActiveTab = () => {
+    const nav = tabNavRef.current;
+    const tab = activeTabRef.current;
+    if (!nav || !tab) return;
+    const viewport = nav.getBoundingClientRect();
+    const bounds = tab.getBoundingClientRect();
+    // Scroll this strip only; its viewport excludes the overflow control.
+    if (bounds.left < viewport.left) nav.scrollLeft += bounds.left - viewport.left;
+    else if (bounds.right > viewport.right) nav.scrollLeft += bounds.right - viewport.right;
+  };
   useEffect(() => {
-    activeTabRef.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [resolvedActiveSection]);
+    revealActiveTab();
+  }, [resolvedActiveSection, hasTabsOverflow, sections]);
   useEffect(() => {
     const nav = tabNavRef.current;
     if (!nav) return;
     const updateOverflow = () => {
+      // Compare with the whole row so reservation cannot sustain its own overflow.
+      setHasTabsOverflow(nav.scrollWidth > (nav.parentElement?.clientWidth ?? nav.clientWidth) + 1);
+      revealActiveTab();
       setCanScrollTabsRight(nav.scrollLeft + nav.clientWidth < nav.scrollWidth - 1);
     };
     updateOverflow();
     const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(updateOverflow);
     observer?.observe(nav);
+    if (nav.parentElement) observer?.observe(nav.parentElement);
+    // Text scaling may change content width without resizing the strip itself.
+    nav.querySelectorAll('[role="tab"]').forEach((tab) => observer?.observe(tab));
     window.addEventListener("resize", updateOverflow);
     return () => {
       observer?.disconnect();
@@ -497,10 +514,10 @@ export const SpaceView: React.FC<SpaceViewProps> = ({
         >
           {customContent ?? resolvedBuiltInContent}
         </div>
-        <div className="relative order-2 shrink-0 border-t pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:order-1 sm:border-t-0 sm:border-b sm:pb-0">
+        <div className="relative order-2 flex min-w-0 shrink-0 items-center border-t pb-[calc(env(safe-area-inset-bottom)+0.5rem)] sm:order-1 sm:border-t-0 sm:border-b sm:pb-0">
           <nav
             ref={tabNavRef}
-            className="flex gap-1 overflow-x-auto px-3 pt-2 sm:px-5 sm:py-2"
+            className="flex min-w-0 flex-1 gap-1 overflow-x-auto px-3 pt-2 sm:px-5 sm:py-2"
             aria-label="Space sections"
             role="tablist"
             onScroll={(event) => {
@@ -537,12 +554,12 @@ export const SpaceView: React.FC<SpaceViewProps> = ({
               </button>
             ))}
           </nav>
-          {canScrollTabsRight && (
-            <>
-              <div className="pointer-events-none absolute inset-y-0 right-8 w-8 bg-gradient-to-l from-background to-transparent" aria-hidden="true" />
+          {hasTabsOverflow && (
+            <div className="flex w-11 shrink-0 items-center justify-center self-stretch pt-2 sm:py-2" data-space-sections-overflow="">
               <button
                 type="button"
-                className="absolute right-1 top-1/2 flex h-8 -translate-y-1/2 items-center rounded-md bg-background/95 px-1 text-muted-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="flex h-9 w-9 items-center justify-center rounded-md bg-background/95 text-muted-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
+                disabled={!canScrollTabsRight}
                 aria-label="Show more Space sections"
                 onClick={() => {
                   const nav = tabNavRef.current;
@@ -552,7 +569,7 @@ export const SpaceView: React.FC<SpaceViewProps> = ({
                 <ChevronRight className="h-4 w-4" aria-hidden="true" />
                 <span className="sr-only">More Space sections</span>
               </button>
-            </>
+            </div>
           )}
         </div>
       </div>

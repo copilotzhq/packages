@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useTouchSpaceDrag } from "../../hooks/useTouchSpaceDrag";
 import {
   ChatSpace,
   ChatSpaceManagementHandler,
@@ -62,6 +63,7 @@ import {
   ChevronRight,
   Edit2,
   Filter,
+  GripVertical,
   MoreHorizontal,
   Plus,
   Search,
@@ -486,7 +488,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   >({});
   const inputRef = useRef<HTMLInputElement>(null);
   const spaceCreateInputRef = useRef<HTMLInputElement>(null);
-  const { setOpen } = useSidebar();
+  const { setOpen, isMobile, openMobile } = useSidebar();
+  const moveInFlight = useRef(false);
+  const rowPointerType = useRef<string | null>(null);
+  const [isMovingThread, setIsMovingThread] = useState(false);
+  const [moveNotice, setMoveNotice] = useState<{ text: string; error?: boolean } | null>(null);
   const spacesConfig = config.features?.spaces;
   const spacesEnabled =
     spacesConfig?.enabled !== false &&
@@ -513,6 +519,39 @@ export const Sidebar: React.FC<SidebarProps> = ({
     () => spaces.filter((space) => space.status !== "archived"),
     [spaces]
   );
+  const commitDragMove = async (threadId: string, spaceId: string | null) => {
+    if (moveInFlight.current || !onMoveThreadToSpace) return;
+    const thread = threads.find((value) => value.id === threadId);
+    if (!thread || (thread.spaceId ?? null) === spaceId) return;
+    if (spaceId && !activeSpaces.some((space) => space.id === spaceId)) return;
+    moveInFlight.current = true;
+    setIsMovingThread(true);
+    const destination = activeSpaces.find((space) => space.id === spaceId)?.name || spaceId || "No Space";
+    setMoveNotice({ text: `Moving conversation to ${destination}…` });
+    try {
+      const result = await onMoveThreadToSpace(threadId, spaceId);
+      if (result === false) throw new Error("This conversation could not be moved. Try again or use Move to Space.");
+      setMoveNotice({ text: `Conversation moved to ${destination}.` });
+    } catch (cause) {
+      setMoveNotice({ text: cause instanceof Error ? cause.message : "This conversation could not be moved. Try again or use Move to Space.", error: true });
+    } finally {
+      moveInFlight.current = false;
+      setIsMovingThread(false);
+    }
+  };
+  const touchDrag = useTouchSpaceDrag({
+    enabled: canDragSpaces && !isMovingThread && (!isMobile || openMobile),
+    threads,
+    spaces: activeSpaces,
+    onMove: (threadId, spaceId) => void commitDragMove(threadId, spaceId),
+    onCancel: () => setMoveNotice({ text: "Move cancelled." }),
+  });
+  const touchDestination = activeSpaces.find((space) => space.id === touchDrag.drag?.targetId);
+  const dragInstruction = touchDrag.drag
+    ? touchDestination
+      ? `Release to move to ${touchDestination.name || touchDestination.id}`
+      : "Drag to a Space. Hold near the list edge to scroll."
+    : null;
   const spaceMap = useMemo(
     () => new Map(spaces.map((space) => [space.id, space])),
     [spaces]
@@ -855,6 +894,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </SidebarHeader>
 
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {dragInstruction || moveNotice?.text}
+      </div>
+      {moveNotice && !touchDrag.drag && (
+        <div className={`px-4 py-2 text-xs ${moveNotice.error ? "text-destructive" : "text-muted-foreground"}`} role={moveNotice.error ? "alert" : undefined}>
+          {moveNotice.text}
+        </div>
+      )}
+      <div className="relative flex min-h-0 flex-1 flex-col">
       <SidebarContent>
         {threads.some((thread) => thread.isArchived) && (
           <div className="mt-2 px-4 py-2 group-data-[collapsible=icon]:hidden">
@@ -906,7 +954,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     if (
                       !canDragSpaces ||
                       !isSpaceGrouping ||
-                      group.unavailable
+                      !group.space || group.space.status === "archived"
                     )
                       return;
                     event.preventDefault();
@@ -919,12 +967,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     if (
                       !canDragSpaces ||
                       !isSpaceGrouping ||
-                      group.unavailable
+                      !group.space || group.space.status === "archived"
                     )
                       return;
                     event.preventDefault();
                     if (draggingThreadId) {
-                      void onMoveThreadToSpace!(draggingThreadId, group.spaceId);
+                      void commitDragMove(draggingThreadId, group.spaceId);
                     }
                     setDraggingThreadId(null);
                     setDragOverSpaceId(null);
@@ -1062,8 +1110,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                 onClick={() => onSelectThread?.(thread.id)}
                                 tooltip={thread.title}
                                 draggable={canDragSpaces}
-                                className="h-auto min-h-9 items-start py-1.5"
-                                onDragStart={() => setDraggingThreadId(thread.id)}
+                                className={`h-auto min-h-9 items-start py-1.5 ${canDragSpaces ? "max-md:pr-20 [@media(pointer:coarse)]:pr-20" : ""}`}
+                                onPointerDown={(event) => { rowPointerType.current = event.pointerType; }}
+                                onDragStart={(event) => {
+                                  // Native mouse dragging works at every width; ordinary
+                                  // touch scrolling never initiates a row drag.
+                                  if (rowPointerType.current === "touch") {
+                                    event.preventDefault();
+                                    return;
+                                  }
+                                  setDraggingThreadId(thread.id);
+                                }}
                                 onDragEnd={() => {
                                   setDraggingThreadId(null);
                                   setDragOverSpaceId(null);
@@ -1087,10 +1144,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                 )}
                               </SidebarMenuButton>
                             )}
+                            {canDragSpaces && editingThreadId !== thread.id && (
+                              <button
+                                type="button"
+                                data-touch-drag-handle={thread.id}
+                                aria-label={`Move ${thread.title || "conversation"} to Space`}
+                                title="Drag to a Space, or tap to choose"
+                                style={{ WebkitTouchCallout: "none" }}
+                                disabled={isMovingThread}
+                                className="absolute right-9 top-0 hidden h-9 w-9 touch-none select-none items-center justify-center rounded-md text-sidebar-foreground/70 hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring max-md:flex [@media(pointer:coarse)]:flex group-data-[collapsible=icon]:hidden"
+                                onPointerDown={(event) => {
+                                  setMoveNotice(null);
+                                  touchDrag.start(event, thread);
+                                }}
+                                onLostPointerCapture={(event) => touchDrag.cancel(event.pointerId)}
+                                onContextMenu={(event) => event.preventDefault()}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  if (event.detail === 0 || !touchDrag.consumeClick()) setSpacePickerThreadId(thread.id);
+                                }}
+                              >
+                                <GripVertical className="h-4 w-4" aria-hidden="true" />
+                              </button>
+                            )}
                             {!editingThreadId && (
                               <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
-                                  <SidebarMenuAction showOnHover className="max-md:opacity-100">
+                                  <SidebarMenuAction showOnHover className={canDragSpaces ? "max-md:opacity-100 max-md:top-0 max-md:right-0 max-md:h-9 max-md:w-9 max-md:after:inset-0 [@media(pointer:coarse)]:top-0 [@media(pointer:coarse)]:right-0 [@media(pointer:coarse)]:h-9 [@media(pointer:coarse)]:w-9 [@media(pointer:coarse)]:after:inset-0" : "max-md:opacity-100"}>
                                     <MoreHorizontal />
                                     <span className="sr-only">More</span>
                                   </SidebarMenuAction>
@@ -1142,6 +1222,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
           })
         )}
       </SidebarContent>
+      {touchDrag.drag && (
+        <div className="absolute inset-0 z-20 flex min-h-0 flex-col bg-sidebar" data-touch-space-destinations="">
+          <div className="shrink-0 border-b border-sidebar-border px-4 py-3 text-xs">
+            <p className="font-medium">{dragInstruction}</p>
+            <p className="mt-1 text-muted-foreground">Release outside a Space to cancel. The conversation stays open.</p>
+          </div>
+          <div ref={touchDrag.targetViewportRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2" aria-label="Move conversation destinations">
+            {activeSpaces.map((space) => {
+              const source = threads.find((thread) => thread.id === touchDrag.drag?.threadId);
+              const eligible = space.id !== source?.spaceId;
+              return (
+                <div key={space.id} data-touch-space-target={eligible ? space.id : undefined} aria-disabled={!eligible || undefined}
+                  className={`mb-1 flex min-h-11 items-center gap-2 rounded-md border px-3 py-2 text-sm ${!eligible ? "border-transparent text-muted-foreground opacity-50" : touchDrag.drag?.targetId === space.id ? "border-sidebar-ring bg-sidebar-accent text-sidebar-accent-foreground" : "border-sidebar-border"}`}>
+                  <SpaceAvatar space={space} />
+                  <span className="min-w-0 flex-1 break-words">{space.name || space.id}</span>
+                  {!eligible && <span className="text-xs">Current</span>}
+                </div>
+              );
+            })}
+            {activeSpaces.length === 0 && <p className="p-3 text-sm text-muted-foreground">No available Spaces</p>}
+          </div>
+        </div>
+      )}
+      </div>
 
       <SidebarFooter className="border-t border-sidebar-border/70 px-3 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-3">
         <UserMenu
