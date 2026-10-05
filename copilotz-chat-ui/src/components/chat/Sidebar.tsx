@@ -1225,7 +1225,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {touchDrag.drag && (
         <div className="absolute inset-0 z-20 flex min-h-0 flex-col bg-sidebar" data-touch-space-destinations="">
           <div className="shrink-0 border-b border-sidebar-border px-4 py-3 text-xs">
-            <p className="font-medium">{dragInstruction}</p>
+            <p className="h-8 line-clamp-2 font-medium leading-4">{dragInstruction}</p>
             <p className="mt-1 text-muted-foreground">Release outside a Space to cancel. The conversation stays open.</p>
           </div>
           <div ref={touchDrag.targetViewportRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-2" aria-label="Move conversation destinations">

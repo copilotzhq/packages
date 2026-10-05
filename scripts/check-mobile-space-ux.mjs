@@ -60,7 +60,30 @@ try {
     await row(0).click();
     const start = async () => {
       await content.evaluate((node) => { node.scrollTop = 0; });
-      await delay(300);
+      // The Sheet opens with a 500ms animation. Coordinate input has no
+      // Playwright actionability wait: do not target a moving handle.
+      await handle.waitFor({ state: "visible" });
+      await page.waitForFunction(() => {
+        const handle = document.querySelector('[data-touch-drag-handle="thread-0"]');
+        const sheet = handle?.closest('[data-sidebar="sidebar"][data-mobile="true"]');
+        if (!handle || handle.disabled || !sheet || sheet.dataset.state !== "open" ||
+          sheet.getAnimations().some((animation) => animation.playState === "running")) {
+          window.dragHandleReadiness = null;
+          return false;
+        }
+        const rect = handle.getBoundingClientRect();
+        const point = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+        if (!rect.width || !rect.height || !handle.contains(document.elementFromPoint(point.x, point.y))) {
+          window.dragHandleReadiness = null;
+          return false;
+        }
+        const previous = window.dragHandleReadiness;
+        if (!previous || previous.node !== handle || previous.x !== point.x || previous.y !== point.y) {
+          window.dragHandleReadiness = { node: handle, ...point, since: performance.now() };
+          return false;
+        }
+        return performance.now() - previous.since >= 100;
+      }, null, { timeout: 10000 });
       const point = await center(handle);
       await touch("touchStart", point);
       await touch("touchMove", { x: point.x - 10, y: point.y + 12 });
@@ -138,10 +161,12 @@ try {
     const down = await viewport.evaluate((node) => node.scrollTop);
     assert.ok(down > 450, "bottom hold scrolls");
     const topEdge = await viewport.boundingBox();
+    assert.equal(topEdge.y, edge.y, "destination instructions preserve the viewport top");
     await touch("touchMove", { x: topEdge.x + 80, y: topEdge.y + 2 });
     await page.waitForFunction((previous) => document.querySelector('[aria-label="Move conversation destinations"]').scrollTop < previous - 30, down, { timeout: 10000 });
     assert.ok(await viewport.evaluate((node) => node.scrollTop) < down, "top hold reverses scroll");
     const bottomEdge = await viewport.boundingBox();
+    assert.equal(bottomEdge.y, edge.y, "stationary top-edge hold remains in the viewport");
     await touch("touchMove", { x: bottomEdge.x + 80, y: bottomEdge.y + bottomEdge.height - 2 });
     await page.waitForFunction(() => {
       const node = document.querySelector('[aria-label="Move conversation destinations"]');
