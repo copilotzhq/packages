@@ -62,8 +62,10 @@ function SheetOverlay({
   return (
     <SheetPrimitive.Overlay
       data-slot="sheet-overlay"
+      // Portal children can remount independently during a rapid reopen.
+      // Keep the backdrop below Content without lifting Content above dialogs.
       className={cn(
-        "fixed inset-0 z-50 bg-black/50",
+        "fixed inset-0 z-40 bg-black/50",
         "data-[state=open]:animate-in data-[state=closed]:animate-out",
         "data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
         "data-[state=closed]:pointer-events-none",
