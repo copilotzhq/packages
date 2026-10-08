@@ -1237,6 +1237,8 @@ export function createChatController(
     updateOptions(value: ControllerOptions) {
       options = value;
     },
+    /** Reports a presentation failure that happened outside `publish`. */
+    reportPresentationError: reportSubscriberFailure,
     refreshThreads,
     refreshSpaces,
     openThread,

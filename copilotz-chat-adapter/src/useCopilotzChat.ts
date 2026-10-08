@@ -16,6 +16,7 @@ import {
   type ChatSnapshot,
   type ControllerOptions
 } from './controller';
+import { batchDraftSource, batchSubscription } from './batchedNotifications';
 import { useUrlState, type ThreadNavigation } from './useUrlState';
 
 export type RequestHeadersProvider = () => HeadersInit | Promise<HeadersInit>;
@@ -79,8 +80,29 @@ export function useCopilotzChat(options: UseCopilotzChatOptions) {
   useEffect(() => {
     controller?.updateOptions(options);
   }, [controller, options]);
+  // React hears from the controller at most once per task; see
+  // batchedNotifications.ts for why per-frame delivery overflows React.
+  const subscribe = useMemo(
+    () =>
+      controller
+        ? batchSubscription(
+            controller.subscribe,
+            controller.reportPresentationError
+          )
+        : subscribeIdle,
+    [controller]
+  );
+  const toolCallDraftSource = useMemo(
+    () =>
+      controller &&
+      batchDraftSource(
+        controller.toolCallDraftSource,
+        controller.reportPresentationError
+      ),
+    [controller]
+  );
   const snapshot = useSyncExternalStore(
-    controller?.subscribe ?? subscribeIdle,
+    subscribe,
     controller?.getSnapshot ?? getIdle,
     getIdle
   );
@@ -113,7 +135,7 @@ export function useCopilotzChat(options: UseCopilotzChatOptions) {
             : {})
         }
       : undefined,
-    toolCallDraftSource: controller?.toolCallDraftSource,
+    toolCallDraftSource,
     userContextSeed: options.initialContext ?? {},
     sendMessage: (
       content: string,
