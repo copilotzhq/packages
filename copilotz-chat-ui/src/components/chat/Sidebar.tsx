@@ -465,10 +465,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   userMenuAdditionalItems,
   ...props
 }) => {
-  const [viewMode, setViewMode] = useState<"chats" | "spaces">("chats");
-  useEffect(() => {
-    setViewMode(currentSpaceId ? "spaces" : "chats");
-  }, [currentSpaceId]);
+  const [selectedViewMode, setViewMode] = useState<"chats" | "spaces">("chats");
   const [searchQuery, setSearchQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [deleteThreadId, setDeleteThreadId] = useState<string | null>(null);
@@ -503,6 +500,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
     spacesEnabled &&
     spacesConfig?.allowCreate !== false &&
     !!(onManageSpace || onCreateSpace);
+  const viewMode = spacesEnabled ? selectedViewMode : "chats";
+
+  useEffect(() => {
+    setViewMode(spacesEnabled && currentSpaceId ? "spaces" : "chats");
+  }, [currentSpaceId, spacesEnabled]);
 
   useEffect(() => {
     if (editingThreadId && inputRef.current) {
@@ -561,7 +563,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     : null;
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
   const threadSpace = (thread: ChatThread) =>
-    thread.spaceId ? spaceMap.get(thread.spaceId) : undefined;
+    spacesEnabled && thread.spaceId ? spaceMap.get(thread.spaceId) : undefined;
   const threadMatchesTitle = (thread: ChatThread) =>
     !normalizedSearchQuery ||
     (thread.title ?? "").toString().toLowerCase().includes(normalizedSearchQuery);
@@ -741,41 +743,42 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
 
         <div className="space-y-3 px-1 group-data-[collapsible=icon]:hidden">
-          <div
-            className="grid grid-cols-2 gap-1 rounded-xl border border-sidebar-border/60 bg-sidebar-accent/70 p-1"
-            role="group"
-            aria-label="Navigation"
-          >
-            <Button
-              type="button"
-              aria-pressed={viewMode === "chats"}
-              variant="ghost"
-              size="sm"
-              onClick={() => setViewMode("chats")}
-              className={`h-8 rounded-lg px-2 text-xs font-semibold transition-colors ${
-                viewMode === "chats"
-                  ? "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar"
-                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
-              }`}
+          {spacesEnabled && (
+            <div
+              className="grid grid-cols-2 gap-1 rounded-xl border border-sidebar-border/60 bg-sidebar-accent/70 p-1"
+              role="group"
+              aria-label="Navigation"
             >
-              {config.labels?.chats || "Chats"}
-            </Button>
-            <Button
-              type="button"
-              aria-pressed={viewMode === "spaces"}
-              variant="ghost"
-              size="sm"
-              onClick={() => setViewMode("spaces")}
-              disabled={!spacesEnabled}
-              className={`h-8 rounded-lg px-2 text-xs font-semibold transition-colors ${
-                viewMode === "spaces"
-                  ? "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar"
-                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
-              }`}
-            >
-              {config.labels?.spaces || "Spaces"}
-            </Button>
-          </div>
+              <Button
+                type="button"
+                aria-pressed={viewMode === "chats"}
+                variant="ghost"
+                size="sm"
+                onClick={() => setViewMode("chats")}
+                className={`h-8 rounded-lg px-2 text-xs font-semibold transition-colors ${
+                  viewMode === "chats"
+                    ? "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar"
+                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                }`}
+              >
+                {config.labels?.chats || "Chats"}
+              </Button>
+              <Button
+                type="button"
+                aria-pressed={viewMode === "spaces"}
+                variant="ghost"
+                size="sm"
+                onClick={() => setViewMode("spaces")}
+                className={`h-8 rounded-lg px-2 text-xs font-semibold transition-colors ${
+                  viewMode === "spaces"
+                    ? "border border-sidebar-border bg-sidebar text-sidebar-foreground shadow-sm hover:bg-sidebar"
+                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                }`}
+              >
+                {config.labels?.spaces || "Spaces"}
+              </Button>
+            </div>
+          )}
 
           {viewMode === "chats" && onCreateThread ? (
             <CreateThreadDialog
@@ -1222,7 +1225,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           })
         )}
       </SidebarContent>
-      {touchDrag.drag && (
+      {canDragSpaces && touchDrag.drag && (
         <div className="absolute inset-0 z-20 flex min-h-0 flex-col bg-sidebar" data-touch-space-destinations="">
           <div className="shrink-0 border-b border-sidebar-border px-4 py-3 text-xs">
             <p className="h-8 line-clamp-2 font-medium leading-4">{dragInstruction}</p>
@@ -1260,7 +1263,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </SidebarFooter>
       <SidebarRail />
 
-      {pickerThread && (
+      {canMoveSpaces && pickerThread && (
         <Dialog
           open={!!spacePickerThreadId}
           onOpenChange={(open) => !open && setSpacePickerThreadId(null)}

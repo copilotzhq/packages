@@ -175,7 +175,9 @@ export const ChatUI: React.FC<ChatV2Props> = ({
   }, [configuredTheme]);
 
   const [internalSpaceId, setInternalSpaceId] = useState<string | null>(null);
-  const effectiveSpaceId = selectedSpaceId === undefined ? internalSpaceId : selectedSpaceId;
+  const effectiveSpaceId = config.features.spaces?.enabled === false
+    ? null
+    : selectedSpaceId === undefined ? internalSpaceId : selectedSpaceId;
   const hasPreparedSpaceState =
     spaceViewSpace !== undefined || spaceViewStatus !== undefined;
   const effectiveSpace = useMemo(
