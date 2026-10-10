@@ -95,6 +95,7 @@ export const defaultChatConfig: Required<ChatConfig> = {
     moveToSpace: "Move to Space",
     removeFromSpace: "Remove from Space",
     createSpace: "Create Space",
+    createSpaceConfirm: "Create",
     spaceNamePlaceholder: "Space name",
     searchSpaces: "Search Spaces",
     today: "Today",

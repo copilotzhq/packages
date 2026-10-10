@@ -417,6 +417,8 @@ export interface ChatConfig {
     moveToSpace?: string;
     removeFromSpace?: string;
     createSpace?: string;
+    /** Confirm label for the sidebar's inline New Space form. */
+    createSpaceConfirm?: string;
     spaceNamePlaceholder?: string;
     searchSpaces?: string;
     today?: string;

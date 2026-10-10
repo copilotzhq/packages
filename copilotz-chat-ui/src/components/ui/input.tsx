@@ -2,7 +2,9 @@ import * as React from "react"
 
 import { cn } from "../../lib/utils"
 
-function Input({ className, type, ...props }: React.ComponentProps<"input">) {
+// Keep the type explicit: React removes an undefined type on every controlled
+// update, which can reset Chromium's caret after non-ASCII input.
+function Input({ className, type = "text", ...props }: React.ComponentProps<"input">) {
   return (
     <input
       type={type}

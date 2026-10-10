@@ -10,6 +10,7 @@ import {
 } from "../../types/chatTypes";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { SpaceCreateForm } from "./SpaceCreateForm";
 import {
   Collapsible,
   CollapsibleContent,
@@ -105,6 +106,8 @@ export interface SidebarConfig {
     moveToSpace?: string;
     removeFromSpace?: string;
     createSpace?: string;
+    /** Confirm label for the sidebar's inline New Space form. */
+    createSpaceConfirm?: string;
     spaceNamePlaceholder?: string;
     searchSpaces?: string;
     today?: string;
@@ -820,44 +823,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   {config.labels?.newSpace || config.labels?.createSpace || "New Space"}
                 </Button>
               ) : (
-                <div className="flex gap-1 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-1">
-                  <Input
-                    ref={spaceCreateInputRef}
-                    value={newSpaceName}
-                    onChange={(event) => setNewSpaceName(event.target.value)}
-                    aria-label={config.labels?.spaceNamePlaceholder || "Space name"}
-                    placeholder={config.labels?.spaceNamePlaceholder || "Space name"}
-                    className="h-9"
-                    disabled={isCreatingSpaceRequest}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        void createSpace();
-                      }
-                      if (event.key === "Escape") cancelSpaceCreation();
-                    }}
-                  />
-                  <Button
-                    type="button"
-                    size="sm"
-                    className="h-9"
-                    disabled={!newSpaceName.trim() || isCreatingSpaceRequest}
-                    onClick={() => void createSpace()}
-                  >
-                    {config.labels?.create || "Create"}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9"
-                    aria-label={config.labels?.cancel || "Cancel"}
-                    disabled={isCreatingSpaceRequest}
-                    onClick={cancelSpaceCreation}
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                </div>
+                <SpaceCreateForm
+                  labels={config.labels}
+                  inputRef={spaceCreateInputRef}
+                  name={newSpaceName}
+                  onNameChange={setNewSpaceName}
+                  working={isCreatingSpaceRequest}
+                  onCreate={() => void createSpace()}
+                  onCancel={cancelSpaceCreation}
+                />
               )}
               {spaceCreateError && (
                 <p role="alert" className="mt-1 text-xs text-destructive">

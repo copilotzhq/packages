@@ -222,6 +222,10 @@ The configuration system lets you customize everything without touching the comp
       inputPlaceholder: 'Ask me anything...',
       sendButton: 'Send',
       newChat: 'New Conversation',
+      newSpace: 'New Space',
+      createSpace: 'Create Space', // Space picker action
+      createSpaceConfirm: 'Create', // Inline New Space confirmation
+      create: 'Create Conversation', // Conversation dialog confirmation
       activityThinking: 'Thinking...',
       activityUsingTools: 'Using tools...',
       activityShowDetails: 'Show details',
