@@ -54,7 +54,7 @@ test('bootstrap hides historical terminal placeholders while restoring an unfini
       checkpoint: 'c',
       streamId: 'old',
       offset: 3,
-      terminal: {}
+      terminal: { outcome: 'completed', availability: 'retained', offset: 3, terminalAt: '2026-09-04T00:00:00Z' }
     }).pending,
     true
   );
@@ -158,7 +158,7 @@ test('a slow historical lane does not hide an unrelated live agent, and publishe
     checkpoint: 'old:end',
     streamId: 'completed-history',
     offset: 3,
-    terminal: {}
+    terminal: { outcome: 'completed', availability: 'retained', offset: 3, terminalAt: '2026-09-04T00:00:00Z' }
   });
   const ready = apply({
     kind: 'stream-chunk',
@@ -219,7 +219,7 @@ test('a failed historical lane is revealed with its retained terminal state', ()
     checkpoint: 'failed:end',
     streamId: 'failed',
     offset: 7,
-    terminal: {}
+    terminal: { outcome: 'failed', availability: 'retained', offset: 7, terminalAt: '2026-09-04T00:00:00Z' }
   });
   assert.equal(failed.completed, true);
   assert.equal(failed.visible.messages[0].content, 'partial');
@@ -273,7 +273,7 @@ test('a completed historical side lane cannot hide an unfinished lane of the sam
     checkpoint: 'reasoning:end',
     streamId: 'reasoning',
     offset: 3,
-    terminal: {}
+    terminal: { outcome: 'completed', availability: 'retained', offset: 3, terminalAt: '2026-09-04T00:00:00Z' }
   });
   const ready = apply({
     kind: 'stream-chunk',

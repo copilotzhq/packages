@@ -49,7 +49,7 @@ const end = (id: string, offset: number, failed = false): ObservationFrame => ({
   terminal: {
     outcome: failed ? 'failed' : 'completed',
     availability: 'retained',
-    capture: failed ? 'truncated' : 'complete',
+    ...(failed ? { reason: 'execution_failed' } : {}),
     terminalAt: '2026-09-04T00:00:00Z',
     offset,
   },
@@ -497,4 +497,40 @@ test('exhausted candidate failure is reported only for its owning Action', () =>
     ),
     true
   );
+});
+
+for (const availabilityReason of ['missing', 'deleted']) {
+  test(`completed ${availabilityReason} bytes do not fail logical output`, () => {
+    const p = projector();
+    p.apply(descriptor('answer', 'run'));
+    p.apply(chunk('answer', 'retained visible prefix'));
+    p.apply({
+      kind: 'stream-error', streamId: 'answer', checkpoint: 'answer:end', offset: 23,
+      terminal: {
+        outcome: 'completed', availability: 'purged', availabilityReason,
+        terminalAt: '2026-09-04T00:00:00Z', offset: 100,
+      },
+    });
+    assert.equal(p.state.lanes.get('answer')?.failed, false);
+    assert.equal(p.state.messages[0].content, 'retained visible prefix');
+    assert.equal(p.state.messages[0].isStreaming, false);
+    assert.equal(p.state.messages[0].activity?.items.some((item) => item.status === 'failed') ?? false, false);
+  });
+}
+
+test('cancelled output retains its prefix and does not close another attempt', () => {
+  const p = projector();
+  p.apply(descriptor('cancelled', 'old-run'));
+  p.apply(chunk('cancelled', 'partial'));
+  p.apply(descriptor('active', 'new-run'));
+  p.apply(chunk('active', 'working'));
+  p.apply({
+    kind: 'stream-error', streamId: 'cancelled', checkpoint: 'cancelled:end', offset: 7,
+    terminal: { outcome: 'cancelled', reason: 'superseded', availability: 'retained',
+      terminalAt: '2026-09-04T00:00:00Z', offset: 7 },
+  });
+  assert.equal(p.state.lanes.get('cancelled')?.failed, true);
+  assert.equal(p.state.messages[0].content, 'partial');
+  assert.equal(p.state.messages[0].isStreaming, false);
+  assert.equal(p.state.messages[1].isStreaming, true);
 });

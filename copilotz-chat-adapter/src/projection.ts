@@ -430,7 +430,10 @@ export function projectFrame(
     }
   } else {
     lane.ended = true;
-    lane.failed = frame.kind === 'stream-error';
+    // A transport reports unavailable bytes as stream-error even when the
+    // logical stream completed. Keep the logical outcome independent.
+    lane.failed = frame.terminal.outcome === 'failed' ||
+      frame.terminal.outcome === 'cancelled';
     if (lane.binary.length) {
       const bytes = new Uint8Array(lane.offset);
       let offset = 0;
@@ -484,7 +487,7 @@ export function projectFrame(
       lane.role === 'reasoning' ||
       lane.role === 'tool-call-drafts' ||
       lane.role === 'tool-calls';
-    if (frame.kind === 'stream-error' && !recoverableCandidate)
+    if (lane.failed && !recoverableCandidate)
       updateMessage((message) =>
         failAssistantMessage(
           message,
@@ -493,7 +496,7 @@ export function projectFrame(
         )
       );
     if (
-      !(frame.kind === 'stream-error' && recoverableCandidate) &&
+      !(lane.failed && recoverableCandidate) &&
       [...state.lanes.values()]
         .filter(
           (value) =>

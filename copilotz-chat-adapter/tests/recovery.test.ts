@@ -450,7 +450,7 @@ test('completed replay is inactive and late historical events cannot reactivate 
       metadata: { sourceActionRunId: 'attempt' }
     }} as never);
     await frame({ kind: 'stream-end', checkpoint: 'end', streamId: 'old', offset: 0,
-      terminal: { outcome: 'completed', availability: 'retained', capture: 'complete', offset: 0 }
+      terminal: { outcome: 'completed', availability: 'retained', terminalAt: '2026-09-04T00:00:00Z', offset: 0 }
     } as never);
     await wait();
     assert.equal(c.getSnapshot().isStreaming, false);
