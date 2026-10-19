@@ -7,6 +7,8 @@ export type {
   UseSpaceViewOptions
 } from './useSpaceView';
 export { createChatController } from './controller';
+export { createObservationSupervisor } from './observationSupervisor';
+export { isTransientRequestError } from './requestRetry';
 export type {
   RequestHeadersProvider,
   UseCopilotzChatOptions
