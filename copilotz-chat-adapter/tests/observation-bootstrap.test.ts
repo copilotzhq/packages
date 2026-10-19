@@ -219,7 +219,7 @@ test('a failed historical lane is revealed with its retained terminal state', ()
     checkpoint: 'failed:end',
     streamId: 'failed',
     offset: 7,
-    terminal: { outcome: 'failed', availability: 'retained', offset: 7, terminalAt: '2026-09-04T00:00:00Z' }
+    terminal: { type: 'stream.error', streamId: 'failed', code: 'stream_failed', outcome: 'failed', reason: 'provider_error', availability: 'retained', offset: 7, terminalAt: '2026-09-04T00:00:00Z' }
   });
   assert.equal(failed.completed, true);
   assert.equal(failed.visible.messages[0].content, 'partial');

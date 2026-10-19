@@ -23,7 +23,9 @@
     "build:watch": "tsup --watch",
     "dev": "npm run build:watch",
     "test": "node --test --experimental-strip-types tests/**/*.test.ts",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "check:local-client": "node scripts/check-local-client.mjs"
   },
   "peerDependencies": {
     "@copilotz/chat-ui": "0.82.7",

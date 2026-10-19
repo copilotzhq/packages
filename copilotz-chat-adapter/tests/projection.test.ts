@@ -12,6 +12,7 @@ import {
 import { reconcileThreadMessages } from '../src/messageReconciliation.ts';
 import type { ObservationFrame } from '@copilotz/copilotz/client';
 import type { ChatMessage } from '@copilotz/chat-ui';
+import { streamTerminal } from './fixtures/streamTerminal.ts';
 
 const descriptor = (
   id: string,
@@ -41,19 +42,9 @@ const chunk = (
   offset,
   bytes: typeof value === 'string' ? new TextEncoder().encode(value) : value,
 });
-const end = (id: string, offset: number, failed = false): ObservationFrame => ({
-  kind: failed ? 'stream-error' : 'stream-end',
-  streamId: id,
-  checkpoint: `${id}:end`,
-  offset,
-  terminal: {
-    outcome: failed ? 'failed' : 'completed',
-    availability: 'retained',
-    ...(failed ? { reason: 'execution_failed' } : {}),
-    terminalAt: '2026-09-04T00:00:00Z',
-    offset,
-  },
-});
+const end = (id: string, offset: number, failed = false): ObservationFrame =>
+  streamTerminal(id, offset, failed ? 'failed' : 'completed', 'retained',
+    failed ? 'execution_failed' : undefined);
 function projector(messages: ChatMessage[] = []) {
   let state = { ...emptyProjection(), messages };
   return {
@@ -504,13 +495,7 @@ for (const availabilityReason of ['missing', 'deleted']) {
     const p = projector();
     p.apply(descriptor('answer', 'run'));
     p.apply(chunk('answer', 'retained visible prefix'));
-    p.apply({
-      kind: 'stream-error', streamId: 'answer', checkpoint: 'answer:end', offset: 23,
-      terminal: {
-        outcome: 'completed', availability: 'purged', availabilityReason,
-        terminalAt: '2026-09-04T00:00:00Z', offset: 100,
-      },
-    });
+    p.apply(streamTerminal('answer', 100, 'completed', 'purged', undefined, availabilityReason));
     assert.equal(p.state.lanes.get('answer')?.failed, false);
     assert.equal(p.state.messages[0].content, 'retained visible prefix');
     assert.equal(p.state.messages[0].isStreaming, false);
@@ -524,13 +509,50 @@ test('cancelled output retains its prefix and does not close another attempt', (
   p.apply(chunk('cancelled', 'partial'));
   p.apply(descriptor('active', 'new-run'));
   p.apply(chunk('active', 'working'));
-  p.apply({
-    kind: 'stream-error', streamId: 'cancelled', checkpoint: 'cancelled:end', offset: 7,
-    terminal: { outcome: 'cancelled', reason: 'superseded', availability: 'retained',
-      terminalAt: '2026-09-04T00:00:00Z', offset: 7 },
-  });
+  p.apply(streamTerminal('cancelled', 7, 'cancelled', 'retained', 'superseded'));
   assert.equal(p.state.lanes.get('cancelled')?.failed, true);
   assert.equal(p.state.messages[0].content, 'partial');
   assert.equal(p.state.messages[0].isStreaming, false);
   assert.equal(p.state.messages[1].isStreaming, true);
 });
+
+for (const outcome of ['completed', 'failed', 'cancelled'] as const) {
+  for (const availability of ['retained', 'purged'] as const) {
+    test(`${outcome}/${availability} keeps logical status scoped to its attempt`, () => {
+      const p = projector();
+      p.apply(descriptor('answer', 'run'));
+      p.apply(chunk('answer', 'partial'));
+      p.apply(descriptor('other', 'other-run'));
+      p.apply(chunk('other', 'working'));
+      const terminal = streamTerminal('answer', availability === 'purged' ? 100 : 7,
+        outcome, availability, outcome === 'failed' ? 'provider_error' :
+          outcome === 'cancelled' ? 'superseded' : undefined);
+      const original = structuredClone(terminal);
+      p.apply(terminal);
+      assert.deepEqual(terminal, original);
+      assert.equal(p.state.lanes.get('answer')?.failed, outcome !== 'completed');
+      assert.equal(p.state.messages[0].content, 'partial');
+      assert.equal(p.state.messages[0].isStreaming, false);
+      assert.equal(p.state.messages[0].activity?.items.some((item) => item.status === 'failed') ?? false,
+        outcome !== 'completed');
+      assert.equal(p.state.messages[1].isStreaming, true);
+    });
+  }
+}
+
+for (const role of ['reasoning', 'tool-call-drafts']) {
+  test(`completed purged ${role} accepts an incomplete captured prefix`, () => {
+    const p = projector();
+    p.apply(descriptor('side', 'run', { role }));
+    p.apply(descriptor('answer', 'run'));
+    p.apply(chunk('answer', 'Visible answer'));
+    // Incomplete UTF-8 and NDJSON are possible when the remaining bytes are gone.
+    p.apply(chunk('side', role === 'reasoning' ? new Uint8Array([0xf0, 0x9f]) : '{"draftId":'));
+    p.apply(streamTerminal('side', 100, 'completed', 'purged'));
+    assert.equal(p.state.lanes.get('side')?.failed, false);
+    assert.equal(p.state.messages[0].isStreaming, true);
+    p.apply(end('answer', 14));
+    assert.equal(p.state.messages[0].isStreaming, false);
+    assert.equal(p.state.messages[0].content, 'Visible answer');
+  });
+}

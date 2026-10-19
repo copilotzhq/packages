@@ -473,6 +473,8 @@ export function projectFrame(
       }
       lane.binary = lane.tool ? [bytes] : [];
     }
+    // Only a completed, retained stream guarantees all bytes were delivered.
+    // An unavailable suffix may leave partial UTF-8 or NDJSON without failure.
     if (frame.kind === 'stream-end' && lane.pending.length)
       prefix(lane.pending, true);
     if (

@@ -183,3 +183,46 @@ History checkpoints still coordinate retained stream prefixes and live observati
 resolved history does not replace stream ordering or terminal outcomes. A terminal
 observation error clears the streaming indicator while preserving operation
 identities for explicit cancellation.
+
+### Stream terminal contract (PR #21)
+
+The projection uses `outcome` (`completed`, `failed`, `cancelled`) for logical
+failure. `reason` describes that outcome. Byte availability is independently
+`retained` or `purged`, with `availabilityReason` describing unavailable bytes.
+There is no `capture` field. A `stream-error` with `completed` and
+`purged`/`missing` preserves already visible output and does not fail the attempt.
+Only completed, retained streams guarantee a complete UTF-8/NDJSON boundary.
+
+The dependency pin still targets the old protocol. Before releasing this change,
+pin a Copilotz release containing the current protocol from PR #94 and update the
+lockfile through the repository's synchronized release process. Published 0.88.0
+still requires `capture`; simply upgrading to it does not resolve this blocker.
+
+For local verification, install dependencies and build the UI declarations first:
+
+```sh
+npm ci --ignore-scripts
+npm -w copilotz-chat-ui run build
+npm -w copilotz-chat-adapter test
+npm -w copilotz-chat-adapter run typecheck
+npm -w copilotz-chat-adapter run build
+npm -w copilotz-chat-adapter run check:local-client -- /absolute/path/to/DEL
+```
+
+The last command requires Node with native TypeScript stripping and Deno. It
+checks adapter source directly against the checkout's imports in `deno.json`,
+using built UI declarations and the installed npm dependency versions. Deno's
+transitive source checks remain enabled: upstream implementation errors fail the
+command. Temporary configuration and dependencies are cleaned up; no client type
+shims, package pins, or checkout files are changed.
+
+It also runs the local checkout's actual `client/protocol.ts` decoder through the
+adapter, independently of type-check success. To run only those protocol tests:
+
+```sh
+COPILOTZ_SOURCE=/absolute/path/to/DEL node --test --experimental-strip-types \
+  copilotz-chat-adapter/scripts/local-protocol.test.ts
+```
+
+See [the validation record](STREAM_TAXONOMY_VALIDATION.md) for the tested revisions
+and remaining upstream blocker.
